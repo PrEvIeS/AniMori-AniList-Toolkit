@@ -2008,4 +2008,21 @@
   "Report review": "Пожаловаться на отзыв",
   "Search staff": "Поиск персонала",
   "Search characters": "Поиск персонажей"
+  "Advanced Genre & Tag Filters": "Расширенные фильтры жанров и тегов",
+  "Genres & Tags": "Жанры и теги",
+  "Meet the AniList Team": "Команда AniList",
+  "Community Moderators": "Модераторы сообщества",
+  "Anime Data Moderators": "Модераторы данных аниме",
+  "Manga Data Moderators": "Модераторы данных манги",
+  "Character Data Moderators": "Модераторы данных персонажей",
+  "Staff Data Moderators": "Модераторы данных стаффа",
+  "Retired Moderators": "Бывшие модераторы",
+  "Lead Anime Data Mod": "Главный модератор данных аниме",
+  "Social Media Mod": "Модератор соцсетей",
+  "Former Anime Data Mod": "Бывший модератор данных аниме",
+  "Former Manga Data Mod": "Бывший модератор данных манги",
+  "Former Community Mod": "Бывший модератор сообщества",
+  "Former Developer": "Бывший разработчик",
+  "Former Lead Social Media Mod": "Бывший главный модератор соцсетей",
+  "Former Admin": "Бывший администратор"
 }

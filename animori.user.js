@@ -1,19 +1,21 @@
 // ==UserScript==
 // @name         AniMori: AniList Toolkit
 // @namespace    http://tampermonkey.net/
-// @version      1.8.2
-// @description  Русский перевод, поиск, плеер, рейтинги Shiki и MAL, дерево хронологии, опенинги/эндинги, музыка (VK/YouTube/Spotify/SoundCloud), внешние ссылки, экспорт и сравнение списков Shikimori/AniList.
+// @version      1.9.0
+// @description  Русский перевод, поиск, плеер, рейтинги Shiki и MAL, дерево хронологии, опенинги/эндинги, музыка, внешние ссылки, экспорт и сравнение списков Shikimori/AniList.
 // @author       foulnike
 // @match        https://anilist.co/*
 // @match        *://shikimori.io/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @grant        GM_deleteValue
-// @grant        GM_listValues
 // @grant        GM_addStyle
+// @grant        GM_setClipboard
 // @connect      raw.githubusercontent.com
 // @connect      shikimori.io
+// @connect      shikimori.rip
+// @connect      smotret-anime.online
+// @connect      anime365.ru
 // @connect      graphql.anilist.co
 // @connect      kodik-api.com
 // @connect      api.animethemes.moe
@@ -22,8 +24,7 @@
 // @updateURL https://update.greasyfork.org/scripts/572948/AniMori%3A%20AniList%20Toolkit.meta.js
 // ==/UserScript==
 
-// @ts-nocheck — legacy-код без TS build step, включение @ts-check даёт ~670 шумных ошибок
-// (implicit any, GM_* без типов). JSDoc-типы ниже уже дают автодополнение в редакторе.
+// @ts-nocheck — legacy без TS build; @ts-check дал бы ~670 шумных ошибок (implicit any, GM_* без типов). JSDoc ниже даёт автодополнение.
 
 (function() {
     'use strict';
@@ -35,30 +36,39 @@
     const IS_SHIKI = window.location.hostname.includes("shikimori");
     const IS_ANILIST = window.location.hostname.includes("anilist.co");
 
-    // Словарь для перевода интерфейса
+    // Словарь перевода интерфейса
     const DICT_URL = 'https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/dictionary.json';
 
     // Shikimori
-    const SHIKI_DOMAINS =['shikimori.io'];
+    const SHIKI_DOMAINS =['shikimori.io', 'shikimori.rip']; // .rip — фоллбэк для удалённых по РКН
 
-    // Время жизни кэша 90 дней
+    // anime365 (smotret-anime) — фоллбэк для тайтлов/описаний
+    const ANIME365_DOMAINS = ['smotret-anime.online', 'anime365.ru'];
+    const ANIME365_THROTTLE = 180;  // мс между запросами (только на cache-miss)
+    const ANIME365_FAIL_LIMIT = 5;  // подряд-сбоев → отключение источника на сессию
+
+    // TTL кэша — 90 дней
     const CACHE_TIME = 90 * 24 * 60 * 60 * 1000;
 
-    // Конфигурация локальной базы данных IndexedDB
+    // IndexedDB
     const DB_NAME = 'AniMoriSuperDB';
     const DB_VERSION = 5;
 
-    // Глобальные стейты скрипта
+    // Глобальные стейты
     let dictionary = Object.create(null);
-    let alRateLimitPause = 0;      // Пауза при 429 от AniList
-    let shikiRateLimitPause = 0;   // Пауза при 429 от Shikimori
+    let alRateLimitPause = 0;      // пауза при 429 AniList
+    let shikiRateLimitPause = 0;   // пауза при 429 Shikimori
+    let anime365RateLimitPause = 0;// пауза 429/бэкофф anime365
+    let anime365FailStreak = 0;    // подряд-сбои (403/503/сеть)
+    let anime365Disabled = false;  // авто-отключение на сессию
     let globalDbInstance = null;
-    let globalPendingQueues = null; // Очереди перевода (для инспектора состояния)
+    let globalPendingQueues = null; // очереди перевода (для инспектора)
 
-    // Пользовательские настройки (сохраняются в хранилище скрипта)
+    // Пользовательские настройки (в GM-хранилище)
     const settings = {
         translateInterface:  GM_getValue('set_interface', true),
-        translateTitles:     GM_getValue('set_titles', true),
+        titlePrimary:        GM_getValue('set_title_primary', GM_getValue('set_titles', true) ? 'shikimori' : 'off'),
+        titleFallback:       GM_getValue('set_title_fallback', 'none'),
         translateCharacters: GM_getValue('set_chars', true),
         translateStaff:      GM_getValue('set_staff', true),
         enablePlayer:        GM_getValue('set_player', true),
@@ -73,15 +83,41 @@
         yummyDomain:         GM_getValue('set_yummy_domain', 'yummyanime.tv'),
         animegoDomain:       GM_getValue('set_animego_domain', 'animego.org'),
         mangalibDomain:      GM_getValue('set_mangalib_domain', 'mangalib.me'),
-        enableLogger:        GM_getValue('set_logger', true)
+        enableLogger:        GM_getValue('set_logger', true),
+        accentPreset:        GM_getValue('am_accent', 'site')
     };
+    // Тайтлы вкл, пока основной источник != 'off'
+    settings.translateTitles = settings.titlePrimary !== 'off';
 
-    // Списки локализации для парсера дат и времени
+    /* ===== AniMori: акцентные темы тулкита =====
+       --am-accent (по умолч. var(--color-blue), следует теме AniList). Пресет переопределяет её
+       на documentElement → красит виджеты/модалки, не трогая тему сайта. Инлайновые
+       «синий=AniList/розовый=Shikimori» намеренно на --color-blue (семантика источника). */
+    const AM_ACCENTS = {
+        site:       { name: 'Тема сайта', triple: null,          dot: 'rgb(var(--color-blue))' },
+        sakura:     { name: 'Sakura',     triple: '244,114,182',  dot: '#f472b6' },
+        mono:       { name: 'Mono',       triple: '148,163,184',  dot: '#94a3b8' },
+        catppuccin: { name: 'Catppuccin', triple: '203,166,247',  dot: '#cba6f7' }
+    };
+    let amAccentTriple = null; // триплет "r,g,b" или null (следовать сайту)
+
+    function amApplyAccentToDom() {
+        // --am-accent на documentElement. 'site' (null) = синий AniList.
+        document.documentElement.style.setProperty('--am-accent', amAccentTriple || 'var(--color-blue)');
+    }
+
+    function amSetAccent(preset) {
+        const p = AM_ACCENTS[preset] ? preset : 'site';
+        amAccentTriple = AM_ACCENTS[p].triple;
+        amApplyAccentToDom();
+    }
+
+    // Локализация для парсера дат/времени
     const monthsFull = { Jan: 'января', Feb: 'февраля', Mar: 'марта', Apr: 'апреля', May: 'мая', Jun: 'июня', Jul: 'июля', Aug: 'августа', Sep: 'сентября', Oct: 'октября', Nov: 'ноября', Dec: 'декабря' };
     const days = { Mon: 'Пн', Tue: 'Вт', Wed: 'Ср', Thu: 'Чт', Fri: 'Пт', Sat: 'Сб', Sun: 'Вс' };
     const seasons = { Winter: 'Зима', Spring: 'Весна', Summer: 'Лето', Fall: 'Осень' };
 
-    // Регулярные выражения для перевода (роли, даты, время)
+    // Регэкспы перевода (роли, даты, время)
     const rxRole = /^(.+?)\s*\((.+)\)$/;
     const rxRoleEps = /\beps?\b/gi;
     const rxRoleOP = /\bOP\b/gi;
@@ -112,9 +148,7 @@
     }
 
     /**
-     * Безопасная сборка HTML: интерполированные значения экранируются через escapeHTML.
-     * Используй: el.innerHTML = html`<div class="x">${userName}</div>`;
-     * Для уже доверенного HTML — оберни в rawHTML(value), чтобы не экранировать повторно.
+     * Сборка HTML: интерполяции экранируются. Доверенный HTML — rawHTML(value).
      */
     function html(strings, ...values) {
         return strings.reduce((out, str, i) => {
@@ -127,12 +161,107 @@
         return { __isRawHTML: true, value: String(value == null ? '' : value) };
     }
 
+    // ==== Бегущая строка (ping-pong) для текста, не влезающего в контейнер ====
+    // Спан + CSS-анимация «туда-сюда» при overflow; скорость ~ длине.
+    function applyMarquee(el) {
+        if (!el || el.dataset.amMarqInit) return;
+        el.dataset.amMarqInit = '1';
+        const inner = document.createElement('span');
+        inner.className = 'am-marq-inner';
+        while (el.firstChild) inner.appendChild(el.firstChild);
+        el.appendChild(inner);
+        el.classList.add('am-marq');
+        const measure = () => {
+            const overflow = inner.scrollWidth - el.clientWidth;
+            if (overflow > 4) {
+                el.style.setProperty('--am-marq-shift', `-${overflow}px`);
+                el.style.setProperty('--am-marq-dur', `${Math.max(3, overflow / 40 + 1).toFixed(1)}s`);
+                el.classList.add('am-marq-on');
+            } else {
+                el.classList.remove('am-marq-on');
+                el.style.removeProperty('--am-marq-shift');
+            }
+        };
+        requestAnimationFrame(measure);
+        if (window.ResizeObserver) { try { new ResizeObserver(measure).observe(el); } catch (e) { /* игнор */ } }
+    }
+
+    // ==== Копирование в буфер с фидбэком на кнопке ====
+    function amCopy(text, btn) {
+        const done = () => {
+            if (!btn) return;
+            btn.classList.add('am-copied');
+            setTimeout(() => btn.classList.remove('am-copied'), 1200);
+        };
+        try {
+            if (typeof GM_setClipboard === 'function') { GM_setClipboard(text, 'text'); done(); return; }
+        } catch (e) { /* провалимся на navigator.clipboard */ }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(e => Logger('WARN', 'Не удалось скопировать в буфер', e));
+        } else {
+            Logger('WARN', 'Буфер обмена недоступен');
+        }
+    }
+
     function getPlural(n, forms) {
         return (n % 10 === 1 && n % 100 !== 11 ? forms[0] : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? forms[1] : forms[2]));
     }
 
+    // ==== Свои внешние ссылки ====
+    // JSON в GM: массив { name, url, color }; url — шаблон с {ru}/{romaji}/{query}, color — триплет "r,g,b".
+    const CL_COLORS = ['61,180,242', '243,139,168', '183,148,244', '166,227,161', '246,193,119', '224,82,100'];
+    function getCustomLinks() {
+        try {
+            const raw = GM_getValue('am_custom_links', '[]');
+            const arr = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) { return []; }
+    }
+    function setCustomLinks(arr) {
+        try { GM_setValue('am_custom_links', JSON.stringify(arr)); } catch (e) { /* noop */ }
+    }
+
+    // ==== Локальный словарь перевода ====
+    // JSON в GM: { "Оригинал": "Перевод" }. Накладывается ПОВЕРХ удалённого (user > remote).
+    // Ключи нормализуются как в translateAdvanced (пробелы+trim), иначе не поймается при поиске.
+    let remoteDict = Object.create(null);  // база с GitHub (до слияния)
+    let amRetranslate = null;              // ре-скан DOM (ставится в initTranslator)
+
+    function normDictKey(v) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim(); }
+    function getUserDict() {
+        try {
+            const raw = GM_getValue('am_user_dict', '{}');
+            const obj = (raw && typeof raw === 'object') ? raw : JSON.parse(raw || '{}');
+            return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+        } catch (e) { return {}; }
+    }
+    function setUserDict(obj) {
+        try { GM_setValue('am_user_dict', JSON.stringify(obj)); } catch (e) { /* noop */ }
+    }
+    // Пересобрать: база + правки юзера.
+    function rebuildDictionary() {
+        dictionary = Object.assign(Object.create(null), remoteDict, getUserDict());
+    }
+    // Добавить/обновить запись, применить вживую.
+    function upsertUserDictEntry(source, translation) {
+        const k = normDictKey(source);
+        const v = normDictKey(translation);
+        if (!k || !v) return false;
+        const ud = getUserDict();
+        ud[k] = v;
+        setUserDict(ud);
+        rebuildDictionary();
+        if (typeof amRetranslate === 'function') amRetranslate();
+        return true;
+    }
+    function removeUserDictEntry(source) {
+        const k = normDictKey(source);
+        const ud = getUserDict();
+        if (Object.prototype.hasOwnProperty.call(ud, k)) { delete ud[k]; setUserDict(ud); rebuildDictionary(); }
+    }
+
     // ==========================================
-    //1.5. ЛОГГЕР СКРИПТА (Инструмент отладки)
+    //1.5. ЛОГГЕР СКРИПТА (отладка)
     // ==========================================
 
     const LOG_LIMIT = 1000;
@@ -148,8 +277,7 @@
             const savedLogs = sessionStorage.getItem('animori_logs');
             if (savedLogs) scriptLogs = JSON.parse(savedLogs);
         } catch (e) {
-            // Logger ещё не гарантированно готов к моменту восстановления, поэтому используем
-            // прямой console.warn, чтобы не потерять сообщение и не создать цикл зависимостей.
+            // Logger может быть не готов — прямой console.warn.
             console.warn('[AniMori] Не удалось восстановить логи сессии', e);
         }
     }
@@ -164,7 +292,7 @@
 
         if (Array.isArray(obj)) {
             if (obj.length === 0) return '[]';
-            // jsonHtml, а не html — не затеняем глобальный html`` хелпер.
+            // jsonHtml, не html — не затеняем html``.
             let jsonHtml = `<details ${isRoot ? 'open' : ''} style="margin-left:${isRoot?0:15}px;"><summary style="cursor:pointer;color:#89b4fa;user-select:none;outline:none;">Array(${obj.length})[</summary><div style="margin-left:15px; border-left:1px solid rgba(255,255,255,0.1); padding-left:10px;">`;
             for(let i=0; i<obj.length; i++) {
                 jsonHtml += `<div style="margin-bottom:2px;"><span style="color:#cdd6f4">${i}:</span> ${createJSONView(obj[i], false)}</div>`;
@@ -197,7 +325,7 @@
 
         const d = new Date();
         const time = `${d.toLocaleTimeString('ru-RU', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
-        const path = window.location.pathname; // URL Контекст
+        const path = window.location.pathname; // URL-контекст
         const stackLines = new Error().stack.split('\n');
         const stack = stackLines.length > 2 ? stackLines.slice(2).join('\n') : '';
 
@@ -215,7 +343,7 @@
             }
         }
 
-        // Сохранение в сессию (Лимит 200 логов, чтобы не забить квоту)
+        // В сессию (последние 200 — квота)
         try { sessionStorage.setItem('animori_logs', JSON.stringify(scriptLogs.slice(-200))); } catch (e) {}
 
         if (isLoggerOpen) appendLogEntry(entry);
@@ -224,8 +352,7 @@
     }
 
     /**
-     * Проверяет, относится ли ошибка к нашему скрипту (а не к стороннему коду страницы),
-     * по маркерам в filename/stack.
+     * Наша ли ошибка (по маркерам filename/stack).
      */
     function isOwnScriptSource(str) {
         if (!str) return false;
@@ -233,10 +360,10 @@
         return s.includes('userscript') || s.includes('tampermonkey') || s.includes('animori') || s.includes('.user.js');
     }
 
-    // Глобальный перехватчик критических ошибок скрипта
+    // Глобальный перехватчик ошибок скрипта
     if (settings.enableLogger) {
         window.addEventListener('error', (e) => {
-            // Фильтруем ошибки, чтобы не логировать внутренние баги самого AniList/Shikimori
+            // Только свои, не баги AniList/Shikimori
             if (isOwnScriptSource(e.filename) || isOwnScriptSource(e.error?.stack)) {
                 Logger('ERROR', `Uncaught Error: ${e.message}`, { file: e.filename, line: e.lineno, col: e.colno, stack: e.error?.stack });
             }
@@ -249,11 +376,11 @@
     }
 
     /**
-     * Обёртка для вызова функции (в т.ч. async) с логированием ошибок через Logger('ERROR', ...).
+     * Вызывает fn (async ок), логируя ошибки в Logger('ERROR').
      * Пример: await safeCall(() => anilistQuery(query, vars, true), 'anilistQuery/Viewer');
-     * @param {Function} fn - функция без аргументов (может быть async).
-     * @param {string} context - описание места вызова для лога.
-     * @param {{silent?: boolean}} [options] - silent=true подавляет повторный throw после логирования.
+     * @param {Function} fn - функция без аргументов (async ок).
+     * @param {string} context - место вызова для лога.
+     * @param {{silent?: boolean}} [options] - silent=true подавляет повторный throw.
      * @returns {Promise<*>} результат fn(), либо undefined при silent=true и ошибке.
      */
     async function safeCall(fn, context, { silent = false } = {}) {
@@ -265,14 +392,14 @@
         }
     }
 
-    // Рендер одиночной записи логгера
+    // Рендер одной записи лога
     function createSingleLogEl(entry) {
         const el = document.createElement('div');
         el.className = `am-log-entry type-${entry.type.toLowerCase()}`;
 
         let detailsHtml = rawHTML('');
         if (entry.details) {
-            // createJSONView сам экранирует строки — доверенный HTML.
+            // createJSONView экранирует сам — доверенный HTML.
             detailsHtml = rawHTML(`<div class="am-log-details" style="display:none;">${createJSONView(entry.details)}</div>`);
         }
 
@@ -345,7 +472,7 @@
         }
 
         const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 30;
-        // Отключаем группировку, если активен поиск
+        // При поиске группировка отключена
         const canGroup = activeLogFilter === 'ALL' && !activeSearchQuery &&['API', 'DB', 'QUEUE'].includes(entry.type);
         const lastChild = container.lastElementChild;
 
@@ -405,7 +532,7 @@
         updateScrollBtn();
     }
 
-    // UI Логгера
+    // UI логгера
     function openLoggerModal() {
         if (document.getElementById('am-logger-overlay')) return;
         isLoggerOpen = true;
@@ -484,7 +611,7 @@
             URL.revokeObjectURL(url);
         };
 
-        // Инспектор состояния (State Inspector) - выводит текущий слепок работы скрипта
+        // Инспектор: слепок работы скрипта
         document.getElementById('am-log-state').onclick = async () => {
             document.getElementById('am-log-state').textContent = 'Загрузка...';
 
@@ -502,7 +629,16 @@
                 databaseCache: dbStats,
                 rateLimits: {
                     alRateLimitPause: alRateLimitPause > Date.now() ? new Date(alRateLimitPause).toLocaleTimeString() : 'OK',
-                    shikiRateLimitPause: shikiRateLimitPause > Date.now() ? new Date(shikiRateLimitPause).toLocaleTimeString() : 'OK'
+                    shikiRateLimitPause: shikiRateLimitPause > Date.now() ? new Date(shikiRateLimitPause).toLocaleTimeString() : 'OK',
+                    anime365: {
+                        rateLimitPause: anime365RateLimitPause > Date.now() ? new Date(anime365RateLimitPause).toLocaleTimeString() : 'OK',
+                        failStreak: `${anime365FailStreak}/${ANIME365_FAIL_LIMIT}`,
+                        disabled: anime365Disabled
+                    }
+                },
+                translationSources: {
+                    titlePrimary: settings.titlePrimary,
+                    titleFallback: settings.titleFallback
                 }
             };
 
@@ -530,8 +666,7 @@
 
     // ==========================================
     // 1.5 СКАНЕР ДЕЛЬТЫ: сравнение списков Shikimori <-> AniList (read-only)
-    // Ключ сопоставления — MAL id (у Shikimori id == MAL id, у AniList media есть idMal).
-    // Ничего не пишет: только читает оба списка, считает статистику и расхождения.
+    // Ключ — MAL id (Shikimori id == MAL id, у AniList idMal). Read-only: статистика и расхождения.
     // ==========================================
 
     const CMP_STATUS_ORDER = ['watching', 'rewatching', 'planned', 'completed', 'on_hold', 'dropped'];
@@ -540,67 +675,64 @@
         completed: 'Просмотрено', on_hold: 'Отложено', dropped: 'Брошено', null: '—'
     };
     const AL_STATUS_MAP = { CURRENT: 'watching', REPEATING: 'rewatching', PLANNING: 'planned', COMPLETED: 'completed', PAUSED: 'on_hold', DROPPED: 'dropped' };
-    // Типы связей AniList, указывающие на «тот же тайтл рядом» (деление на сезоны/куски,
-    // сиквелы/приквелы). Используются для группировки «связанных» записей (B).
+    // Связи AniList (сезоны/куски, сиквелы/приквелы) — для группировки «связанных» (B).
     const CMP_SPLIT_RELATIONS = ['PREQUEL', 'SEQUEL', 'PARENT', 'SIDE_STORY', 'ALTERNATIVE', 'SPIN_OFF'];
-    let cmpLast = null; // снимок последнего скана — чтобы перерисовывать без повторной загрузки
+    let cmpLast = null; // снимок последнего скана (перерисовка без сети)
 
-    // Игнор-лист (C): MAL id, помеченные пользователем как «не показывать» (ложные расхождения).
+    // Игнор-лист (C): MAL id, скрытые юзером (ложные расхождения).
     /**
-     * Читает игнор-лист сканера дельты (MAL id, скрытые пользователем как "не расхождение").
-     * @returns {Set<number>} Множество MAL id. Пустое множество при отсутствии/повреждении данных.
+     * Читает игнор-лист сканера дельты.
+     * @returns {Set<number>} Множество MAL id (пустое при отсутствии/повреждении).
      */
     function cmpGetIgnore() { try { return new Set(JSON.parse(GM_getValue('CMP_IGNORE', '[]'))); } catch (e) { Logger('WARN', 'Сканер сравнения: повреждён игнор-лист CMP_IGNORE, сброшен в пустой', e); return new Set(); } }
     /**
-     * Сохраняет игнор-лист сканера дельты в GM-хранилище.
-     * @param {Set<number>} set Множество MAL id для сохранения.
+     * Сохраняет игнор-лист в GM.
+     * @param {Set<number>} set Множество MAL id.
      * @returns {void}
      */
     function cmpSaveIgnore(set) { GM_setValue('CMP_IGNORE', JSON.stringify([...set])); }
     /**
-     * Добавляет MAL id в игнор-лист сканера дельты.
-     * @param {number|string} id MAL id (будет приведён к Number).
+     * Добавляет MAL id в игнор-лист.
+     * @param {number|string} id MAL id (→ Number).
      * @returns {void}
      */
     function cmpAddIgnore(id) { const s = cmpGetIgnore(); s.add(Number(id)); cmpSaveIgnore(s); }
     /**
-     * Убирает MAL id из игнор-листа сканера дельты.
-     * @param {number|string} id MAL id (будет приведён к Number).
+     * Убирает MAL id из игнор-листа.
+     * @param {number|string} id MAL id (→ Number).
      * @returns {void}
      */
     function cmpRemoveIgnore(id) { const s = cmpGetIgnore(); s.delete(Number(id)); cmpSaveIgnore(s); }
 
     /**
-     * Экранирует спецсимволы HTML в строке для безопасной вставки в шаблоны сканера дельты.
-     * @param {*} s Произвольное значение (будет приведено к строке).
+     * Экранирует HTML для шаблонов сканера дельты.
+     * @param {*} s Произвольное значение (→ строка).
      * @returns {string} Экранированная строка (& < >).
      */
     function cmpEsc(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     /**
-     * Человекочитаемая русская метка статуса списка (Shikimori-стиль статусов).
+     * Русская метка статуса (Shikimori-стиль).
      * @param {?string} s Статус ('watching'|'rewatching'|'planned'|'completed'|'on_hold'|'dropped'|null).
-     * @returns {string} Русская метка статуса, либо '—' если статус неизвестен.
+     * @returns {string} Русская метка, либо '—' если неизвестен.
      */
     function cmpStatusLabel(s) { return CMP_STATUS_LABEL[s] || '—'; }
     /**
-     * Форматирует нормализованную (0..10) оценку для отображения в таблице сравнения.
+     * Форматирует оценку 0..10 для таблицы сравнения.
      * @param {number} v Оценка по шкале 0..10.
-     * @returns {string} Оценка с одним знаком после запятой, либо '—' если оценки нет (v <= 0).
+     * @returns {string} Оценка с 1 знаком, либо '—' если нет (v <= 0).
      */
     function cmpFmtScore(v) { return v > 0 ? (Math.round(v * 10) / 10).toString() : '—'; }
     /**
-     * Форматирует прогресс просмотра/чтения записи для отображения в таблице сравнения.
-     * @param {CmpListEntry} e Нормализованная запись списка (AniList или Shikimori).
+     * Форматирует прогресс записи для таблицы сравнения.
+     * @param {CmpListEntry} e Нормализованная запись (AniList или Shikimori).
      * @param {'anime'|'manga'} type Тип тайтла.
-     * @returns {string} Строка вида "N эп." (аниме) или "N гл. / M т." (манга).
+     * @returns {string} "N эп." (аниме) или "N гл. / M т." (манга).
      */
     function cmpFmtProg(e, type) { return type === 'manga' ? `${e.progress} гл. / ${e.volumes} т.` : `${e.progress} эп.`; }
 
-    // AniList: список пользователя (аниме/манга), ключ = idMal. Оценка запрошена как
-    // POINT_100 -> нормализуем в 0..10 делением на 10 (не зависим от шкалы пользователя).
+    // Список юзера AniList, ключ = idMal. POINT_100 → /10 (независимо от шкалы юзера).
     /**
-     * Загружает полный список пользователя AniList (аниме или манга) и нормализует его
-     * в форму, сравнимую со списком Shikimori (см. CmpAniListEntry).
+     * Грузит список юзера AniList и нормализует под Shikimori (см. CmpAniListEntry).
      * @param {string} userName Имя пользователя AniList.
      * @param {'ANIME'|'MANGA'} type Тип тайтла.
      * @returns {Promise<Map<number, CmpAniListEntry>>} Карта MAL id -> нормализованная запись.
@@ -630,9 +762,9 @@
         return map;
     }
 
-    // AniList: избранное (аниме/манга) с пагинацией. Множество idMal -> название.
+    // Избранное AniList (пагинация). idMal -> название.
     /**
-     * Загружает избранные тайтлы (аниме или манга) пользователя AniList постранично.
+     * Грузит избранное юзера AniList постранично.
      * @param {string} userName Имя пользователя AniList.
      * @param {'anime'|'manga'} kind Раздел избранного (поле favourites.{kind}).
      * @returns {Promise<Map<number, string>>} Карта MAL id -> название тайтла.
@@ -651,10 +783,9 @@
         return map;
     }
 
-    // Shikimori: список через v1 *_rates (сразу с названиями), ключ = target id (== MAL id).
+    // Список Shikimori через v1 *_rates, ключ = target id (== MAL id).
     /**
-     * Загружает полный список пользователя Shikimori (аниме или манга) через постраничный
-     * REST-эндпоинт `{type}_rates` и нормализует его в форму, сравнимую со списком AniList.
+     * Грузит список юзера Shikimori через постраничный REST `{type}_rates`, нормализует под AniList.
      * @param {number|string} userId Shikimori user id.
      * @param {'anime'|'manga'} type Тип тайтла.
      * @returns {Promise<Map<number, CmpShikiEntry>>} Карта MAL id (== Shikimori id тайтла) -> нормализованная запись.
@@ -687,9 +818,8 @@
     }
 
     /**
-     * Загружает избранное Shikimori (аниме, манга, персонажи, стафф) одним запросом.
-     * Персонажи/стафф не мостятся по id (у AniList свои id) — отдаются только имена
-     * для последующего приблизительного сопоставления по имени (см. cmpNameDiff).
+     * Грузит избранное Shikimori (аниме/манга/персонажи/стафф) одним запросом.
+     * Персонажи/стафф не мостятся по id — только имена для матча (см. cmpNameDiff).
      * @param {number|string} userId Shikimori user id.
      * @returns {Promise<{anime: Map<number,string>, manga: Map<number,string>, characters: Array<{name:string,romaji:string}>, people: Array<{name:string,romaji:string}>}>}
      *          Избранное, разложенное по категориям.
@@ -698,22 +828,19 @@
         const r = await fetchShiki(`/api/users/${userId}/favourites`);
         const d = (r && r.data) || {};
         const toMap = arr => { const m = new Map(); (arr || []).forEach(x => { if (x && x.id) m.set(x.id, x.russian || x.name || ('MAL#' + x.id)); }); return m; };
-        // Персонажи/стафф: id нельзя мостить (у AniList свои), сравниваем по имени -> отдаём
-        // ромадзи (name) для матча и русское (russian) для показа.
+        // Персонажи/стафф: id не мостится → матч по имени. Ромадзи (name) для матча, russian для показа.
         const toNames = arr => (arr || []).map(x => ({ name: x.russian || x.name || '', romaji: x.name || '' })).filter(x => x.name || x.romaji);
-        // AniList «staff» — единый список; у Shikimori стафф разнесён по people/seyu/
-        // mangakas/producers. Объединяем для сопоставимости.
+        // AniList staff — единый список; Shikimori разнесён по people/seyu/mangakas/producers → объединяем.
         const staffAll = [...(d.people || []), ...(d.seyu || []), ...(d.mangakas || []), ...(d.producers || [])];
         return { anime: toMap(d.animes), manga: toMap(d.mangas), characters: toNames(d.characters), people: toNames(staffAll) };
     }
 
-    // AniList: избранные персонажи/стафф (kind: 'characters'|'staff'). id не мостится с Shiki,
-    // поэтому берём только имена (full — ромадзи, native — оригинал).
+    // Избранные персонажи/стафф AniList. id не мостится → только имена (full — ромадзи, native — оригинал).
     /**
-     * Загружает избранных персонажей или стафф пользователя AniList постранично.
+     * Грузит избранных персонажей/стафф юзера AniList постранично.
      * @param {string} userName Имя пользователя AniList.
      * @param {'characters'|'staff'} kind Раздел избранного.
-     * @returns {Promise<Array<{name: string, native: string}>>} Список имён (full/native), без id (см. cmpNameDiff).
+     * @returns {Promise<Array<{name: string, native: string}>>} Имена (full/native), без id (см. cmpNameDiff).
      */
     async function cmpFetchAniListFavPeople(userName, kind) {
         const arr = []; let page = 1;
@@ -729,16 +856,15 @@
         return arr;
     }
 
-    // Нормализация имени для приблизительного матча: нижний регистр, ё->е, разбивка по
-    // не-буквам, сортировка токенов (гасит разный порядок «Имя Фамилия»).
+    // Нормализация имени: lower, ё→е, разбивка по не-буквам, сортировка токенов (гасит порядок «Имя Фамилия»).
     /**
-     * Нормализует имя персонажа/персонала для приблизительного матчинга Shikimori<->AniList.
+     * Нормализует имя для матча Shikimori<->AniList.
      * @param {?string} s Исходное имя (может быть null/undefined).
-     * @returns {string} Нормализованная строка (нижний регистр, ё->е, токены отсортированы).
+     * @returns {string} Нормализованная строка (lower, ё→е, токены отсортированы).
      */
     function cmpNormName(s) { return (s || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/i).filter(Boolean).sort().join(' '); }
 
-    // Сравнение избранных персонажей/стаффа по имени (приблизительно, без id-моста).
+    // Сравнение избранных персонажей/стаффа по имени.
     /**
      * Сравнивает избранных персонажей/стафф двух площадок по нормализованному имени.
      * @param {Array<{name:string,romaji:string}>} shikiArr Избранное Shikimori (name/romaji).
@@ -754,11 +880,9 @@
         return { onlyShiki, onlyAl, shikiCount: shikiArr.length, alCount: alArr.length };
     }
 
-    // D: глубокая проверка каталогов (батчами). Возвращает множества MAL id, которые
-    // РЕАЛЬНО существуют в каталоге другой площадки (не в списке — а вообще в базе).
+    // D: глубокая проверка каталогов (батчами) → MAL id, существующие в каталоге другой площадки (не в списке).
     /**
-     * Глубокая проверка каталогов: для тайтлов, отсутствующих в списке одной площадки,
-     * проверяет, существуют ли они вообще в каталоге другой площадки (батчами по 50).
+     * Глубокая проверка: для тайтлов не из списка одной площадки — есть ли они в каталоге другой (батчами по 50).
      * @param {{anime: number[], manga: number[]}} onlyShiki MAL id, которые есть только в списке Shikimori.
      * @param {{anime: number[], manga: number[]}} onlyAl MAL id, которые есть только в списке AniList.
      * @param {(text: string) => void} [setStatus] Колбэк для отображения текстового статуса прогресса.
@@ -790,8 +914,7 @@
     }
 
     /**
-     * Считает агрегированную статистику по нормализованному списку (кол-во по статусам,
-     * средняя оценка среди оценённых записей).
+     * Агрегирует статистику по списку (кол-во по статусам, средняя оценка оценённых).
      * @param {Map<number, CmpListEntry>} map Нормализованный список (AniList или Shikimori).
      * @returns {{total:number, byStatus: Record<string, number>, mean: number}} Сводная статистика.
      */
@@ -805,9 +928,9 @@
         return { total: map.size, byStatus: st, mean: scored ? sum / scored : 0 };
     }
 
-    // Расхождения по одному типу (anime|manga). Возвращает ведёрки со списками.
+    // Расхождения по типу (anime|manga) → ведёрки.
     /**
-     * Строит подробный дифф между списками Shikimori и AniList для одного типа тайтла.
+     * Дифф между списками Shikimori и AniList для одного типа.
      * @param {Map<number, CmpShikiEntry>} shiki Нормализованный список Shikimori.
      * @param {Map<number, CmpAniListEntry>} al Нормализованный список AniList.
      * @param {'anime'|'manga'} type Тип тайтла.
@@ -824,7 +947,7 @@
      * }} Ведёрки расхождений по категориям.
      */
     function cmpDiff(shiki, al, type) {
-        // Множество idMal, на которые ссылаются связи записей AniList (для детекта «связанных»).
+        // idMal из связей AniList (детект «связанных»).
         const alRelated = new Set();
         for (const a of al.values()) for (const rid of (a.relations || [])) alRelated.add(rid);
 
@@ -833,12 +956,12 @@
         for (const id of ids) {
             const s = shiki.get(id), a = al.get(id);
             if (s && !a) {
-                // B: если на этот тайтл ссылается какая-то запись AniList (сиквел/часть) — «связанный».
+                // B: на тайтл ссылается запись AniList — «связанный».
                 (alRelated.has(id) ? out.onlyShikiRel : out.onlyShiki).push({ id, title: s.title, info: cmpStatusLabel(s.status) });
                 continue;
             }
             if (a && !s) {
-                // B: если запись AniList связана с чем-то, что ЕСТЬ на Shiki — «связанный».
+                // B: запись AniList связана с Shiki — «связанный».
                 const rel = (a.relations || []).some(rid => shiki.has(rid));
                 (rel ? out.onlyAlRel : out.onlyAl).push({ id, title: a.title, info: cmpStatusLabel(a.status) });
                 continue;
@@ -855,7 +978,7 @@
     }
 
     /**
-     * Сравнивает избранное (аниме или манга, по id/MAL id) двух площадок.
+     * Сравнивает избранное (по id/MAL id) двух площадок.
      * @param {Map<number,string>} shikiFav Избранное Shikimori (id -> название).
      * @param {Map<number,string>} alFav Избранное AniList (idMal -> название).
      * @returns {{onlyShiki: Array<{id:number,title:string}>, onlyAl: Array<{id:number,title:string}>, shikiCount:number, alCount:number}}
@@ -871,9 +994,9 @@
         return { onlyShiki, onlyAl, shikiCount: shikiFav.size, alCount: alFav.size };
     }
 
-    // Резолв Shikimori user id по логину (ник) или числовому id.
+    // Резолв Shikimori user id по логину/числовому id.
     /**
-     * Резолвит Shikimori user id по логину (нику) или принимает числовой id как есть.
+     * Резолвит Shikimori user id по логину (числовой id — как есть).
      * @param {string} login Логин Shikimori или числовой id (строкой).
      * @returns {Promise<number>} Numeric user id.
      * @throws {Error} Если пользователь не найден.
@@ -888,7 +1011,7 @@
 
     // --- Рендер ---
     /**
-     * Рендерит сводную таблицу статистики (по статусам + средняя оценка) для одного типа тайтла.
+     * Рендерит таблицу статистики (статусы + средняя оценка) для одного типа.
      * @param {string} label Заголовок таблицы (например 'Аниме'/'Манга').
      * @param {{total:number, byStatus: Record<string, number>, mean: number}} sh Статистика Shikimori (см. cmpStats).
      * @param {{total:number, byStatus: Record<string, number>, mean: number}} al Статистика AniList (см. cmpStats).
@@ -907,10 +1030,10 @@
     }
 
     /**
-     * Рендерит подробный HTML-блок расхождений (dA/dM из cmpDiff) со свёрнутыми секциями.
-     * @param {ReturnType<typeof cmpDiff>} diff Дифф одного типа тайтла (см. cmpDiff).
-     * @param {Set<number>} ignore Игнор-лист MAL id (см. cmpGetIgnore) — такие строки не показываются.
-     * @param {?{alHas: Set<number>, shikiHas: Set<number>}} catalog Результат глубокой проверки (см. cmpDeepCheck) либо null.
+     * Рендерит HTML-блок расхождений (dA/dM) со свёрнутыми секциями.
+     * @param {ReturnType<typeof cmpDiff>} diff Дифф одного типа (см. cmpDiff).
+     * @param {Set<number>} ignore Игнор-лист MAL id (см. cmpGetIgnore) — скрываются.
+     * @param {?{alHas: Set<number>, shikiHas: Set<number>}} catalog Результат cmpDeepCheck либо null.
      * @returns {string} Готовый HTML-фрагмент (значения экранированы через cmpEsc).
      */
     function cmpRenderDiff(diff, ignore, catalog) {
@@ -925,8 +1048,8 @@
             return `<details class="amk-collapse"><summary>${cmpEsc(label)} <span class="amk-count">(${a.length})</span></summary><div class="amk-collapse-body">${items}${more}</div></details>`;
         };
         let h = '';
-        // A: нейтральные «в списке только на одной площадке» — это НЕ ошибка синка.
-        // D: если была глубокая проверка — делим на «есть/нет в каталоге другой площадки».
+        // A: «только на одной площадке» — не ошибка синка.
+        // D: глубокая проверка делит на «есть/нет в каталоге другой площадки».
         if (catalog) {
             h += sec('Только на Shikimori — ЕСТЬ в каталоге AniList (можно добавить)', diff.onlyShiki.filter(x => catalog.alHas.has(Number(x.id))), x => row(x, cmpEsc(x.info)));
             h += sec('Только на Shikimori — НЕТ в каталоге AniList', diff.onlyShiki.filter(x => !catalog.alHas.has(Number(x.id))), x => row(x, cmpEsc(x.info)));
@@ -936,10 +1059,10 @@
             h += sec('В списке только на Shikimori', diff.onlyShiki, x => row(x, cmpEsc(x.info)));
             h += sec('В списке только на AniList', diff.onlyAl, x => row(x, cmpEsc(x.info)));
         }
-        // B: связанные записи (деление на сезоны / сиквелы) — отдельным свёрнутым блоком.
+        // B: связанные — отдельным свёрнутым блоком.
         const rel = [...diff.onlyShikiRel, ...diff.onlyAlRel];
         h += sec('Связано с уже отслеживаемым (деление на сезоны / сиквелы)', rel, x => row(x, cmpEsc(x.info)));
-        // Реальные разногласия по СОВПАВШИМ (один MAL id) тайтлам.
+        // Реальные разногласия по совпавшим (один MAL id).
         h += sec('Разный статус', diff.status, x => row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`));
         h += sec('Разная оценка', diff.score, x => row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`));
         h += sec('Разный прогресс', diff.progress, x => row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`));
@@ -951,7 +1074,7 @@
     }
 
     /**
-     * Рендерит HTML-блок расхождений избранного (аниме+манга) с учётом игнор-листа.
+     * Рендерит HTML-блок расхождений избранного (аниме+манга) с игнор-листом.
      * @param {ReturnType<typeof cmpFavDiff>} favA Расхождения избранного аниме.
      * @param {ReturnType<typeof cmpFavDiff>} favM Расхождения избранного манги.
      * @param {Set<number>} ignore Игнор-лист MAL id.
@@ -975,9 +1098,9 @@
         return h;
     }
 
-    // Избранные персонажи/стафф — сравнение по имени (без id, приблизительно; без игнора).
+    // Избранные персонажи/стафф — сравнение по имени (без id/игнора).
     /**
-     * Рендерит HTML-блок расхождений избранных персонажей/стаффа (сравнение по имени).
+     * Рендерит HTML-блок расхождений избранных персонажей/стаффа (по имени).
      * @param {string} label Заголовок блока (например 'Избранные персонажи').
      * @param {ReturnType<typeof cmpNameDiff>} diff Результат cmpNameDiff.
      * @returns {string} Готовый HTML-фрагмент.
@@ -995,12 +1118,10 @@
         return h;
     }
 
-    // Пересчитывает дифф из снимка cmpLast и рендерит (с учётом игнор-листа). Вызывается
-    // и после скана, и после изменения игнора — без повторной загрузки данных.
+    // Пересчёт диффа из cmpLast + рендер (игнор-лист), без сети.
     /**
-     * Пересчитывает дифф из снимка последнего скана (cmpLast) и рендерит результат в DOM,
-     * учитывая актуальный игнор-лист. Не делает сетевых запросов.
-     * @param {HTMLElement} resultEl Контейнер для рендера результата сравнения.
+     * Пересчёт диффа из cmpLast + рендер в DOM с игнор-листом. Без сети.
+     * @param {HTMLElement} resultEl Контейнер результата.
      * @returns {void}
      */
     function cmpRender(resultEl) {
@@ -1027,7 +1148,7 @@
             ? `<details class="amk-collapse"><summary>Игнорируемые <span class="amk-count">(${ignArr.length})</span></summary><div class="amk-collapse-body">${ignArr.map(id => `<div class="amk-diffrow"><span class="amk-name">${cmpEsc(titleOf(id))}</span><span class="cmp-unignore amk-x" data-id="${id}" title="Вернуть" style="color:rgb(var(--color-blue));opacity:.85;">↩</span></div>`).join('')}</div></details>`
             : '';
 
-        // Под-HTML уже экранирован через cmpEsc() — доверенный, оборачиваем в rawHTML().
+        // Под-HTML экранирован cmpEsc() — доверенный → rawHTML().
         resultEl.innerHTML = html`<div style="display:flex;gap:20px;flex-wrap:wrap;">
                 <div style="flex:1;min-width:280px;">${rawHTML(cmpRenderSummary('Аниме', stA.sh, stA.al))}</div>
                 <div style="flex:1;min-width:280px;">${rawHTML(cmpRenderSummary('Манга', stM.sh, stM.al))}</div>
@@ -1045,9 +1166,8 @@
     }
 
     /**
-     * Запускает полный скан сравнения списков (Shikimori <-> AniList): резолвит пользователей,
-     * загружает списки/избранное, опционально делает глубокую проверку каталогов, сохраняет
-     * снимок в cmpLast и рендерит результат. Ошибки не бросает наружу — пишет их в statusEl/лог.
+     * Полный скан (Shikimori <-> AniList): резолв юзеров, загрузка списков/избранного,
+     * опц. глубокая проверка, снимок в cmpLast, рендер. Ошибки не бросает — в statusEl/лог.
      * @param {string} shikiLogin Логин или id пользователя Shikimori.
      * @param {string} alName Имя пользователя AniList (если пусто — берётся из Viewer по токену).
      * @param {?HTMLElement} statusEl Элемент для текстового статуса прогресса (может быть null).
@@ -1059,7 +1179,7 @@
         const setStatus = t => { if (statusEl) statusEl.textContent = t; };
         try {
             GM_setValue('SHIKI_LOGIN', shikiLogin);
-            // AniList-имя: если не задано — берём из Viewer (нужен токен).
+            // AniList-имя: пусто → из Viewer (нужен токен).
             if (!alName) {
                 setStatus('Определяю пользователя AniList...');
                 const v = await anilistQuery('query{Viewer{name}}', {}, true);
@@ -1080,7 +1200,7 @@
             const alFavChar = await cmpFetchAniListFavPeople(alName, 'characters');
             const alFavStaff = await cmpFetchAniListFavPeople(alName, 'staff');
 
-            // D: глубокая проверка каталогов (опционально, батчами).
+            // D: глубокая проверка каталогов (опц.).
             let catalog = null;
             if (deepCheck) {
                 const dA0 = cmpDiff(shA, alA, 'anime');
@@ -1103,9 +1223,8 @@
     }
 
     /**
-     * Открывает модалку сканера сравнения списков Shikimori/AniList (если ещё не открыта),
-     * биндит обработчики и запускает предзаполнение полей (логин Shiki из GM-хранилища,
-     * имя AniList по токену — без блокировки открытия модалки).
+     * Открывает модалку сканера (если закрыта), биндит обработчики,
+     * префилл полей (логин Shiki из GM, имя AniList по токену).
      * @returns {Promise<void>}
      */
     async function openCompareModal() {
@@ -1138,7 +1257,7 @@
         const shikiInput = document.getElementById('am-cmp-shiki');
         const alInput = document.getElementById('am-cmp-al');
         shikiInput.value = GM_getValue('SHIKI_LOGIN', '');
-        // Префилл имени AniList из Viewer (если есть токен) — без блокировки открытия.
+        // Префилл имени AniList из Viewer (если есть токен).
         anilistQuery('query{Viewer{name}}', {}, true).then(v => {
             const n = v && v.data && v.data.Viewer && v.data.Viewer.name;
             if (n && !alInput.value) alInput.placeholder = n + ' (по токену)';
@@ -1161,20 +1280,13 @@
     }
 
     // ==========================================
-    // 2. БАЗА ДАННЫХ INDEXEDDB (Кэширование)
+    // 2. INDEXEDDB (кэш)
     // ==========================================
 
     /**
-     * Версионированные миграции схемы IndexedDB. Каждый ключ — номер версии,
-     * значение — функция-мигратор `(db, tx) => {...}` от версии (N-1) к N.
-     * Выполняются последовательно от `oldVersion+1` до `db.version`. Каждый шаг должен
-     * быть идемпотентным (проверять `objectStoreNames.contains(...)`).
-     *
-     * Чтобы добавить миграцию N+1: увеличить DB_VERSION, добавить ключ `[N+1]: ...`,
-     * не трогать существующие шаги.
-     *
-     * Историю версий 1→5 в проекте раньше не разделяли по шагам, поэтому вся текущая
-     * схема консолидирована в шаг 5. Будущие изменения — начиная с 6.
+     * Миграции схемы IndexedDB. Ключ — версия, значение — мигратор `(db, tx) => {...}` от N-1 к N.
+     * Прогон от `oldVersion+1` до `db.version`; каждый шаг идемпотентен (`objectStoreNames.contains(...)`).
+     * Новая миграция: поднять DB_VERSION, добавить `[N+1]: ...`. Версии 1→5 консолидированы в шаг 5, далее с 6.
      */
     const DB_MIGRATIONS = {
         5: (db, tx) => {
@@ -1185,9 +1297,8 @@
     };
 
     /**
-     * Открывает (и лениво кэширует в globalDbInstance) соединение с IndexedDB, прогоняя
-     * недостающие шаги DB_MIGRATIONS при апгрейде версии схемы.
-     * @returns {Promise<?IDBDatabase>} Экземпляр базы данных, либо null при ошибке открытия.
+     * Открывает IndexedDB (в globalDbInstance), прогоняя недостающие DB_MIGRATIONS.
+     * @returns {Promise<?IDBDatabase>} База, либо null при ошибке.
      */
     async function openDB() {
         if (globalDbInstance) return globalDbInstance;
@@ -1226,16 +1337,16 @@
     }
 
     /**
-     * Читает одну запись из указанного object store IndexedDB по ключу.
+     * Читает запись из object store по ключу.
      * @param {'shikiCache'|'malCache'|'franchiseCache'} store Имя object store.
-     * @param {IDBValidKey} key Ключ записи (для shikiCache — строка `key`, для malCache/franchiseCache — числовой `id`).
-     * @returns {Promise<?(ShikiCacheRecord|MalCacheRecord|FranchiseCacheRecord)>} Найденная запись либо null (не найдено/ошибка).
+     * @param {IDBValidKey} key Ключ (shikiCache — строка `key`, malCache/franchiseCache — числовой `id`).
+     * @returns {Promise<?(ShikiCacheRecord|MalCacheRecord|FranchiseCacheRecord)>} Запись либо null.
      */
     /**
-     * Читает одну запись по ключу из указанного object store IndexedDB.
+     * Читает запись по ключу из object store.
      * @param {'shikiCache'|'malCache'|'franchiseCache'} store Имя object store.
-     * @param {string|number} key Значение keyPath стора (`key` для shikiCache, `id` для malCache/franchiseCache).
-     * @returns {Promise<?(ShikiCacheRecord|MalCacheRecord|FranchiseCacheRecord)>} Найденная запись, либо null если не найдена/при ошибке.
+     * @param {string|number} key keyPath стора (`key` для shikiCache, `id` для malCache/franchiseCache).
+     * @returns {Promise<?(ShikiCacheRecord|MalCacheRecord|FranchiseCacheRecord)>} Запись, либо null.
      */
     async function dbGet(store, key) {
         try {
@@ -1253,9 +1364,9 @@
     }
 
     /**
-     * Записывает (put — вставка или полная перезапись) одну запись в указанный object store IndexedDB.
+     * Пишет (put — вставка/перезапись) запись в object store.
      * @param {'shikiCache'|'malCache'|'franchiseCache'} store Имя object store.
-     * @param {ShikiCacheRecord|MalCacheRecord|FranchiseCacheRecord} data Записываемый объект (должен содержать keyPath стора: `key` для shikiCache, `id` для malCache/franchiseCache).
+     * @param {ShikiCacheRecord|MalCacheRecord|FranchiseCacheRecord} data Объект с keyPath стора (`key`/`id`).
      * @returns {Promise<void>}
      */
     async function dbSet(store, data) {
@@ -1274,7 +1385,7 @@
     }
 
     /**
-     * Полностью очищает все object store кэша (shikiCache, malCache, franchiseCache).
+     * Очищает все сторы кэша (shikiCache, malCache, franchiseCache).
      * @returns {Promise<void>}
      */
     async function clearCache() {
@@ -1290,10 +1401,9 @@
         return new Promise(r => tx.oncomplete = r);
     }
 
-    // Фоновый сборщик мусора (удаляет старые записи из БД)
+    // Фоновый GC старых записей
     /**
-     * Фоновый сборщик мусора: проходит курсором по store shikiCache и удаляет записи
-     * старше CACHE_TIME (по полю `ts`). Ничего не возвращает вызывающей стороне (fire-and-forget).
+     * GC: курсором по shikiCache удаляет записи старше CACHE_TIME (по `ts`). Fire-and-forget.
      * @returns {Promise<void>}
      */
     async function runGarbageCollector() {
@@ -1323,9 +1433,8 @@
     }
 
     /**
-     * Собирает диагностический снимок состояния БД/кэша для инспектора логгера
-     * (кол-во записей по типам ключей shikiCache, кол-во malCache, оценка занятого места).
-     * @returns {Promise<{media:number, characters:number, staff:number, themes:number, malMappings:number, totalShikiRecords:number, estimatedSize:string} | {error:string}>}
+     * Снимок БД/кэша для инспектора (записи по типам ключей, размер).
+     * @returns {Promise<{media:number, characters:number, staff:number, themes:number, malMappings:number, totalCacheRecords:number, estimatedSize:string} | {error:string}>}
      *          Сводная статистика, либо объект с полем error при сбое.
      */
     async function getDbStats() {
@@ -1333,7 +1442,7 @@
             const db = await openDB();
             if (!db) return { error: 'БД недоступна' };
 
-            // 1. Получаем размер памяти ДО открытия транзакции IndexedDB
+            // 1. Размер памяти до транзакции
             let estimatedSize = 'Неизвестно';
             try {
                 if (navigator.storage && navigator.storage.estimate) {
@@ -1342,13 +1451,13 @@
                 }
             } catch(e) { Logger('WARN', 'getDbStats: navigator.storage.estimate() недоступен', e); }
 
-            // 2. Открываем транзакцию
+            // 2. Транзакция
             return new Promise((resolve) => {
                 const tx = db.transaction(['shikiCache', 'malCache'], 'readonly');
                 const shikiStore = tx.objectStore('shikiCache');
                 const malStore = tx.objectStore('malCache');
 
-                const stats = { media: 0, characters: 0, staff: 0, themes: 0, malMappings: 0, totalShikiRecords: 0, estimatedSize };
+                const stats = { media: 0, characters: 0, staff: 0, themes: 0, malMappings: 0, totalCacheRecords: 0, estimatedSize };
 
                 const malReq = malStore.count();
                 malReq.onsuccess = () => { stats.malMappings = malReq.result; };
@@ -1356,7 +1465,7 @@
                 const shikiReq = shikiStore.getAllKeys();
                 shikiReq.onsuccess = () => {
                     const keys = shikiReq.result;
-                    stats.totalShikiRecords = keys.length;
+                    stats.totalCacheRecords = keys.length;
                     keys.forEach(key => {
                         if (typeof key === 'string') {
                             if (key.startsWith('MED2_') || key.startsWith('FULL_')) stats.media++;
@@ -1377,12 +1486,12 @@
     }
 
     // ==========================================
-    // 3. ОБЩИЕ ФУНКЦИИ API И АВТОРИЗАЦИИ
+    // 3. API И АВТОРИЗАЦИЯ
     // ==========================================
 
-    // Типы данных (JSDoc, без TypeScript build step)
+    // Типы данных (JSDoc)
     // -------------------------------------------------------------------------
-    // Типы данных сканера дельты и кэша IndexedDB (JSDoc, для автодополнения в редакторе).
+    // Типы сканера дельты и кэша IndexedDB.
 
     /**
      * @typedef {Object} AniListMediaTitle
@@ -1405,7 +1514,7 @@
      */
 
     /**
-     * Полная запись Media из AniList GraphQL, используется при рендере виджетов страницы тайтла.
+     * Полный Media из AniList GraphQL (рендер виджетов страницы тайтла).
      * @typedef {Object} AniListMedia
      * @property {number} id AniList ID тайтла.
      * @property {'ANIME'|'MANGA'} type
@@ -1417,7 +1526,7 @@
      */
 
     /**
-     * Запись списка AniList, нормализованная сканером дельты (ключ карты — malId).
+     * Запись списка AniList, нормализованная сканером дельты (ключ — malId).
      * @typedef {Object} CmpAniListEntry
      * @property {number} malId
      * @property {string} title
@@ -1431,7 +1540,7 @@
      */
 
     /**
-     * Урезанный тайтл Shikimori внутри ответа `${type}_rates`.
+     * Урезанный тайтл Shikimori из `${type}_rates`.
      * @typedef {Object} ShikiMediaLite
      * @property {number} id Равен MyAnimeList ID.
      * @property {?string} [russian]
@@ -1439,7 +1548,7 @@
      */
 
     /**
-     * Карточка тайтла Shikimori (GET /api/animes/:id или /api/mangas/:id), только используемые поля.
+     * Карточка тайтла Shikimori (GET /api/animes|mangas/:id), только нужные поля.
      * @typedef {Object} ShikiMedia
      * @property {number} id
      * @property {?string} [russian]
@@ -1452,7 +1561,7 @@
      */
 
     /**
-     * Запись списка Shikimori, нормализованная сканером дельты (ключ карты — malId).
+     * Запись списка Shikimori, нормализованная сканером дельты (ключ — malId).
      * @typedef {Object} CmpShikiEntry
      * @property {number} malId
      * @property {string} title
@@ -1464,11 +1573,11 @@
      * @property {string} notes
      */
 
-    /** @typedef {CmpAniListEntry|CmpShikiEntry} CmpListEntry Нормализованная запись, независимо от источника. */
+    /** @typedef {CmpAniListEntry|CmpShikiEntry} CmpListEntry Нормализованная запись любого источника. */
 
     /**
-     * Запись в IndexedDB store `shikiCache` (keyPath: 'key'). Используется для карточек тайтлов,
-     * персонажей, персонала и музыкальных тем — форма одна, различается префикс ключа и `data`.
+     * Запись в IndexedDB `shikiCache` (keyPath 'key'): карточки тайтлов/персонажей/персонала/тем.
+     * Форма одна, различаются префикс ключа и `data`.
      * @typedef {Object} ShikiCacheRecord
      * @property {string} key Составной ключ вида "ПРЕФИКС_id" (например "FULL_123").
      * @property {*} data Полезная нагрузка (зависит от префикса).
@@ -1476,15 +1585,14 @@
      */
 
     /**
-     * Запись в IndexedDB store `malCache` (keyPath: 'id') — кэш AniList ID -> AniListMedia.
+     * Запись в IndexedDB `malCache` (keyPath 'id'): AniList ID -> AniListMedia.
      * @typedef {Object} MalCacheRecord
      * @property {number} id AniList Media ID.
      * @property {AniListMedia} data
      */
 
     /**
-     * Запись в IndexedDB store `franchiseCache` (keyPath: 'id'). Стор зарезервирован под
-     * будущее кэширование дерева франшизы, пока нигде явно не заполняется.
+     * Запись в IndexedDB `franchiseCache` (keyPath 'id'). Зарезервирован под дерево франшизы, пока не заполняется.
      * @typedef {Object} FranchiseCacheRecord
      * @property {number} id
      * @property {*} data
@@ -1493,15 +1601,14 @@
 
 
     /**
-     * Возвращает токен доступа AniList: либо сохранённый пользователем в настройках скрипта,
-     * либо (только на anilist.co) извлечённый из Vuex-хранилища сайта, если пользователь залогинен.
-     * @returns {?string} Токен AniList (Bearer), либо null если токена нет нигде.
+     * Токен AniList: из настроек, либо (на anilist.co) из Vuex у залогиненного юзера.
+     * @returns {?string} Токен (Bearer), либо null.
      */
     function getAlToken() {
         let token = GM_getValue("AL_TOKEN");
         if (token) return token;
 
-        // Пытаемся вытянуть токен из Vuex самого сайта (если юзер залогинен на AniList)
+        // Токен из Vuex (если залогинен на AniList)
         if (IS_ANILIST) {
             try {
                 const vuex = JSON.parse(localStorage.getItem('vuex'));
@@ -1512,8 +1619,7 @@
     }
 
     /**
-     * Выполняет GraphQL-запрос к AniList API (через GM_xmlhttpRequest), с учётом паузы при
-     * предыдущем 429 и автоматическим повтором запроса после rate-limit паузы.
+     * GraphQL к AniList (GM_xmlhttpRequest) с паузой после 429 и авто-ретраем.
      * @param {string} query GraphQL-запрос.
      * @param {Object<string, *>} variables Переменные GraphQL-запроса.
      * @param {boolean} [useAuth=false] Добавлять ли заголовок Authorization (см. getAlToken()).
@@ -1550,7 +1656,7 @@
                         const waitTime = match ? parseInt(match[1]) * 1000 : 5000;
                         alRateLimitPause = Date.now() + waitTime + 500;
                         Logger('ERROR', `AniList Rate Limit 429! Ожидание ${waitTime}ms`, res);
-                        // Повторяем запрос после паузы
+                        // Повтор после паузы (429)
                         setTimeout(() => resolve(anilistQuery(query, variables, useAuth)), waitTime + 500 + Math.floor(Math.random() * 500));
                     } else {
                         Logger('ERROR', `AniList API Error HTTP ${res.status}`, res.responseText);
@@ -1565,13 +1671,11 @@
         });
     }
 
-    // Запрос к Shikimori с fallback перебором зеркал
+    // Запрос к Shikimori (перебор зеркал)
     /**
-     * Выполняет GET-запрос к Shikimori REST API, перебирая зеркала из SHIKI_DOMAINS
-     * при сбое/недоступности, с ретраем при 429 (rate limit).
-     * @param {string} path Путь запроса (например `/api/animes/123`), без домена.
-     * @returns {Promise<{data: *, domain: ?string}>} Разобранный JSON-ответ и домен зеркала,
-     *          с которого получен ответ (data === null при 404 или полном сбое всех зеркал).
+     * GET к Shikimori REST: перебор зеркал SHIKI_DOMAINS при сбое, ретрай при 429.
+     * @param {string} path Путь (например `/api/animes/123`), без домена.
+     * @returns {Promise<{data: *, domain: ?string}>} JSON и домен зеркала (data === null при 404/полном сбое).
      */
     async function fetchShiki(path) {
         if (Date.now() < shikiRateLimitPause) {
@@ -1579,6 +1683,7 @@
         }
 
         Logger('API', `Запрос к Shikimori API: ${path}`);
+        let lastNotFound = null;
         for (const domain of SHIKI_DOMAINS) {
             try {
                 const res = await new Promise((resolve, reject) => {
@@ -1589,7 +1694,7 @@
                         onload: (r) => {
                             if (r.status === 200) resolve({ data: JSON.parse(r.responseText), domain });
                             else if (r.status === 429) { shikiRateLimitPause = Date.now() + 5000; resolve({ status: 429 }); }
-                            else if (r.status === 404) resolve({ data: null, domain });
+                            else if (r.status === 404) resolve({ data: null, domain, notFound: true });
                             else reject(r.status);
                         },
                         onerror: reject, ontimeout: reject
@@ -1599,26 +1704,136 @@
                 if (res && res.status === 429) {
                     Logger('ERROR', `Shikimori Rate Limit 429 (${domain})! Пауза.`);
                     await new Promise(r => setTimeout(r, 5000 + Math.floor(Math.random() * 1000)));
-                    return fetchShiki(path); // Рекурсивный повтор
+                    return fetchShiki(path); // рекурсивный повтор (429)
                 }
+                // 404: возможно удалён по РКН — пробуем следующее зеркало (напр. .rip).
+                if (res && res.notFound) { lastNotFound = { data: null, domain: res.domain }; continue; }
                 if (res) return res;
             } catch (e) {
                 Logger('ERROR', `Ошибка запроса к зеркалу Shiki: ${domain}`, e);
             }
         }
-        return { data: null, domain: null };
+        return lastNotFound || { data: null, domain: null };
     }
 
-    // Запрос музыкальных тем с AnimeThemes API
     /**
-     * Загружает список опенингов/эндингов аниме с AnimeThemes.moe (с кэшированием
-     * в IndexedDB store shikiCache под ключом `THEMES_<malId>`).
+     * Грузит русский тайтл/описание с anime365 по MAL ID. Только аниме.
+     * null при отсутствии/сбое всех зеркал.
+     * @param {?number} malId MyAnimeList ID.
+     * @param {'ANIME'|'MANGA'} type Тип тайтла AniList.
+     * @returns {Promise<?{russian:string, description:string, url:string, domain:string}>}
+     */
+    async function fetchAnime365ByMal(malId, type) {
+        if (!malId || type === 'MANGA') return null; // только аниме
+        if (anime365Disabled) return null;           // отключён на сессию
+        if (Date.now() < anime365RateLimitPause) {
+            await new Promise(r => setTimeout(r, anime365RateLimitPause - Date.now() + Math.floor(Math.random() * 500)));
+        }
+        Logger('API', `Запрос к anime365 API: myAnimeListId=${malId}`);
+        for (const domain of ANIME365_DOMAINS) {
+            try {
+                const res = await new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: "GET",
+                        url: `https://${domain}/api/series?myAnimeListId=${malId}&limit=1`,
+                        timeout: 5000,
+                        onload: (r) => {
+                            if (r.status === 200) resolve({ ok: true, body: JSON.parse(r.responseText) });
+                            else if (r.status === 404) resolve({ ok: true, body: null });
+                            else if (r.status === 429) resolve({ __rl: true });
+                            // 403/503 + Cloudflare (520–524) — soft-block, не «нет данных».
+                            else if ([403, 502, 503, 520, 521, 522, 523, 524].includes(r.status)) resolve({ __block: true, status: r.status });
+                            else reject(r.status);
+                        },
+                        onerror: reject, ontimeout: reject
+                    });
+                });
+
+                // Пауза между запросами (cache-miss)
+                await new Promise(r => setTimeout(r, ANIME365_THROTTLE));
+
+                if (res.__rl) {
+                    anime365RateLimitPause = Date.now() + 5000;
+                    Logger('WARN', `anime365 Rate Limit 429 (${domain}). Пауза 5с.`);
+                    await new Promise(r => setTimeout(r, 5000 + Math.floor(Math.random() * 1000)));
+                    return fetchAnime365ByMal(malId, type); // рекурсивный повтор (429)
+                }
+
+                if (res.__block) {
+                    anime365FailStreak++;
+                    anime365RateLimitPause = Date.now() + 15000; // бэкофф
+                    Logger('WARN', `anime365 недоступен: HTTP ${res.status} (${domain}). Сбой ${anime365FailStreak}/${ANIME365_FAIL_LIMIT}, бэкофф 15с.`);
+                    if (anime365FailStreak >= ANIME365_FAIL_LIMIT) {
+                        anime365Disabled = true;
+                        Logger('ERROR', 'anime365 отключён на эту сессию после серии сбоев — цепочка уходит на фоллбэк/оригинал.');
+                    }
+                    return null; // → resolveTitle: фоллбэк
+                }
+
+                anime365FailStreak = 0; // успех/404 — сброс
+
+                const item = res.body && res.body.data && res.body.data[0];
+                if (item) {
+                    let desc = '';
+                    if (Array.isArray(item.descriptions)) {
+                        const d = item.descriptions.find(x => x && x.value);
+                        if (d) desc = d.value;
+                    }
+                    return {
+                        russian: (item.titles && item.titles.ru) || '',
+                        description: desc,
+                        url: item.url || `https://${domain}/`,
+                        domain
+                    };
+                }
+                return null; // 200, но пусто
+            } catch (e) {
+                anime365FailStreak++;
+                Logger('WARN', `Сбой запроса к зеркалу anime365: ${domain} (${e}). Сбой ${anime365FailStreak}/${ANIME365_FAIL_LIMIT}.`);
+                if (anime365FailStreak >= ANIME365_FAIL_LIMIT) {
+                    anime365Disabled = true;
+                    anime365RateLimitPause = Date.now() + 15000;
+                    Logger('ERROR', 'anime365 отключён на эту сессию после серии сбоев — цепочка уходит на фоллбэк/оригинал.');
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Резолвит русский тайтл/описание по цепочке источников (основной → фоллбэк), пропуская 'off'/'none' и дубли.
+     * @param {?number} malId MyAnimeList ID.
+     * @param {'ANIME'|'MANGA'} type Тип тайтла AniList.
+     * @returns {Promise<?{russian:string, description:?string, url:string, sourceName:string}>}
+     */
+    async function resolveTitle(malId, type) {
+        const order = [...new Set([settings.titlePrimary, settings.titleFallback])]
+            .filter(src => src && src !== 'off' && src !== 'none');
+        for (const src of order) {
+            if (src === 'shikimori') {
+                const shiki = await fetchShiki(`/api/${type === 'MANGA' ? 'mangas' : 'animes'}/${malId}`);
+                if (shiki.data && shiki.data.russian) {
+                    return { russian: shiki.data.russian, description: shiki.data.description, url: `https://${shiki.domain}${shiki.data.url}`, sourceName: 'Shikimori' };
+                }
+            } else if (src === 'anime365') {
+                const a = await fetchAnime365ByMal(malId, type);
+                if (a && a.russian) {
+                    return { russian: a.russian, description: a.description, url: a.url, sourceName: 'anime365' };
+                }
+            }
+        }
+        return null;
+    }
+
+    // Муз. темы (AnimeThemes API)
+    /**
+     * Грузит опенинги/эндинги с AnimeThemes.moe (кэш shikiCache `THEMES_<malId>`).
      * @param {?number} malId MyAnimeList ID аниме.
-     * @returns {Promise<?{openings: string[], endings: string[]}>} Списки строк вида `"1: \"Название\""`, либо null при отсутствии malId/ошибке.
+     * @returns {Promise<?{openings: Array<{seq:string,title:string,artist:string}>, endings: Array<{seq:string,title:string,artist:string}>}>} Списки тем с исполнителем, либо null при отсутствии malId/ошибке.
      */
     async function fetchMalThemes(malId) {
         if (!malId) return null;
-        const cacheKey = `THEMES_${malId}`;
+        const cacheKey = `THEMES2_${malId}`;
         const cached = await dbGet('shikiCache', cacheKey);
         if (cached && (Date.now() - cached.ts < CACHE_TIME)) return cached.data;
 
@@ -1626,14 +1841,14 @@
         return new Promise((resolve) => {
             GM_xmlhttpRequest({
                 method: "GET",
-                url: `https://api.animethemes.moe/anime?filter[has]=resources&filter[site]=MyAnimeList&filter[external_id]=${malId}&include=animethemes.song`,
+                url: `https://api.animethemes.moe/anime?filter[has]=resources&filter[site]=MyAnimeList&filter[external_id]=${malId}&include=animethemes.song.artists`,
                 onload: (res) => {
                     if (res.status === 200) {
                         try {
                             const data = JSON.parse(res.responseText);
                             const animeList = data.anime || [];
 
-                            // Если аниме не найдено, отдаем пустые массивы
+                            // Не найдено — пустые массивы.
                             if (animeList.length === 0) {
                                 const emptyData = { openings: [], endings: [] };
                                 dbSet('shikiCache', { key: cacheKey, data: emptyData, ts: Date.now() });
@@ -1644,12 +1859,14 @@
                             const formattedData = { openings: [], endings: [] };
 
                             themes.forEach(t => {
-                                const title = t.song && t.song.title ? t.song.title : t.slug;
+                                const song = t.song || {};
+                                const title = song.title || t.slug;
+                                const artist = (song.artists || []).map(a => a.name).filter(Boolean).join(', ');
                                 const seq = t.slug.replace(/[^0-9]/g, '') || '1';
-                                const str = `${seq}: "${title}"`;
+                                const item = { seq, title, artist };
 
-                                if (t.type === 'OP') formattedData.openings.push(str);
-                                else if (t.type === 'ED') formattedData.endings.push(str);
+                                if (t.type === 'OP') formattedData.openings.push(item);
+                                else if (t.type === 'ED') formattedData.endings.push(item);
                             });
 
                             dbSet('shikiCache', { key: cacheKey, data: formattedData, ts: Date.now() });
@@ -1674,22 +1891,72 @@
         });
     }
 
-    // Продвинутый поиск персоны (Сейю/Персонал) на Shiki
+    // Поиск персоны (сейю/персонал) на Shikimori
     /**
-     * Ищет персону (сейю/персонал) на Shikimori по имени: сначала REST search (прямой и
-     * реверс порядка слов), затем GraphQL fallback, затем догружает детали (описание/url).
+     * Ищет персону на Shikimori: REST search (прямой + реверс) → GraphQL fallback → детали.
      * @param {string} endpointStr REST/GraphQL эндпоинт Shikimori ('people' и т.п.).
      * @param {string} searchName Имя для поиска (обычно ромадзи из AniList).
      * @param {string} [nativeName] Оригинальное имя (для сверки по japanese-полю).
      * @returns {Promise<{status: number, data: ?{id:number, russian:?string, description:?string, url?:string, domain?:string}}>}
      *          HTTP-подобный статус (200/404/429) и найденные данные персоны либо null.
      */
-    async function fetchShikiPersonREST(endpointStr, searchName, nativeName) {
+    // ==========================================
+    // Единый скоринговый матчер имён (Shikimori <-> AniList)
+    // ==========================================
+    function amNormRomaji(str) {
+        if (!str) return '';
+        return str.toLowerCase()
+            .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/['\u2019\u02bc`]/g, '')
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ').trim();
+    }
+    function amCollapseVowels(str) {
+        return str.replace(/ou/g, 'o').replace(/oo/g, 'o').replace(/uu/g, 'u').replace(/aa/g, 'a').replace(/ee/g, 'e').replace(/ii/g, 'i');
+    }
+    function amTokens(str) { return amNormRomaji(str).split(' ').filter(Boolean); }
+    function amNormNative(str) { return (str || '').replace(/\s+/g, '').trim(); }
+
+    /**
+     * Оценивает уверенность совпадения кандидата Shikimori с целью AniList (балл).
+     * @param {{name?:string, russian?:string, japanese?:string}} cand Кандидат Shikimori.
+     * @param {{full?:string, native?:string}} target Цель AniList.
+     * @returns {number} Балл 0..100 (100 = точный кандзи, 80+ = точный ромадзи).
+     */
+    function scoreNameMatch(cand, target) {
+        const tNative = amNormNative(target.native);
+        const cNative = amNormNative(cand.japanese);
+        if (tNative && cNative) {
+            if (tNative === cNative) return 100;
+            if (cNative.includes(tNative) || tNative.includes(cNative)) return 90;
+        }
+        const tTok = amTokens(target.full);
+        const cTok = amTokens(cand.name);
+        if (tTok.length && cTok.length) {
+            const tSet = [...tTok].sort().join(' ');
+            const cSet = [...cTok].sort().join(' ');
+            if (tSet === cSet) return 85;
+            if (amCollapseVowels(tSet) === amCollapseVowels(cSet)) return 80;
+            const tS = new Set(tTok.map(amCollapseVowels));
+            const cS = new Set(cTok.map(amCollapseVowels));
+            const small = tS.size <= cS.size ? tS : cS;
+            const big   = tS.size <= cS.size ? cS : tS;
+            let all = true; for (const x of small) if (!big.has(x)) { all = false; break; }
+            if (all && small.size >= 2 && small.size >= big.size - 1) return 55;
+            const tJoin = amCollapseVowels(tTok.join(''));
+            const cJoin = amCollapseVowels(cTok.join(''));
+            if (tJoin.length >= 5 && cJoin.length >= 5 && (cJoin.includes(tJoin) || tJoin.includes(cJoin))) return 30;
+        }
+        return 0;
+    }
+
+    async function fetchShikiPersonREST(endpointStr, searchName, nativeName, targetMalIds = []) {
         if (!searchName) return { status: 404, data: null };
         let cleanStr = searchName.replace(/_/g, ' ').replace(/-/g, ' ').trim();
         let nameParts = cleanStr.split(' ');
         let reversedName = nameParts.length > 1 ? [...nameParts].reverse().join(' ') : cleanStr;
         let finalStatus = 404;
+        const target = { full: cleanStr, native: nativeName };
 
         Logger('API', `Поиск персоны на Shiki: ${cleanStr}`);
         for (const domain of SHIKI_DOMAINS) {
@@ -1701,34 +1968,32 @@
                         try {
                             let res = JSON.parse(r.responseText);
                             if (res && res.length > 0) {
-                                let target = cleanStr.toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                                let targetRev = reversedName.toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                                let targetNat = (nativeName || '').replace(/\s+/g, '').trim();
-
+                                let best = null, bestScore = 0;
                                 for (let c of res) {
-                                    let en = (c.name || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                                    let ru = (c.russian || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                                    let jpn = (c.japanese || '').replace(/\s+/g, '').trim();
-                                    if (en === target || en === targetRev || ru === target || ru === targetRev) return c;
-                                    if (targetNat && jpn && jpn.includes(targetNat)) return c;
+                                    let sc = scoreNameMatch(c, target);
+                                    if (sc > bestScore) { bestScore = sc; best = c; }
                                 }
-                                for (let c of res) {
-                                    let en = (c.name || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                                    if (en.includes(target) || (targetRev.length > 4 && en.includes(targetRev))) return c;
-                                }
-                                return res[0];
+                                if (best && bestScore >= 80) return { cand: best, score: bestScore };
                             }
                         } catch(e) { Logger('ERROR', 'Ошибка парсинга персоны Shiki', e); }
                     }
                     return null;
                 };
 
-                let item = await fetchMatch(`https://${domain}/api/${endpointStr}/search?search=${encodeURIComponent(cleanStr)}`);
-                if (!item && nameParts.length > 1) item = await fetchMatch(`https://${domain}/api/${endpointStr}/search?search=${encodeURIComponent(reversedName)}`);
-                if (!item) item = await fetchMatch(`https://${domain}/api/${endpointStr}?search=${encodeURIComponent(cleanStr)}`);
+                let item = null, itemScore = 0;
+                const searchUrls = [
+                    `https://${domain}/api/${endpointStr}/search?search=${encodeURIComponent(cleanStr)}`,
+                    ...(nameParts.length > 1 ? [`https://${domain}/api/${endpointStr}/search?search=${encodeURIComponent(reversedName)}`] : []),
+                    `https://${domain}/api/${endpointStr}?search=${encodeURIComponent(cleanStr)}`
+                ];
+                for (const url of searchUrls) {
+                    let m = await fetchMatch(url);
+                    if (m && m.score > itemScore) { item = m.cand; itemScore = m.score; }
+                    if (itemScore >= 100) break;
+                }
 
                 if (!item) {
-                    const gqlQuery = `query($search: String) { ${endpointStr}(search: $search, limit: 1) { id russian } }`;
+                    const gqlQuery = `query($search: String) { ${endpointStr}(search: $search, limit: 5) { id name russian japanese } }`;
                     let r = await new Promise(resolve => GM_xmlhttpRequest({
                         method: "POST", url: `https://${domain}/api/graphql`,
                         headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -1739,7 +2004,13 @@
                     if (r.status === 200) {
                         try {
                             let res = JSON.parse(r.responseText);
-                            if (res.data && res.data[endpointStr] && res.data[endpointStr].length > 0) item = res.data[endpointStr][0];
+                            let list = res.data && res.data[endpointStr] ? res.data[endpointStr] : [];
+                            let best = null, bestScore = 0;
+                            for (let c of list) {
+                                let sc = scoreNameMatch(c, target);
+                                if (sc > bestScore) { bestScore = sc; best = c; }
+                            }
+                            if (best && bestScore >= 80) { item = best; itemScore = bestScore; }
                         } catch(e) { Logger('ERROR', 'Ошибка парсинга GraphQL Shiki', e); }
                     }
                 }
@@ -1747,8 +2018,23 @@
                 if (item && item.id) {
                     let rDetails = await new Promise(resolve => GM_xmlhttpRequest({ method: "GET", url: `https://${domain}/api/${endpointStr}/${item.id}`, onload: resolve, onerror: () => resolve({status: 0}) }));
                     if (rDetails.status === 429) return { status: 429 };
-                    if (rDetails.status === 200) {
-                        let detailsRes = JSON.parse(rDetails.responseText);
+                    let detailsRes = null;
+                    if (rDetails.status === 200) { try { detailsRes = JSON.parse(rDetails.responseText); } catch(e) { Logger('ERROR', 'Ошибка парсинга деталей персоны Shiki', e); } }
+
+                    // Гард тёзок: при неточном (не-кандзи, score < 90) — требуем пересечение по тайтлам
+                    if (targetMalIds && targetMalIds.length && itemScore < 90 && detailsRes) {
+                        let candMal = [];
+                        if (Array.isArray(detailsRes.animes)) detailsRes.animes.forEach(a => a && a.id && candMal.push(a.id));
+                        if (Array.isArray(detailsRes.mangas)) detailsRes.mangas.forEach(a => a && a.id && candMal.push(a.id));
+                        if (Array.isArray(detailsRes.works))  detailsRes.works.forEach(w => w && w.anime && w.anime.id && candMal.push(w.anime.id));
+                        if (Array.isArray(detailsRes.roles))  detailsRes.roles.forEach(rr => (rr.animes || []).forEach(a => a && a.id && candMal.push(a.id)));
+                        if (candMal.length && !candMal.some(id => targetMalIds.includes(id))) {
+                            Logger('API', `Отклонён вероятный тёзка: ${cleanStr} (нет общих тайтлов, score=${itemScore})`);
+                            return { status: 404, data: null };
+                        }
+                    }
+
+                    if (detailsRes) {
                         return { status: 200, data: { id: detailsRes.id || item.id, russian: detailsRes.russian || item.russian, description: detailsRes.description, url: detailsRes.url, domain } };
                     } else {
                         return { status: 200, data: { id: item.id, russian: item.russian, description: null, domain } };
@@ -1764,37 +2050,34 @@
     }
 
     /**
-     * Резолвит персонажа/персону Shikimori через роли в общих с AniList тайтлах (по MAL id),
-     * когда прямой поиск по имени (fetchShikiPersonREST) не дал результата.
+     * Резолвит персонажа/персону Shikimori через роли в общих тайтлах (по MAL id),
+     * когда прямой поиск по имени не сработал.
      * @param {{name: {full?: string}, media?: {nodes: Array<{idMal:?number}>}, staffMedia?: {nodes: Array<{idMal:?number}>}}} personData Данные персоны из AniList (character/staff) с медиа-связями.
      * @param {'characters'|'staff'} type Тип персоны (определяет, какое поле связей использовать: media/staffMedia).
      * @returns {Promise<?Object>} Найденная запись персонажа/человека Shikimori (сырой объект из /api/animes/:id/roles), либо null.
      */
     async function resolveShikiPersonByMedia(personData, type) {
         let mediaNodes = (type === 'characters' ? personData.media : personData.staffMedia)?.nodes ||[];
-        let malIds = mediaNodes.map(m => m.idMal).filter(id => id);
-        if (malIds.length === 0) return null;
+        let mediaRefs = mediaNodes.filter(m => m.idMal).map(m => ({ id: m.idMal, kind: m.type === 'MANGA' ? 'mangas' : 'animes' }));
+        if (mediaRefs.length === 0) return null;
 
-        let targetFull = (personData.name.full || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-        let parts = (personData.name.full || '').split(' ');
-        let targetReversed = parts.length > 1 ? [...parts].reverse().join(' ').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim() : targetFull;
+        const target = { full: personData.name.full || '', native: personData.name.native || '' };
+        let best = null, bestScore = 0;
 
-        for (let malId of malIds) {
-            let rolesRes = await fetchShiki(`/api/animes/${malId}/roles`);
+        for (let ref of mediaRefs) {
+            let rolesRes = await fetchShiki(`/api/${ref.kind}/${ref.id}/roles`);
             if (rolesRes.data) {
                 let items = rolesRes.data.map(r => type === 'characters' ? r.character : r.person).filter(x => x);
                 for (let c of items) {
-                    let en = (c.name || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                    let ru = (c.russian || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                    if (en === targetFull || en === targetReversed || ru === targetFull || ru === targetReversed) return c;
-                }
-                for (let c of items) {
-                    let en = (c.name || '').toLowerCase().replace(/[^a-zа-я0-9\s]/gi, '').trim();
-                    if (en.includes(targetFull) || en.includes(targetReversed)) return c;
+                    let sc = scoreNameMatch(c, target);
+                    if (sc > bestScore) { bestScore = sc; best = c; }
+                    if (bestScore >= 100) break;
                 }
             }
+            if (bestScore >= 100) break;
         }
-        return null;
+        // Кандидаты ограничены тайтлом → порог мягче, но ложные подстроки (score 30) отсекаем.
+        return bestScore >= 55 ? best : null;
     }
 
     // ==========================================
@@ -1862,7 +2145,7 @@
             return all;
         }
 
-        // Парсинг истории активности юзера (даты начала и окончания просмотров)
+        // Парсинг истории активности (даты)
         async function fetchShikiHistoryDates(userId, btn) {
             let page = 1; const datesMap = {};
             while (true) {
@@ -1913,7 +2196,7 @@
             return null;
         }
 
-        // Пакетный маппинг ID (MAL -> AniList)
+        // Пакетный маппинг MAL -> AniList
         async function getAnilistIds(malIds, type) {
             if (!malIds || malIds.length === 0) return {};
             const map = {};
@@ -1927,7 +2210,7 @@
             return map;
         }
 
-        // Загрузка существующего списка с AniList для сверки
+        // Список AniList для сверки
         async function getExistingAnilistList(alUserId, type, btn) {
             const map = {};
             if (btn) btn.textContent = `Загрузка AL списка (${type})...`;
@@ -1969,7 +2252,7 @@
             return null;
         }
 
-        // Основная функция синхронизации списка
+        // Синхронизация списка
         async function syncShikiToAlList(shikiItems, type, alUser, historyDates, btn) {
             if (!shikiItems || shikiItems.length === 0) return;
             const alType = type === 'anime' ? 'ANIME' : 'MANGA';
@@ -1996,7 +2279,7 @@
 
                 let notes = item.text && item.text.trim().length > 0 ? item.text.trim() : undefined;
                 if (notes) {
-                    // Парсинг BB-кодов заметок с Shiki в Markdown
+                    // BB-коды заметок → Markdown
                     notes = notes.replace(/\[b\](.*?)\[\/b\]/gi, '**$1**').replace(/\[i\](.*?)\[\/i\]/gi, '*$1*')
                                  .replace(/\[s\](.*?)\[\/s\]/gi, '~~$1~~').replace(/\[spoiler(?:=[^\]]+)?\]([\s\S]*?)\[\/spoiler\]/gi, '~!$1!~')
                                  .replace(/\[url=(.+?)\](.*?)\[\/url\]/gi, '[$2]($1)');
@@ -2019,7 +2302,7 @@
                     if (type === 'manga') isSame = isSame && (ex.progressVolumes || 0) === progressVolumes;
                     if (notes !== undefined) isSame = isSame && (ex.notes ? ex.notes.trim() : undefined) === notes;
 
-                    // Если данные на AniList идентичны Shikimori, пропускаем запрос
+                    // Идентично — пропуск
                     if (isSame) { if (count % 50 === 0) await new Promise(r => setTimeout(r, 10)); continue; }
                 }
 
@@ -2037,7 +2320,7 @@
                 const mutation = `mutation(${mutationVars.join(',')}){SaveMediaListEntry(${mutationArgs.join(',')}){id}}`;
 
                 try { await anilistQuery(mutation, variables, true); } catch(e) { Logger('ERROR', `syncShikiToAlList: сбой SaveMediaListEntry (mediaId=${alId}, ${type})`, e); }
-                await new Promise(r => setTimeout(r, 700)); // Лимит AniList (90/мин)
+                await new Promise(r => setTimeout(r, 700)); // лимит 90/мин
             }
         }
 
@@ -2079,9 +2362,8 @@
             await processFavorites(uniqStaff, 'STAFF', exAlFavs.staff, 'staffId');
         }
 
-        // На Shikimori переменных тем AniList (--color-*) нет — выводим их из реальных
-        // цветов страницы (фон/текст), чтобы кит подстроился и под светлую, и под тёмную
-        // тему Shiki. Акцент/статусы — фиксированные.
+        // На Shikimori нет --color-* AniList → выводим из реальных цветов страницы (фон/текст)
+        // под светлую/тёмную тему Shiki. Акцент/статусы фиксированы.
         function amkShikiTokens(el) {
             const triple = (c, fb) => { const m = (c || '').match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)/); return m ? `${m[1]} ${m[2]} ${m[3]}` : fb; };
             let bg = getComputedStyle(document.body).backgroundColor;
@@ -2218,26 +2500,26 @@
     }
 
     // ==========================================
-    // 5. МОДУЛЬ ПЕРЕВОДА И ИНТЕРФЕЙСА (ANILIST)
+    // 5. ПЕРЕВОД И ИНТЕРФЕЙС (ANILIST)
     // ==========================================
     function initTranslator() {
         Logger('INFO', 'Запуск модуля Translator');
 
         const queue = new Map();
         const pending = { MED2: new Set(), CHR2: new Map(), STF3: new Map() };
-        globalPendingQueues = pending; // Прокидываем наружу для Инспектора
+        globalPendingQueues = pending; // для Инспектора
 
         let isProcessing = false;
         let debounceTimer = null;
         let ensureWidgetsTimer = null;
 
-        function cleanShikiBB(text, url) {
+        function cleanShikiBB(text, url, sourceName = 'Shikimori') {
             if (!text) return "";
             let safeText = escapeHTML(text);
-            // bbHtml, а не html — не затеняем глобальный html`` хелпер.
+            // bbHtml, не html — не затеняем html``.
             const bbHtml = safeText.replace(/\[i\](.*?)\[\/i\]/gi, '<i>$1</i>').replace(/\[b\](.*?)\[\/b\]/gi, '<b>$1</b>').replace(/\[u\](.*?)\[\/u\]/gi, '<u>$1</u>').replace(/\[\w+=\d+\](.*?)\[\/\w+\]/gi, '$1').replace(/\[\w+(=.*?)?\]/gi, '').replace(/\[\/\w+\]/gi, '').replace(/\n/g, '<br>');
             const safeUrl = escapeHTML(url);
-            return bbHtml + `<br><br><small style="opacity:0.75;font-size:0.85em;">Описание предоставлено <a href="${safeUrl}" target="_blank" style="color:#3dbbee; font-weight:bold;">Shikimori</a></small>`;
+            return bbHtml + `<br><br><small style="opacity:0.75;font-size:0.85em;">Описание предоставлено <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="color:#3dbbee; font-weight:bold;">${escapeHTML(sourceName)}</a></small>`;
         }
 
         function translateAdvanced(text) {
@@ -2343,6 +2625,8 @@
 
         function translateNode(node) {
             if (!node) return;
+            // Не трогаем свой UI (напр. поля редактора словаря — иначе перевод сам в себя).
+            if (node.nodeType === Node.ELEMENT_NODE && node.closest && node.closest('.am-notr')) return;
             if (node.nodeType === Node.ELEMENT_NODE && !['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG'].includes(node.tagName)) {
                 ['placeholder', 'title', 'aria-label', 'value', 'label'].forEach(attr => {
                     const val = node.getAttribute(attr);
@@ -2368,8 +2652,7 @@
             }
         }
 
-        // Перехват Vue Inputs
-        // Переопределяем нативный сеттер, чтобы текст не сбрасывался реактивностью Vue
+        // Перехват Vue-инпутов: переопределяем нативный сеттер, чтобы текст не сбрасывался реактивностью
         function setupVueInputInterceptor() {
             const inputDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
             if (!inputDescriptor || !inputDescriptor.set) return;
@@ -2544,9 +2827,9 @@
                     pending.MED2.delete(m.id.toString());
                     if (m.idMal) {
                         dbSet('malCache', { id: m.id, data: m });
-                        const shiki = await fetchShiki(`/api/${m.type === 'MANGA' ? 'mangas' : 'animes'}/${m.idMal}`);
-                        if (shiki.data) {
-                            const data = { ru: shiki.data.russian, desc: cleanShikiBB(shiki.data.description, `https://${shiki.domain}${shiki.data.url}`) };
+                        const resolved = await resolveTitle(m.idMal, m.type);
+                        if (resolved) {
+                            const data = { ru: resolved.russian, desc: cleanShikiBB(resolved.description, resolved.url, resolved.sourceName) };
                             dbSet('shikiCache', { key: `MED2_${m.id}`, data, ts: Date.now() });
                             applyTranslation('MED2', m.id, data);
                         } else {
@@ -2561,7 +2844,7 @@
             }
             else if (pending.CHR2.size > 0) {
                 const ids = Array.from(pending.CHR2.keys()).slice(0, 10);
-                const query = `query ($ids:[Int]) { Page(page:1, perPage:10) { characters(id_in: $ids) { id name { full native } media(sort: POPULARITY_DESC, page: 1, perPage: 2) { nodes { idMal } } } } }`;
+                const query = `query ($ids:[Int]) { Page(page:1, perPage:10) { characters(id_in: $ids) { id name { full native } media(sort: POPULARITY_DESC, page: 1, perPage: 6) { nodes { idMal type } } } } }`;
                 const res = await anilistQuery(query, { ids: ids.map(i => parseInt(i)) });
 
                 const charMap = {};
@@ -2580,7 +2863,8 @@
                     if (charData) shikiItem = await resolveShikiPersonByMedia(charData, 'characters');
 
                     if (!shikiItem) {
-                        const sRes = await fetchShikiPersonREST('characters', searchName, nativeName);
+                        const targetMalIds = charData ? ((charData.media && charData.media.nodes) || []).map(n => n.idMal).filter(Boolean) : [];
+                        const sRes = await fetchShikiPersonREST('characters', searchName, nativeName, targetMalIds);
                         if (sRes.status === 200 && sRes.data) shikiItem = sRes.data;
                         else if (sRes.status === 429) { shikiRateLimitPause = Date.now() + 6000; pending.CHR2.set(id, fallbackName); break; }
                     } else {
@@ -2601,7 +2885,7 @@
             }
             else if (pending.STF3.size > 0) {
                 const ids = Array.from(pending.STF3.keys()).slice(0, 10);
-                const query = `query ($ids:[Int]) { Page(page:1, perPage:10) { staff(id_in: $ids) { id name { full native } staffMedia(sort: POPULARITY_DESC, page: 1, perPage: 2) { nodes { idMal } } } } }`;
+                const query = `query ($ids:[Int]) { Page(page:1, perPage:10) { staff(id_in: $ids) { id name { full native } staffMedia(sort: POPULARITY_DESC, page: 1, perPage: 6) { nodes { idMal type } } } } }`;
                 const res = await anilistQuery(query, { ids: ids.map(i => parseInt(i)) });
 
                 const staffMap = {};
@@ -2620,7 +2904,8 @@
                     if (staffData) shikiItem = await resolveShikiPersonByMedia(staffData, 'people');
 
                     if (!shikiItem) {
-                        const sRes = await fetchShikiPersonREST('people', searchName, nativeName);
+                        const targetMalIds = staffData ? ((staffData.staffMedia && staffData.staffMedia.nodes) || []).map(n => n.idMal).filter(Boolean) : [];
+                        const sRes = await fetchShikiPersonREST('people', searchName, nativeName, targetMalIds);
                         if (sRes.status === 200 && sRes.data) shikiItem = sRes.data;
                         else if (sRes.status === 429) { shikiRateLimitPause = Date.now() + 6000; pending.STF3.set(id, fallbackName); break; }
                     } else {
@@ -2680,7 +2965,7 @@
                     else if (item.el.classList && item.el.classList.contains('description') && data.desc) {
                         if (!item.el.querySelector('.ru-desc')) {
                             const origHTML = item.el.innerHTML;
-                            // data.desc (cleanShikiBB) и origHTML (уже отрендеренный DOM) — оба доверенные HTML.
+                            // data.desc (cleanShikiBB) и origHTML — доверенные HTML.
                             item.el.innerHTML = html`<div class="ru-desc" style="margin-bottom:20px;">${rawHTML(data.desc)}</div><details style="opacity:0.85;font-size:0.9em;background:rgba(128,128,128,0.15);padding:10px;border-radius:5px;"><summary style="cursor:pointer;color:#3dbbee;font-weight:bold;outline:none;">Оригинальное описание (AniList)</summary><div style="margin-top:10px;">${rawHTML(origHTML)}</div></details>`;
                         }
                     }
@@ -2701,7 +2986,7 @@
             queue.delete(key);
         }
 
-        // MutationObserver для динамического отлова новых элементов на странице
+        // MutationObserver: новые элементы
         let mutationQueue =[];
         let rAF_ID = null;
 
@@ -2755,24 +3040,26 @@
 
         const obs = new MutationObserver((mutations) => {
             mutationQueue.push(...mutations);
-            // Обрабатываем мутации порциями (batching) чтобы не вешать UI браузера
+            // Мутации порциями, чтобы не вешать UI
             if (!rAF_ID) rAF_ID = requestAnimationFrame(() => {
                 const startTimer = performance.now();
                 processMutations();
                 const diff = performance.now() - startTimer;
-                // Метрика производительности
+                // Метрика перфа
                 if (diff > 50) Logger('INFO', `[Performance] Обновление интерфейса заняло ${diff.toFixed(2)}ms`, { totalMutations: mutations.length });
             });
         });
 
         obs.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true, attributeFilter:['title', 'aria-label', 'placeholder', 'value', 'label'] });
         setupVueInputInterceptor();
+        // Ре-скан страницы обновлённым словарём (после правки записей).
+        amRetranslate = () => { try { translateNode(document.body); } catch (e) { Logger('WARN', 'Ре-скан перевода не удался', e); } };
         translateNode(document.body);
         debouncedFindContent();
     }
 
     // ==========================================
-    // 6. МОДУЛЬ МЕДИА (ПЛЕЕР, РЕЙТИНГИ, ФРАНШИЗА)
+    // 6. МЕДИА (ПЛЕЕР, РЕЙТИНГИ, ФРАНШИЗА)
     // ==========================================
     let currentMediaId = null;
     let currentMediaData = null;
@@ -2783,12 +3070,14 @@
 
         const aniId = parseInt(path[2]);
 
+        // Auto: акцент из постера тайтла (best-effort)
+
         if (currentMediaId === aniId && currentMediaData) {
             ensureWidgets();
             return;
         }
 
-        // Очищаем старые виджеты при смене роута
+        // Чистка старых виджетов при смене роута
         if (currentMediaId !== aniId) {
             document.querySelectorAll('.animori-ratings, .animori-franchise, .animori-themes, .animori-extlinks').forEach(el => el.remove());
             const playBtn = document.getElementById('ru-player-btn');
@@ -2803,7 +3092,7 @@
         let malData = (await dbGet('malCache', aniId))?.data;
         if (currentMediaId !== aniId) return;
 
-        // Если в кэше нет MAL ID или averageScore, тянем из GraphQL
+        // Нет MAL ID / averageScore в кэше — из GraphQL
         if (!malData || !malData.averageScore) {
             const q = `query($id:Int){Media(id:$id){id type idMal seasonYear averageScore title{romaji english}}}`;
             malData = (await anilistQuery(q, { id: aniId }))?.data?.Media;
@@ -2835,7 +3124,7 @@
         currentMediaData = { malData, shikiData, franchiseBox: null };
         ensureWidgets();
 
-        // Загрузка дерева Франшизы
+        // Дерево франшизы
         if (settings.enableFranchise && shikiData) {
             const fRes = await fetchShiki(`/api/${endpoint}/${malData.idMal}/franchise`);
             if (currentMediaId !== aniId) return;
@@ -2856,7 +3145,7 @@
                 let alMap = {};
                 mapRes?.data?.Page?.media.forEach(m => alMap[m.idMal] = m);
 
-                let franchiseBox = document.createElement('div');
+                let franchiseBox = document.createElement('div'); franchiseBox.classList.add('am-accent-scope');
                 franchiseBox.className = 'animori-franchise';
                 const fTitle = document.createElement('h2');
                 fTitle.textContent = 'Хронология Франшизы';
@@ -2920,8 +3209,7 @@
                 });
 
                 if (sorted.length > 5) {
-                    // Верхняя кнопка «Свернуть» (sticky, видна только в развёрнутом виде): при
-                    // 50–100 тайтлах нижняя кнопка улетает вниз, поэтому дублируем сверху.
+                    // Верхняя «Свернуть» (sticky): при 50–100 тайтлах нижняя кнопка улетает вниз → дублируем сверху.
                     const topToggle = document.createElement('button');
                     topToggle.className = 'franchise-toggle franchise-toggle-top';
                     topToggle.innerText = 'Свернуть ▲';
@@ -2957,7 +3245,7 @@
         }
     }
 
-    // Размещение виджетов (Рейтинги, Темы, Франшиза, Кнопка Плеера)
+    // Размещение виджетов (рейтинги, темы, франшиза, плеер)
     window.ensureWidgets = function() {
         if (!currentMediaData) return;
         const path = window.location.pathname.split('/');
@@ -2966,10 +3254,10 @@
         const { malData, shikiData, franchiseBox } = currentMediaData;
         const sidebar = document.querySelector('.sidebar');
 
-        // Виджет Рейтингов (Shiki, MAL, AniList)
+        // Виджет рейтингов (Shiki/MAL/AniList)
         if (sidebar && settings.enableRatings && shikiData && !document.querySelector('.animori-ratings')) {
             const ratesBox = document.createElement('div');
-            ratesBox.className = 'animori-ratings';
+            ratesBox.className = 'animori-ratings am-accent-scope';
             let pureScore = "N/A", votes = 0;
             if (shikiData.rates_scores_stats) {
                 let sum = 0;
@@ -2980,21 +3268,52 @@
             const shikiLink = `https://${shikiData.domain || 'shikimori.io'}${shikiData.url}`;
             const malLink = `https://myanimelist.net/${malData.type === 'MANGA' ? 'manga' : 'anime'}/${malData.idMal}`;
 
-            // Форматируем среднюю оценку AniList в 10-балльную систему
+            // Средняя AniList → 10-балльная
             let alScoreText = "N/A";
             if (malData.averageScore) {
                 alScoreText = (malData.averageScore / 10).toFixed(2);
             }
 
             ratesBox.innerHTML = html`
-                <div class="rating-item"><a href="${shikiLink}" target="_blank" class="rating-badge shiki-badge" style="text-decoration:none;">SHIKIMORI</a><div class="rating-value">${pureScore}</div></div>
-                <div class="rating-item"><a href="${malLink}" target="_blank" class="rating-badge mal-badge" style="text-decoration:none;">MYANIMELIST</a><div class="rating-value">${shikiData.score || 'N/A'}</div></div>
-                <div class="rating-item"><span class="rating-badge al-badge" style="text-decoration:none; cursor:default;" title="Официальная средняя оценка AniList">ANILIST</span><div class="rating-value al-score-val" style="font-size: 1.4rem;">${alScoreText}</div></div>
+                <a href="${shikiLink}" target="_blank" rel="noopener noreferrer" class="rating-item shiki-badge"><span class="rating-star">★</span><span class="rating-label">SHIKIMORI</span><span class="rating-value">${pureScore}</span></a>
+                <a href="${malLink}" target="_blank" rel="noopener noreferrer" class="rating-item mal-badge"><span class="rating-star">★</span><span class="rating-label">MYANIMELIST</span><span class="rating-value">${shikiData.score || 'N/A'}</span></a>
+                <div class="rating-item al-badge" title="Официальная средняя оценка AniList" style="cursor:default;"><span class="rating-star">★</span><span class="rating-label">ANILIST</span><span class="rating-value al-score-val">${alScoreText}</span></div>
             `;
             sidebar.prepend(ratesBox);
+
+            // Гистограмма оценок (1..10). В бейдж: цвет столбиков от --rate-c, слева от ярлычка (.am-histo).
+            const buildHisto = (label, map) => {
+                let mx = 0, total = 0;
+                for (let i = 1; i <= 10; i++) { const v = map[i] || 0; if (v > mx) mx = v; total += v; }
+                if (mx <= 0) return null;
+                const histo = document.createElement('div'); histo.className = 'am-histo';
+                const head = document.createElement('div'); head.className = 'am-histo-head';
+                head.innerHTML = `<span>${escapeHTML(label)}</span><span>${total.toLocaleString('ru-RU')} ${getPlural(total, ['голос', 'голоса', 'голосов'])}</span>`;
+                const bars = document.createElement('div'); bars.className = 'am-histo-bars';
+                for (let i = 1; i <= 10; i++) {
+                    const v = map[i] || 0; const h = Math.round((v / mx) * 100);
+                    const bar = document.createElement('div'); bar.className = 'am-histo-bar'; bar.title = `${i}: ${v.toLocaleString('ru-RU')}`;
+                    const fill = document.createElement('div'); fill.className = 'am-histo-fill'; fill.style.height = Math.max(h, 2) + '%';
+                    bar.appendChild(fill); bars.appendChild(bar);
+                }
+                const axis = document.createElement('div'); axis.className = 'am-histo-axis';
+                axis.innerHTML = '<span>1</span><span>10</span>';
+                histo.append(head, bars, axis);
+                return histo;
+            };
+
+            // Гистограмма Shikimori
+            try {
+                const map = {};
+                (shikiData.rates_scores_stats || []).forEach(x => { const k = parseInt(x.name); if (k >= 1 && k <= 10) map[k] = x.value; });
+                const histo = buildHisto('SHIKIMORI', map);
+                // К бейджу MAL (не Shiki), чтобы не срезался шапкой; показ через .shiki-badge:hover ~ .mal-badge.
+                const anchor = ratesBox.querySelector('.mal-badge') || ratesBox.querySelector('.shiki-badge');
+                if (histo && anchor) { histo.classList.add('am-histo-shiki'); anchor.appendChild(histo); }
+            } catch (e) { Logger('WARN', 'Гистограмма Shikimori не построена', e); }
         }
 
-        // Блок Франшизы
+        // Блок франшизы
         if (franchiseBox) {
             const existing = document.querySelector('.animori-franchise:not(.animori-themes):not(.animori-extlinks)');
             const relations = document.querySelector('.relations');
@@ -3018,9 +3337,9 @@
             }
         }
 
-        // Музыкальные темы (VK / YouTube Music)
+        // Муз. темы (VK / YouTube Music)
         if (settings.enableThemes && malData.type === 'ANIME' && sidebar && !document.querySelector('.animori-themes')) {
-            const themesBox = document.createElement('div');
+            const themesBox = document.createElement('div'); themesBox.classList.add('am-accent-scope');
             themesBox.className = 'animori-themes animori-franchise';
             themesBox.style.display = 'none';
 
@@ -3030,19 +3349,18 @@
 
             fetchMalThemes(malData.idMal).then(themes => {
                 if (!themes || (!themes.openings.length && !themes.endings.length)) {
-        // Больше не удаляем themesBox. Он останется скрытым (display: none),
-        // тем самым блокируя повторные запуски ensureWidgets.
+        // themesBox не удаляем — прячем (display:none), блокирует повторные ensureWidgets.
         return;
                 }
 
                 let activeMusicService = GM_getValue('am_music_service', 'vk');
                 const headerFlex = document.createElement('div');
-                headerFlex.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-bottom: 15px; gap: 10px;';
+                headerFlex.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-bottom: 12px; gap: 10px;';
 
                 const titleEl = document.createElement('h2');
                 titleEl.textContent = 'Музыкальные темы'; titleEl.style.margin = '0'; titleEl.style.width = '100%'; titleEl.style.textAlign = 'center';
 
-                // Формирование поисковой ссылки под выбранный сервис
+                // Поисковая ссылка под сервис
                 const musicUrl = (svc, q) => {
                     const eq = encodeURIComponent(q);
                     if (svc === 'vk') return `https://vk.com/audio?q=${eq}`;
@@ -3050,7 +3368,7 @@
                     if (svc === 'sc') return `https://soundcloud.com/search?q=${eq}`;
                     return `https://music.youtube.com/search?q=${eq}`;
                 };
-                // Брендовые иконки (монохром, fill наследуется от цвета кнопки)
+                // Брендовые иконки (монохром, fill от кнопки)
                 const svcIcons = {
                     vk: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M13.16 18.06c-6.27 0-9.85-4.3-10-11.45h3.14c.1 5.25 2.42 7.47 4.25 7.93V6.61h2.96v4.53c1.81-.19 3.71-2.26 4.35-4.53h2.96c-.49 2.8-2.56 4.87-4.03 5.72 1.47.69 3.83 2.49 4.73 5.73h-3.26c-.7-2.18-2.44-3.87-4.75-4.09v4.09h-.36z"/></svg>',
                     yt: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2zm-1.75 14.5v-9l6 4.5-6 4.5z"/></svg>',
@@ -3061,7 +3379,7 @@
 
                 const serviceToggle = document.createElement('div');
                 serviceToggle.className = 'am-service-toggle';
-                // svcIcons[v] — доверенная SVG-разметка, поэтому rawHTML().
+                // svcIcons[v] — доверенный SVG → rawHTML()
                 serviceToggle.innerHTML = ['vk', 'yt', 'spotify', 'sc'].map(v =>
                     html`<div class="am-service-btn ${activeMusicService === v ? 'active' : ''}" data-val="${v}" title="${svcTitles[v]}" aria-label="${svcTitles[v]}">${rawHTML(svcIcons[v])}</div>`
                 ).join('');
@@ -3069,26 +3387,52 @@
                 headerFlex.appendChild(titleEl); headerFlex.appendChild(serviceToggle);
 
                 const listEl = document.createElement('div');
-                listEl.className = 'themes-list'; listEl.style.cssText = 'max-height: 300px; overflow-y: auto; padding-right: 5px;';
+                listEl.className = 'themes-list'; listEl.style.cssText = 'display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; padding: 4px 0;';
 
+                // Пилюля в стиле бейджей: полоса, лейбл OP/ED, тайтл + исполнитель, ▶ справа.
                 const renderTrack = (track, type) => {
-                    const cleanName = track.replace(/^\d+:\s*/, '');
-                    const searchQ = cleanName.replace(/\s*\(eps.*?\)/i, '').replace(/"/g, '').trim();
+                    const cleanTitle = (track.title || '').replace(/^\d+:\s*/, '').replace(/"/g, '').trim();
+                    const artist = (track.artist || '').trim();
+                    // Исполнитель в запросе — точнее находит трек
+                    const searchQ = [cleanTitle.replace(/\s*\(eps.*?\)/i, ''), artist].filter(Boolean).join(' ').trim();
+                    const label = `${type}${track.seq || ''}`;
 
                     const wrap = document.createElement('a');
-                    wrap.className = 'franchise-node am-theme-track'; wrap.dataset.query = searchQ;
+                    wrap.className = 'am-theme-track'; wrap.classList.add(type === 'OP' ? 'is-op' : 'is-ed');
+                    wrap.dataset.query = searchQ;
                     wrap.href = musicUrl(activeMusicService, searchQ);
-                    wrap.target = '_blank'; wrap.style.cssText = 'flex-direction: column; align-items: flex-start; gap: 4px; margin-bottom: 8px; cursor: pointer; text-decoration: none;';
+                    wrap.target = '_blank';
 
-                    const typeBadge = document.createElement('span'); typeBadge.className = 'node-kind';
-                    typeBadge.style.cssText = `font-size:0.8rem; padding:2px 9px; border-radius:6px; font-weight:800; background:${type === 'OP' ? 'rgba(var(--color-blue),0.2)' : 'rgba(var(--color-red),0.22)'}; color:${type === 'OP' ? 'rgb(var(--color-blue))' : 'rgb(var(--color-red))'}; border:1px solid ${type === 'OP' ? 'rgba(var(--color-blue),0.55)' : 'rgba(var(--color-red),0.65)'};`;
-                    typeBadge.textContent = type;
+                    const badge = document.createElement('span'); badge.className = 'am-theme-label';
+                    badge.textContent = label;
 
-                    const titleSpan = document.createElement('span'); titleSpan.className = 'node-title';
-                    titleSpan.style.cssText = 'white-space: normal; font-size: 1.1rem; line-height: 1.3; width: 100%;';
-                    titleSpan.textContent = cleanName;
+                    const info = document.createElement('span'); info.className = 'am-theme-info';
+                    const titleSpan = document.createElement('span'); titleSpan.className = 'am-theme-title';
+                    titleSpan.textContent = cleanTitle;
+                    info.appendChild(titleSpan);
+                    if (artist) {
+                        const artistSpan = document.createElement('span'); artistSpan.className = 'am-theme-artist';
+                        artistSpan.textContent = artist;
+                        info.appendChild(artistSpan);
+                    }
 
-                    wrap.append(typeBadge, titleSpan);
+                    // Копирование «Название — Исполнитель». Внутри ссылки: гасим переход/всплытие.
+                    const copyBtn = document.createElement('span'); copyBtn.className = 'am-theme-copy';
+                    copyBtn.title = 'Скопировать трек'; copyBtn.setAttribute('aria-label', 'Скопировать трек');
+                    copyBtn.innerHTML = '<svg class="am-copy-ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="am-check-ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+                    copyBtn.addEventListener('click', (e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        const text = [cleanTitle, artist].filter(Boolean).join(' — ');
+                        amCopy(text, copyBtn);
+                    });
+
+                    // ▶ убрана. Лейбл OP/ED и кнопка копирования делят позицию: при hover лейбл прячется, кнопка проступает.
+                    const lead = document.createElement('span'); lead.className = 'am-theme-lead';
+                    lead.append(badge, copyBtn);
+
+                    wrap.append(lead, info);
+                    applyMarquee(titleSpan);
+                    if (artist) applyMarquee(info.querySelector('.am-theme-artist'));
                     return wrap;
                 };
 
@@ -3113,36 +3457,66 @@
 
         // Внешние ссылки
         if (settings.enableExtLinks && (malData.type === 'ANIME' || malData.type === 'MANGA') && sidebar && !document.querySelector('.animori-extlinks')) {
-            const extBox = document.createElement('div'); extBox.className = 'animori-extlinks animori-franchise';
+            const extBox = document.createElement('div'); extBox.className = 'animori-extlinks animori-franchise am-accent-scope';
             const pTitle = document.createElement('h2'); pTitle.textContent = malData.type === 'ANIME' ? 'Где посмотреть' : 'Где почитать';
             pTitle.style.textAlign = 'center'; pTitle.style.marginBottom = '15px'; extBox.appendChild(pTitle);
 
-            const pList = document.createElement('div'); pList.style.cssText = 'display:flex; flex-wrap:wrap; gap:12px; justify-content:center;';
+            const pList = document.createElement('div'); pList.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
 
             const romaji = malData.title.romaji; const ruTitle = shikiData?.russian || romaji;
             const yummyDomain = settings.yummyDomain || 'yummyanime.tv'; const animegoDomain = settings.animegoDomain || 'animego.org'; const mangalibDomain = settings.mangalibDomain || 'mangalib.me';
 
-            // token — имя тема-токена AniList (blue/red/green/orange/pink/purple/...),
-            // цвет чипа адаптируется под тему сайта. Стили — в классе .am-extlink.
-            // Фолбэк-триплы на случай, если тема AniList не определяет часть --color-* токенов
+            // token — тема-токен AniList (blue/red/...), цвет чипа под тему. Стили — .am-extlink.
+            // Фолбэк-триплы, если тема не задаёт часть --color-*
             const tokenFallback = { blue: '61, 187, 238', red: '252, 129, 129', green: '166, 227, 161', orange: '246, 193, 119', pink: '243, 139, 168', purple: '183, 148, 244' };
-            const createExtLink = (name, token, action) => {
+            // colorSpec: {token:'orange'} (встроенные, под тему) или {triple:'r,g,b'} (свои). opts: {custom, domain}.
+            const createExtLink = (name, colorSpec, href, opts = {}) => {
                 const a = document.createElement('a');
-                if (typeof action === 'string') { a.href = action; a.target = '_blank'; a.rel = 'noopener noreferrer'; } else { a.href = '#'; a.onclick = action; }
-                a.textContent = name;
+                a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
                 a.className = 'am-extlink';
-                a.style.setProperty('--c', `var(--color-${token}, ${tokenFallback[token] || '120, 130, 150'})`);
+                if (colorSpec && colorSpec.token) a.style.setProperty('--c', `var(--color-${colorSpec.token}, ${tokenFallback[colorSpec.token] || '120, 130, 150'})`);
+                else a.style.setProperty('--c', (colorSpec && colorSpec.triple) || '120,130,150');
+
+                const av = document.createElement('span'); av.className = 'am-extlink-av';
+                av.textContent = (name.trim()[0] || '?').toUpperCase();
+
+                const info = document.createElement('span'); info.className = 'am-extlink-info';
+                const nm = document.createElement('span'); nm.className = 'am-extlink-name';
+                nm.appendChild(document.createTextNode(name));
+                if (opts.custom) { const tag = document.createElement('span'); tag.className = 'am-extlink-tag'; tag.textContent = 'своя'; nm.appendChild(tag); }
+                const dom = document.createElement('span'); dom.className = 'am-extlink-domain';
+                let domain = opts.domain || '';
+                if (!domain) { try { domain = new URL(href).hostname.replace(/^www\./, ''); } catch (e) { /* игнор */ } }
+                dom.textContent = domain;
+                info.append(nm, dom);
+
+                const arrow = document.createElement('span'); arrow.className = 'am-extlink-arrow'; arrow.textContent = '↗';
+                a.append(av, info, arrow);
+                applyMarquee(nm); applyMarquee(dom);
                 return a;
             };
 
             let linksAdded = 0;
-            if (settings.enableLinkRutracker) { pList.appendChild(createExtLink('RuTracker', 'orange', `https://rutracker.org/forum/tracker.php?nm=${encodeURIComponent(romaji)}`)); linksAdded++; }
+            if (settings.enableLinkRutracker) { pList.appendChild(createExtLink('RuTracker', {token:'orange'}, `https://rutracker.org/forum/tracker.php?nm=${encodeURIComponent(romaji)}`)); linksAdded++; }
             if (malData.type === 'ANIME') {
-                if (settings.enableLinkYummy) { pList.appendChild(createExtLink('YummyAnime', 'pink', `https://${yummyDomain}/index.php?do=search&subaction=search&story=${encodeURIComponent(ruTitle)}`)); linksAdded++; }
-                if (settings.enableLinkAnimego) { pList.appendChild(createExtLink('AnimeGO', 'purple', `https://${animegoDomain}/search/anime?q=${encodeURIComponent(ruTitle)}`)); linksAdded++; }
+                if (settings.enableLinkYummy) { pList.appendChild(createExtLink('YummyAnime', {token:'pink'}, `https://${yummyDomain}/index.php?do=search&subaction=search&story=${encodeURIComponent(ruTitle)}`)); linksAdded++; }
+                if (settings.enableLinkAnimego) { pList.appendChild(createExtLink('AnimeGO', {token:'purple'}, `https://${animegoDomain}/search/anime?q=${encodeURIComponent(ruTitle)}`)); linksAdded++; }
             } else if (malData.type === 'MANGA') {
-                if (settings.enableLinkMangalib) { pList.appendChild(createExtLink('MangaLib', 'blue', `https://${mangalibDomain}/ru/catalog?q=${encodeURIComponent(ruTitle)}`)); linksAdded++; }
+                if (settings.enableLinkMangalib) { pList.appendChild(createExtLink('MangaLib', {token:'blue'}, `https://${mangalibDomain}/ru/catalog?q=${encodeURIComponent(ruTitle)}`)); linksAdded++; }
             }
+
+            // Свои ссылки: {ru}/{romaji}/{query}
+            const customLinks = getCustomLinks();
+            const clQuery = ruTitle || romaji;
+            customLinks.forEach(cl => {
+                if (!cl || !cl.name || !cl.url) return;
+                const url = String(cl.url)
+                    .replace(/\{ru\}/g, encodeURIComponent(ruTitle || ''))
+                    .replace(/\{romaji\}/g, encodeURIComponent(romaji || ''))
+                    .replace(/\{query\}/g, encodeURIComponent(clQuery || ''));
+                pList.appendChild(createExtLink(cl.name, { triple: cl.color || '120,130,150' }, url, { custom: true }));
+                linksAdded++;
+            });
 
             if (linksAdded > 0) {
                 extBox.appendChild(pList);
@@ -3164,8 +3538,8 @@
             if (btn) {
                 btn.style.display = 'flex';
                 if (!document.getElementById('ru-player-overlay')) {
-                    const overlay = document.createElement('div'); overlay.id = 'ru-player-overlay';
-                    overlay.innerHTML = html`<div id="ru-player-close">&times;</div><div id="ru-info-panel"><div style="color:rgb(var(--color-blue));font-weight:bold;font-size:16px;text-transform:uppercase;letter-spacing:1px;text-align:center;" id="info-anime-title">Загрузка...</div></div><div id="ru-translations-panel" style="display:none;"></div><div id="ru-player-container"><iframe id="ru-p-iframe" allowfullscreen allow="autoplay; fullscreen"></iframe></div><div id="ru-episodes-panel" style="display:none;"></div>`;
+                    const overlay = document.createElement('div'); overlay.id = 'ru-player-overlay'; overlay.classList.add('am-accent-scope');
+                    overlay.innerHTML = html`<div id="ru-player-shell"><div id="ru-stage-col"><div id="ru-info-panel"><div id="ru-title-wrap"><div id="ru-title-track"><span id="info-anime-title">Загрузка...</span></div></div><span id="ru-ep-chip" style="display:none;"></span></div><div id="ru-player-container"><iframe id="ru-p-iframe" allowfullscreen allow="autoplay; fullscreen"></iframe></div></div><div id="ru-sidebar"><div id="ru-sidebar-head"><span class="ru-sb-title">Озвучка</span><div id="ru-player-close">&times;</div></div><div id="ru-translations-panel" style="display:none;"></div><div id="ru-eps-label" style="display:none;">Эпизоды</div><div id="ru-episodes-panel" style="display:none;"></div></div></div>`;
                     document.body.appendChild(overlay);
                     const closeOverlay = () => { overlay.style.display = 'none'; document.getElementById('ru-p-iframe').src = ''; };
                     document.getElementById('ru-player-close').onclick = closeOverlay;
@@ -3179,8 +3553,32 @@
                     const rusTitle = shikiData?.russian; const romTitle = malData.title.romaji; const defaultTitle = rusTitle || romTitle;
                     const titleEl = document.getElementById('info-anime-title'); const iframe = document.getElementById('ru-p-iframe');
                     const tPanel = document.getElementById('ru-translations-panel'); const ePanel = document.getElementById('ru-episodes-panel');
+                    const epLabel = document.getElementById('ru-eps-label');
+                    const epChip = document.getElementById('ru-ep-chip');
 
-                    iframe.src = ''; tPanel.style.display = 'none'; ePanel.style.display = 'none'; titleEl.innerText = "Подключение к базе...";
+                    // SVG-сердечко озвучки (розовое залитое / серый контур)
+                    function amHeartSVG(filled) {
+                        const c = filled ? 'rgb(var(--color-pink, 243,139,168))' : 'rgb(var(--color-text-light))';
+                        return `<svg width="15" height="15" viewBox="0 0 24 24" fill="${filled ? c : 'none'}" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5 4.3 12.6a4.7 4.7 0 0 1 0-6.6 4.5 4.5 0 0 1 6.5 0l1.2 1.2 1.2-1.2a4.5 4.5 0 0 1 6.5 0 4.7 4.7 0 0 1 0 6.6z"/></svg>`;
+                    }
+                    // Заголовок: бегущая строка при overflow
+                    function amSetPlayerTitle(text) {
+                        const wrap = document.getElementById('ru-title-wrap');
+                        const track = document.getElementById('ru-title-track');
+                        if (!titleEl) return;
+                        titleEl.textContent = text;
+                        if (!wrap || !track) return;
+                        track.classList.remove('am-marquee'); wrap.classList.remove('am-mask');
+                        track.querySelectorAll('.am-title-dup').forEach(d => d.remove());
+                        requestAnimationFrame(() => {
+                            if (titleEl.scrollWidth > wrap.clientWidth + 4) {
+                                const dup = titleEl.cloneNode(true); dup.removeAttribute('id'); dup.classList.add('am-title-dup');
+                                track.appendChild(dup); track.classList.add('am-marquee'); wrap.classList.add('am-mask');
+                            }
+                        });
+                    }
+
+                    iframe.src = ''; tPanel.style.display = 'none'; ePanel.style.display = 'none'; amSetPlayerTitle("Подключение к базе...");
 
                     let userProgress = 0; let userStatus = null;
                     if (getAlToken()) {
@@ -3193,7 +3591,8 @@
                     const fallbackPlayer = (err = '') => {
                         Logger('ERROR', `Срабатывание fallback плеера Kodik: ${err}`);
                         iframe.src = `https://kodikplayer.com/find-player?shikimoriID=${malData.idMal}&types=anime-serial,anime`;
-                        titleEl.innerText = defaultTitle + (err ? ` (Резерв: ${err})` : ' (Резервный плеер)');
+                        amSetPlayerTitle(defaultTitle + (err ? ` (Резерв: ${err})` : ' (Резервный плеер)'));
+                        if (epChip) epChip.style.display = 'none';
                     };
 
                     const kodikToken = '16f20d024a6fa20700b389c44d9ab159';
@@ -3209,8 +3608,7 @@
                                         if (r.translation && r.translation.title && !trMap.has(r.translation.title)) {
                                             let link = r.link;
                                             if (link.startsWith('//')) link = 'https:' + link;
-                                            // Скрываем родные селекторы (наш UI), но функционал жив — сериями рулим
-                                            // через API плеера (change_episode) без перезагрузки, даже в фуллскрине.
+                                            // Прячем родные селекторы (свой UI); сериями рулим через API (change_episode) без перезагрузки, даже в фуллскрине.
                                             link += (link.includes('?') ? '&' : '?') + 'hide_selectors=true';
 
                                             let eps =[];
@@ -3238,17 +3636,18 @@
 
                                     let activeTranslation = defaultTr;
                                     let activeEpisode = activeTranslation.episodes.length > 0 ? activeTranslation.episodes[0] : 1;
-                                    let loadedTranslation = null; // какая озвучка реально загружена в iframe
+                                    let loadedTranslation = null; // озвучка в iframe
 
                                     const setTitle = () => {
-                                        titleEl.innerText = activeTranslation.type === 'anime-serial'
-                                            ? `${defaultTitle} — ${activeTranslation.title} (Серия ${activeEpisode})`
-                                            : `${defaultTitle} — ${activeTranslation.title}`;
+                                        amSetPlayerTitle(`${defaultTitle} — ${activeTranslation.title}`);
+                                        if (epChip) {
+                                            if (activeTranslation.type === 'anime-serial') { epChip.style.display = ''; epChip.textContent = `Серия ${activeEpisode}`; }
+                                            else epChip.style.display = 'none';
+                                        }
                                     };
 
-                                    // seamless=true — сменить серию через API плеера, без перезагрузки iframe
-                                    // (видео не перезапускается, нативный фуллскрин не слетает). Работает только
-                                    // внутри уже загруженной озвучки; смена озвучки = загрузка её ссылки.
+                                    // seamless=true — смена серии через API без перезагрузки iframe (видео/фуллскрин целы).
+                                    // Только внутри загруженной озвучки; смена озвучки = загрузка её ссылки.
                                     const updatePlayer = (seamless = false) => {
                                         const isSerial = activeTranslation.type === 'anime-serial';
                                         if (seamless && isSerial && loadedTranslation === activeTranslation && iframe.contentWindow) {
@@ -3264,8 +3663,8 @@
 
                                     const renderEpisodes = () => {
                                         ePanel.innerHTML = '';
-                                        if (activeTranslation.type === 'anime' || activeTranslation.episodes.length <= 1) { ePanel.style.display = 'none'; return; }
-                                        ePanel.style.display = 'flex';
+                                        if (activeTranslation.type === 'anime' || activeTranslation.episodes.length <= 1) { ePanel.style.display = 'none'; if (epLabel) epLabel.style.display = 'none'; return; }
+                                        ePanel.style.display = 'grid'; if (epLabel) epLabel.style.display = '';
                                         const isCompleted = userStatus === 'COMPLETED';
 
                                         activeTranslation.episodes.forEach(ep => {
@@ -3285,10 +3684,10 @@
                                             const isFav = favs.includes(tr.title);
                                             const btnTr = document.createElement('div'); btnTr.className = `tr-btn ${tr.title === activeTranslation.title ? 'active' : ''} ${isFav ? 'favorite' : ''}`;
                                             const nameSpan = document.createElement('span'); nameSpan.className = 'tr-name'; nameSpan.textContent = tr.title;
-                                            const heartSpan = document.createElement('span'); heartSpan.className = 'tr-heart'; heartSpan.innerHTML = isFav ? '❤️' : '🤍';
+                                            const heartSpan = document.createElement('span'); heartSpan.className = 'tr-heart'; heartSpan.innerHTML = amHeartSVG(isFav);
 
                                             btnTr.onclick = (e) => {
-                                                if (e.target === heartSpan) return;
+                                                if (e.target.closest && e.target.closest('.tr-heart')) return;
                                                 activeTranslation = tr;
                                                 if (!tr.episodes.includes(activeEpisode)) activeEpisode = tr.episodes[tr.episodes.length - 1] || 1;
                                                 renderTranslations(); renderEpisodes(); updatePlayer();
@@ -3308,9 +3707,8 @@
 
                                     tPanel.style.display = 'flex'; renderTranslations(); renderEpisodes(); updatePlayer();
 
-                                    // Синхронизация: плеер сам сообщает текущую серию (автопереход по окончании,
-                                    // либо смена изнутри). Подсвечиваем её в нашей панели и правим заголовок.
-                                    // Слушатель один — снимаем предыдущий, чтобы не накапливались при переоткрытии.
+                                    // Плеер сообщает текущую серию (автопереход/смена изнутри) — подсвечиваем в панели,
+                                    // правим заголовок. Слушатель один (снимаем предыдущий).
                                     if (window.__amKodikSync) window.removeEventListener('message', window.__amKodikSync);
                                     window.__amKodikSync = (message) => {
                                         const d = message && message.data;
@@ -3328,15 +3726,77 @@
                 };
             }
         } else { const btn = document.getElementById('ru-player-btn'); if (btn) btn.style.display = 'none'; }
+
+        // Акцент к созданным контейнерам
+        amApplyAccentToDom();
     };
 
     // ==========================================
-    // 7. МОДУЛЬ РУССКОГО ПОИСКА
+    // 7. РУССКИЙ ПОИСК
     // ==========================================
+    // Контекстный захват: выделил текст → кнопка «Перевести» → мини-форма для локальной записи.
+    function initDictCapture() {
+        let pop = null, form = null, currentSel = '';
+        const removePop = () => { if (pop) { pop.remove(); pop = null; } };
+        const removeForm = () => { if (form) { form.remove(); form = null; } };
+        const inField = (el) => { while (el && el !== document.body) { const t = (el.tagName || '').toUpperCase(); if (t === 'INPUT' || t === 'TEXTAREA' || el.isContentEditable) return true; el = el.parentElement; } return false; };
+        document.addEventListener('mouseup', (e) => {
+            if (form && form.contains(e.target)) return;
+            if (pop && pop.contains(e.target)) return;
+            setTimeout(() => {
+                const sel = window.getSelection();
+                const text = sel ? normDictKey(sel.toString()) : '';
+                removePop();
+                if (!text || text.length < 2 || text.length > 120) return;
+                if (inField(e.target)) return;
+                if (!/[A-Za-z]/.test(text)) return; // только латиница
+                let rect; try { rect = sel.getRangeAt(0).getBoundingClientRect(); } catch (_) { return; }
+                if (!rect || (!rect.width && !rect.height)) return;
+                currentSel = text;
+                pop = document.createElement('div'); pop.className = 'am-dict-capture am-accent-scope';
+                pop.innerHTML = '<button class="am-dict-cap-btn" type="button"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>Перевести</button>';
+                document.body.appendChild(pop);
+                const px = Math.min(Math.max(8, rect.left + rect.width / 2 - pop.offsetWidth / 2), window.innerWidth - pop.offsetWidth - 8);
+                pop.style.left = px + 'px';
+                pop.style.top = (rect.top + window.scrollY - pop.offsetHeight - 8) + 'px';
+                pop.querySelector('.am-dict-cap-btn').onclick = () => { openForm(rect); };
+            }, 10);
+        });
+        const openForm = (rect) => {
+            removePop(); removeForm();
+            const existing = getUserDict()[currentSel] || '';
+            form = document.createElement('div'); form.className = 'am-dict-capform am-accent-scope am-notr';
+            form.innerHTML = `
+                <div class="am-dict-capform-head">Свой перевод</div>
+                <div class="am-dict-capform-src" title="${currentSel.replace(/"/g, '&quot;')}">${currentSel.replace(/</g, '&lt;')}</div>
+                <input class="amk-input am-dict-capform-inp" placeholder="Перевод (рус.)" value="${existing.replace(/"/g, '&quot;')}">
+                <div class="am-dict-capform-btns">
+                    <button class="amk-btn amk-btn-ghost am-dict-capform-cancel" type="button">Отмена</button>
+                    <button class="amk-btn amk-btn-primary am-dict-capform-save" type="button">Сохранить</button>
+                </div>`;
+            document.body.appendChild(form);
+            const px = Math.min(Math.max(8, rect.left), window.innerWidth - form.offsetWidth - 8);
+            let py = rect.top + window.scrollY - form.offsetHeight - 8;
+            if (py < window.scrollY + 8) py = rect.bottom + window.scrollY + 8;
+            form.style.left = px + 'px'; form.style.top = py + 'px';
+            const inp = form.querySelector('.am-dict-capform-inp');
+            inp.focus(); inp.select();
+            const save = () => { if (upsertUserDictEntry(currentSel, inp.value)) { removeForm(); const s2 = window.getSelection(); if (s2) s2.removeAllRanges(); } };
+            form.querySelector('.am-dict-capform-save').onclick = save;
+            form.querySelector('.am-dict-capform-cancel').onclick = removeForm;
+            inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') removeForm(); });
+        };
+        document.addEventListener('mousedown', (e) => {
+            if (pop && !pop.contains(e.target)) removePop();
+            if (form && !form.contains(e.target)) removeForm();
+        });
+        document.addEventListener('scroll', () => { removePop(); }, true);
+    }
+
     function initRussianSearch() {
         let searchTimeout = null; let activeQuery = ""; let cachedHtml = "";
 
-        // Слушаем ввод в главный инпут поиска AniList
+        // Главный инпут поиска AniList
         document.body.addEventListener('input', (e) => {
             const target = e.target;
             if (target.tagName !== 'INPUT' || target.getAttribute('placeholder') !== 'Поиск в AniList') return;
@@ -3356,24 +3816,39 @@
         async function performRussianSearch(query) {
             Logger('INFO', `Русский поиск: ${query}`);
             try {
-                const [animeRes, mangaRes] = await Promise.all([
+                const [animeRes, mangaRes, charRes, staffRes] = await Promise.all([
                     fetchShiki(`/api/animes?search=${encodeURIComponent(query)}&limit=4`),
-                    fetchShiki(`/api/mangas?search=${encodeURIComponent(query)}&limit=4`)
+                    fetchShiki(`/api/mangas?search=${encodeURIComponent(query)}&limit=4`),
+                    fetchShiki(`/api/characters/search?search=${encodeURIComponent(query)}`),
+                    fetchShiki(`/api/people/search?search=${encodeURIComponent(query)}`)
                 ]);
                 if (activeQuery !== query) return;
 
                 const shikiAnime = animeRes.data || []; const shikiManga = mangaRes.data ||[];
-                if (shikiAnime.length === 0 && shikiManga.length === 0) {
+                // /search игнорит &limit — режем на клиенте; помечаем зеркало для абс. URL.
+                const tagDomain = (res) => (res.data || []).map(i => ({ ...i, __domain: res.domain || SHIKI_DOMAINS[0] }));
+                const shikiChars = tagDomain(charRes).slice(0, 4);
+                const shikiStaff = tagDomain(staffRes).slice(0, 4);
+
+                if (shikiAnime.length === 0 && shikiManga.length === 0 && shikiChars.length === 0 && shikiStaff.length === 0) {
                     cachedHtml = html`<div class="am-ru-empty">Ничего не найдено ¯\\_(ツ)_/¯</div>`; renderCustomResults(cachedHtml); return;
                 }
 
                 const malIds =[...shikiAnime.map(i => i.id), ...shikiManga.map(i => i.id)];
-                const alQuery = `query($m:[Int]){ Page{ media(idMal_in:$m){ id idMal type format seasonYear coverImage{medium} } } }`;
-                const alRes = await anilistQuery(alQuery, { m: malIds });
+                // Единый AniList-запрос: медиа по MAL id + персонажи/стафф через алиасы Page.
+                // ВАЖНО: корневые Character/Staff дают 404 на пустой результат → оборачиваем в Page (пустой список без 404).
+                const varDefs = ['$m:[Int]'];
+                const rootFields = ['pm: Page{ media(idMal_in:$m){ id idMal type format seasonYear coverImage{medium} } }'];
+                const vars = { m: malIds };
+                shikiChars.forEach((c, i) => { varDefs.push(`$c${i}:String`); rootFields.push(`pc${i}: Page(perPage:1){ characters(search:$c${i}){ id image{ large } } }`); vars[`c${i}`] = c.name; });
+                shikiStaff.forEach((c, i) => { varDefs.push(`$s${i}:String`); rootFields.push(`ps${i}: Page(perPage:1){ staff(search:$s${i}){ id image{ large } } }`); vars[`s${i}`] = c.name; });
+                const alQuery = `query(${varDefs.join(',')}){ ${rootFields.join(' ')} }`;
+                const alRes = await anilistQuery(alQuery, vars);
                 if (activeQuery !== query) return;
 
-                const alData = alRes?.data?.Page?.media ||[]; const alMap = {};
+                const alData = alRes?.data?.pm?.media ||[]; const alMap = {};
                 alData.forEach(item => { alMap[`${item.type}_${item.idMal}`] = item; });
+                const alPersons = alRes?.data || {};
 
                 let resultHtml = '';
                 const generateCol = (title, items, typeStr) => {
@@ -3388,14 +3863,31 @@
                     });
                     colHtml += html`</div>`; return colHtml;
                 };
+                // Персонажи/стафф: ссылка+картинка AniList при совпадении, иначе фоллбэк Shikimori.
+                const generatePersonCol = (title, items, aliasPrefix, listKey, alPath) => {
+                    if (items.length === 0) return '';
+                    let colHtml = html`<div class="result-col animori-custom-result-col"><h3 class="title">${title}</h3>`;
+                    items.forEach((item, i) => {
+                        const pageNode = alPersons[`${aliasPrefix}${i}`];
+                        const node = pageNode && pageNode[listKey] && pageNode[listKey][0];
+                        const alId = node && node.id;
+                        const href = alId ? `/${alPath}/${alId}` : `https://${item.__domain}${item.url}`;
+                        const imgUrl = (alId && node.image && node.image.large) ? node.image.large : `https://${item.__domain}${item.image.preview}`;
+                        const coverSafe = rawHTML(encodeURI(imgUrl).replace(/'/g, "%27"));
+                        colHtml += html`<div class="result"><div><a href="${href}" class=""><div class="image" style="background-image: url('${coverSafe}');"></div><div class="name">${item.russian || item.name}<div class="info"><span>${item.name}</span></div></div></a></div></div>`;
+                    });
+                    colHtml += html`</div>`; return colHtml;
+                };
 
                 resultHtml += generateCol('Аниме (RU)', shikiAnime, 'Anime'); resultHtml += generateCol('Манга (RU)', shikiManga, 'Manga');
+                resultHtml += generatePersonCol('Персонажи (RU)', shikiChars, 'pc', 'characters', 'character');
+                resultHtml += generatePersonCol('Стафф (RU)', shikiStaff, 'ps', 'staff', 'staff');
                 if (resultHtml === '') resultHtml = html`<div class="am-ru-empty">Совпадений на AniList не найдено</div>`;
                 cachedHtml = resultHtml; renderCustomResults(resultHtml);
 
             } catch (e) {
                 if (activeQuery !== query) return;
-                cachedHtml = html`<div class="am-ru-empty">Ошибка соединения с базе</div>`; renderCustomResults(cachedHtml);
+                cachedHtml = html`<div class="am-ru-empty">Ошибка соединения с базой</div>`; renderCustomResults(cachedHtml);
                 Logger('ERROR', 'Ошибка русского поиска', e);
             }
         }
@@ -3416,7 +3908,7 @@
             }
 
             document.querySelectorAll('.am-ru-injected-container').forEach(el => el.remove());
-            // htmlContent уже готовый доверенный HTML.
+            // htmlContent — доверенный HTML.
             const wrapper = document.createElement('div'); wrapper.className = 'am-ru-injected-container'; wrapper.innerHTML = html`${rawHTML(htmlContent)}`;
             resultsContainer.appendChild(wrapper);
         }
@@ -3447,26 +3939,22 @@
         Logger('INFO', 'Скрипт AniMori загружается...');
 
         GM_addStyle(`
-            /* Единый блок-пилюля из кнопок (плеер прирастает слева при наличии) */
+            /* Акцент тулкита: по умолч. синий AniList, переопределяется пресетом на documentElement */
+            :root { --am-accent: var(--color-blue); }
+            /* Блок-пилюля кнопок (плеер слева) */
             #animori-actions { position:fixed; bottom:25px; left:25px; z-index:9999; display:flex; align-items:stretch; gap:0; background:rgba(var(--color-foreground),0.8); backdrop-filter:blur(16px) saturate(170%); -webkit-backdrop-filter:blur(16px) saturate(170%); border:1px solid rgba(var(--color-text-light),0.2); border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.18); overflow:hidden; }
             .am-premium-btn { background:transparent; border:none; border-radius:0; box-shadow:none; color:rgb(var(--color-text)); padding:11px 18px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; transition:background .15s, color .15s; display:flex; align-items:center; justify-content:center; letter-spacing:0.3px; }
             .am-premium-btn + .am-premium-btn { border-left:1px solid rgba(var(--color-text-light),0.14); }
-            .am-premium-btn:hover { background:rgba(var(--color-text-light),0.1); color:rgb(var(--color-blue)); }
+            .am-premium-btn:hover { background:rgba(var(--color-text-light),0.1); color:rgb(var(--am-accent)); }
             #am-set-btn, #am-log-btn, #am-cmp-btn { font-size:15px; width:46px; padding:11px 0; }
-            #ru-player-btn { color:rgb(var(--color-blue)); font-weight:700; }
-            #ru-player-btn:hover { background:rgba(var(--color-blue),0.14); }
-            .pulse-glow { animation: am-pulse 2.5s infinite cubic-bezier(0.66, 0, 0, 1); }
-            @keyframes am-pulse { 0% { box-shadow: 0 0 0 0 rgba(var(--color-blue), 0.3); } 70% { box-shadow: 0 0 0 15px rgba(var(--color-blue), 0); border-color: rgba(var(--color-blue), 0.5); } 100% { box-shadow: 0 0 0 0 rgba(var(--color-blue), 0); } }
-            /* #am-panel теперь модалка-overlay (см. UI-кит выше) */
+            #ru-player-btn { color:rgb(var(--am-accent)); font-weight:700; }
+            #ru-player-btn:hover { background:rgba(var(--am-accent),0.14); }
+            @keyframes am-pulse { 0% { box-shadow: 0 0 0 0 rgba(var(--am-accent), 0.3); } 70% { box-shadow: 0 0 0 15px rgba(var(--am-accent), 0); border-color: rgba(var(--am-accent), 0.5); } 100% { box-shadow: 0 0 0 0 rgba(var(--am-accent), 0); } }
+            /* #am-panel — модалка-overlay */
             @keyframes panel-pop { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-            #am-panel::-webkit-scrollbar { width: 6px; } #am-panel::-webkit-scrollbar-thumb { background: rgba(var(--color-blue), 0.4); border-radius: 4px; }
-            #am-panel h3 { margin:0 0 15px 0; font-size:14px; color:rgb(var(--color-blue)); text-transform:uppercase; border-bottom:1px solid rgba(var(--color-blue),0.3); padding-bottom:10px; font-weight: 700; letter-spacing: 1px;}
-            .am-opt { display:flex; justify-content:space-between; margin-bottom:12px; font-size:13px; font-weight: 500; align-items:center; }
-            .am-opt input[type="checkbox"] { accent-color: rgb(var(--color-blue)); width: 16px; height: 16px; cursor: pointer; }
-            .am-btn { background: rgba(var(--color-background-200), 1); color: rgb(var(--color-text)); border: 1px solid rgba(var(--color-text-light), 0.2); padding:10px; border-radius:8px; cursor:pointer; font-size:13px; width:100%; margin-top:15px; font-weight:600; transition: all 0.2s; }
-            .am-btn:hover { background: rgba(var(--color-background-300), 1); border-color: rgb(var(--color-blue)); color: rgb(var(--color-blue)); transform: translateY(-1px); }
+            #am-panel::-webkit-scrollbar { width: 6px; } #am-panel::-webkit-scrollbar-thumb { background: rgba(var(--am-accent), 0.4); border-radius: 4px; }
 
-            /* ===== AniMori UI Kit — тема-нативные компоненты (адаптируются ко всем темам AniList) ===== */
+            /* ===== AniMori UI Kit — тема-нативные компоненты ===== */
             .amk-overlay, #am-panel { position:fixed; inset:0; z-index:999999; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(0,0,0,0.55); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); animation:amk-fade .18s ease; }
             @keyframes amk-fade { from{opacity:0} to{opacity:1} }
             @keyframes amk-pop { from{transform:translateY(10px) scale(.985); opacity:0} to{transform:none; opacity:1} }
@@ -3474,12 +3962,25 @@
             .amk-modal.amk-wide { width:920px; }
             .amk-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 18px; border-bottom:1px solid rgba(var(--color-text-light),0.1); flex-wrap:wrap; flex-shrink:0; }
             .amk-title { margin:0; font-size:15px; font-weight:700; letter-spacing:.3px; display:flex; align-items:center; gap:9px; }
-            .amk-title .amk-dot { width:9px; height:9px; border-radius:50%; background:rgb(var(--color-blue)); box-shadow:0 0 10px rgba(var(--color-blue),0.6); }
+            .amk-title .amk-dot { width:9px; height:9px; border-radius:50%; background:rgb(var(--am-accent)); box-shadow:0 0 10px rgba(var(--am-accent),0.6); }
             .amk-sub { font-size:12px; color:rgb(var(--color-text-light)); font-weight:500; }
             .amk-body { padding:16px 18px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; flex:1 1 auto; min-height:0; }
             .amk-body > * { flex-shrink:0; }
             .amk-foot { padding:12px 18px; border-top:1px solid rgba(var(--color-text-light),0.1); display:flex; gap:10px; flex-shrink:0; }
             .amk-body::-webkit-scrollbar { width:8px; } .amk-body::-webkit-scrollbar-thumb { background:rgba(var(--color-text-light),0.25); border-radius:4px; }
+            #am-panel .amk-modal { width:600px; }
+            .amk-body.amk-tabbed { flex-direction:row; padding:0; gap:0; }
+            .amk-tabnav { width:168px; flex-shrink:0; border-right:1px solid rgba(var(--color-text-light),0.1); padding:12px 10px; display:flex; flex-direction:column; gap:3px; overflow-y:auto; }
+            .amk-tab { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:9px; border:none; background:none; cursor:pointer; text-align:left; font-family:inherit; font-size:13px; font-weight:500; color:rgb(var(--color-text-light)); border-left:3px solid transparent; transition:background .15s, color .15s, border-color .15s; width:100%; }
+            .amk-tab:hover { background:rgba(var(--color-text-light),0.08); color:rgb(var(--color-text)); }
+            .amk-tab.active { background:rgba(var(--am-accent),0.14); color:rgb(var(--color-text)); font-weight:700; border-left-color:rgb(var(--am-accent)); }
+            .amk-tab-ic { width:18px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+            .amk-tab-ic svg { display:block; }
+            .amk-tabnav::-webkit-scrollbar { width:6px; } .amk-tabnav::-webkit-scrollbar-thumb { background:rgba(var(--color-text-light),0.25); border-radius:4px; }
+            .amk-tabpanes { flex:1 1 auto; min-width:0; overflow-y:auto; padding:16px 18px; }
+            .amk-tabpanes::-webkit-scrollbar { width:8px; } .amk-tabpanes::-webkit-scrollbar-thumb { background:rgba(var(--color-text-light),0.25); border-radius:4px; }
+            .amk-pane { display:none; flex-direction:column; gap:14px; }
+            .amk-pane.active { display:flex; animation:amk-fade .18s ease; }
             .amk-card { background:rgba(var(--color-background-100),0.55); border:1px solid rgba(var(--color-text-light),0.1); border-radius:10px; padding:2px 12px 6px; }
             .amk-card-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:rgb(var(--color-text-light)); padding:10px 2px 4px; }
             .amk-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 2px; }
@@ -3491,17 +3992,17 @@
             .amk-switch input { position:absolute; opacity:0; width:0; height:0; }
             .amk-track { position:absolute; inset:0; border-radius:6px; background:rgba(var(--color-text-light),0.3); transition:background .18s; }
             .amk-thumb { position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:4px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.35); transition:transform .18s; }
-            .amk-switch input:checked ~ .amk-track { background:rgb(var(--color-blue)); }
+            .amk-switch input:checked ~ .amk-track { background:rgb(var(--am-accent)); }
             .amk-switch input:checked ~ .amk-thumb { transform:translateX(16px); }
             .amk-input, .amk-select { width:100%; box-sizing:border-box; background:rgba(var(--color-background-200),0.7); border:1px solid rgba(var(--color-text-light),0.18); color:rgb(var(--color-text)); border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; outline:none; transition:border-color .15s, box-shadow .15s; }
-            .amk-input:focus, .amk-select:focus { border-color:rgb(var(--color-blue)); box-shadow:0 0 0 3px rgba(var(--color-blue),0.18); }
+            .amk-input:focus, .amk-select:focus { border-color:rgb(var(--am-accent)); box-shadow:0 0 0 3px rgba(var(--am-accent),0.18); }
             .amk-input.amk-mono { font-family:"Cascadia Code","Fira Code",Consolas,monospace; font-size:12px; }
             .amk-input::placeholder { color:rgba(var(--color-text-light),0.7); }
             .amk-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:9px 16px; border-radius:8px; font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; border:1px solid transparent; transition:all .15s; white-space:nowrap; }
-            .amk-btn-primary { background:rgb(var(--color-blue)); color:#fff; }
-            .amk-btn-primary:hover { filter:brightness(1.08); box-shadow:0 4px 14px rgba(var(--color-blue),0.35); }
+            .amk-btn-primary { background:rgb(var(--am-accent)); color:#fff; }
+            .amk-btn-primary:hover { filter:brightness(1.08); box-shadow:0 4px 14px rgba(var(--am-accent),0.35); }
             .amk-btn-ghost { background:rgba(var(--color-text-light),0.08); color:rgb(var(--color-text)); border-color:rgba(var(--color-text-light),0.18); }
-            .amk-btn-ghost:hover { background:rgba(var(--color-text-light),0.15); border-color:rgb(var(--color-blue)); color:rgb(var(--color-blue)); }
+            .amk-btn-ghost:hover { background:rgba(var(--color-text-light),0.15); border-color:rgb(var(--am-accent)); color:rgb(var(--am-accent)); }
             .amk-btn-danger { background:rgba(var(--color-red),0.12); color:rgb(var(--color-red)); border-color:rgba(var(--color-red),0.35); }
             .amk-btn-danger:hover { background:rgba(var(--color-red),0.2); }
             .amk-btn:disabled { opacity:.5; cursor:default; }
@@ -3509,8 +4010,13 @@
             .amk-close { background:rgba(var(--color-text-light),0.1); border:1px solid rgba(var(--color-text-light),0.18); color:rgb(var(--color-text)); width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:15px; line-height:1; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
             .amk-close:hover { background:rgba(var(--color-red),0.15); color:rgb(var(--color-red)); border-color:rgba(var(--color-red),0.3); }
             .amk-chip { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; background:rgba(var(--color-text-light),0.08); border:1px solid rgba(var(--color-text-light),0.15); color:rgb(var(--color-text)); transition:all .15s; }
-            .amk-chip:hover { border-color:rgb(var(--color-blue)); }
-            .amk-chip.active { background:rgba(var(--color-blue),0.15); border-color:rgb(var(--color-blue)); color:rgb(var(--color-blue)); }
+            .amk-chip:hover { border-color:rgb(var(--am-accent)); }
+            .amk-chip.active { background:rgba(var(--am-accent),0.15); border-color:rgb(var(--am-accent)); color:rgb(var(--am-accent)); }
+            .amk-accents { display:flex; flex-wrap:wrap; gap:8px; }
+            .am-accent-chip { display:inline-flex; align-items:center; gap:7px; padding:7px 12px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; color:rgb(var(--color-text-light)); background:rgba(var(--color-text-light),0.06); border:1px solid rgba(var(--color-text-light),0.2); transition:background .15s, border-color .15s, color .15s; }
+            .am-accent-chip:hover { border-color:rgb(var(--am-accent)); color:rgb(var(--color-text)); }
+            .am-accent-chip.active { background:rgba(var(--am-accent),0.15); border-color:rgb(var(--am-accent)); color:rgb(var(--am-accent)); }
+            .am-accent-dot { width:13px; height:13px; border-radius:50%; flex-shrink:0; box-shadow:0 0 0 1px rgba(255,255,255,0.15) inset; }
             .amk-collapse { border:1px solid rgba(var(--color-text-light),0.1); border-radius:10px; overflow:hidden; margin:6px 0; }
             .amk-collapse > summary { list-style:none; cursor:pointer; padding:10px 12px; font-weight:600; font-size:13px; background:rgba(var(--color-background-100),0.5); display:flex; align-items:center; gap:8px; }
             .amk-collapse > summary::-webkit-details-marker { display:none; }
@@ -3526,45 +4032,132 @@
             .amk-table th, .amk-table td { padding:4px 8px; text-align:center; } .amk-table th:first-child, .amk-table td:first-child { text-align:left; }
             .amk-table thead th { border-bottom:1px solid rgba(var(--color-text-light),0.15); font-weight:600; }
             .amk-table tbody tr:not(:last-child) td { border-bottom:1px solid rgba(var(--color-text-light),0.06); }
-            #ru-player-overlay { position:fixed; inset:0; width:100vw; height:100vh; background:rgba(0,0,0,0.82); backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%); z-index:10000; display:none; justify-content:center; align-items:center; flex-direction:column; gap:12px; animation: player-fade 0.3s ease; }
+            #ru-player-overlay { position:fixed; inset:0; width:100vw; height:100vh; background:rgba(0,0,0,0.82); backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%); z-index:10000; display:none; justify-content:center; align-items:center; gap:12px; animation: player-fade 0.3s ease; }
             @keyframes player-fade { from { opacity: 0; } to { opacity: 1; } }
-            #ru-player-container { width:90%; max-width:1100px; aspect-ratio:16/9; background:#000; border-radius:12px; overflow:hidden; border:1px solid rgba(var(--color-blue),0.3); position:relative; box-shadow: 0 20px 60px rgba(0,0,0,0.55); flex-shrink: 0;}
+            @keyframes am-title-marquee { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+            #ru-player-shell { display:flex; gap:14px; width:92%; max-width:1200px; height:86vh; max-height:780px; }
+            #ru-stage-col { flex:1; min-width:0; display:flex; flex-direction:column; gap:10px; }
+            #ru-player-container { flex:1; min-height:0; background:#000; border-radius:12px; overflow:hidden; border:1px solid rgba(var(--am-accent),0.3); position:relative; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
             #ru-p-iframe { width:100%; height:100%; border:none; }
-            #ru-player-close { position:absolute; top:18px; right:24px; width:40px; height:40px; display:flex; align-items:center; justify-content:center; line-height:1; color:rgb(var(--color-text-light)); font-size:26px; cursor:pointer; border-radius:8px; background:rgba(var(--color-foreground),0.6); border:1px solid rgba(var(--color-text-light),0.15); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); transition:all .18s; }
+            #ru-info-panel { display:flex; align-items:center; gap:10px; min-width:0; background:rgba(var(--color-foreground),0.85); backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%); border-radius:10px; padding:10px 14px; border:1px solid rgba(var(--color-text-light),0.15); flex-shrink:0; }
+            #ru-title-wrap { position:relative; overflow:hidden; flex:1; min-width:0; }
+            #ru-title-wrap.am-mask { -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 16px,#000 calc(100% - 16px),transparent 100%); mask-image:linear-gradient(90deg,transparent 0,#000 16px,#000 calc(100% - 16px),transparent 100%); }
+            #ru-title-track { display:block; max-width:100%; }
+            #ru-title-track.am-marquee { display:inline-flex; gap:48px; white-space:nowrap; padding-left:16px; animation:am-title-marquee 16s linear infinite; }
+            #info-anime-title { color:rgb(var(--am-accent)); font-weight:bold; font-size:15px; text-transform:uppercase; letter-spacing:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+            #ru-title-track.am-marquee #info-anime-title, .am-title-dup { overflow:visible; text-overflow:clip; }
+            #ru-ep-chip { flex-shrink:0; color:rgb(var(--am-accent)); font-weight:700; font-size:12px; padding:3px 9px; border-radius:6px; background:rgba(var(--am-accent),0.14); white-space:nowrap; }
+            #ru-player-close { width:34px; height:34px; display:flex; align-items:center; justify-content:center; line-height:1; color:rgb(var(--color-text-light)); font-size:20px; cursor:pointer; border-radius:8px; background:rgba(var(--color-foreground),0.6); border:1px solid rgba(var(--color-text-light),0.15); transition:all .18s; flex-shrink:0; }
             #ru-player-close:hover { color:#fff; background:rgb(var(--color-red)); border-color:rgb(var(--color-red)); transform:scale(1.05); }
-            #ru-info-panel { width:90%; max-width:1100px; background:rgba(var(--color-foreground),0.85); backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%); border-radius:10px; padding:12px 16px; border:1px solid rgba(var(--color-text-light),0.15); flex-shrink:0; }
-            #ru-translations-panel { width:90%; max-width:1100px; display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; flex-shrink:0; }
-            #ru-translations-panel::-webkit-scrollbar { height: 6px; } #ru-translations-panel::-webkit-scrollbar-track { background: rgba(var(--color-text-light),0.08); border-radius: 4px; } #ru-translations-panel::-webkit-scrollbar-thumb { background: rgba(var(--color-blue), 0.4); border-radius: 4px; } #ru-translations-panel::-webkit-scrollbar-thumb:hover { background: rgba(var(--color-blue), 0.8); }
-            .tr-btn { flex-shrink:0; display:flex; align-items:center; background:rgba(var(--color-foreground),0.8); border:1px solid rgba(var(--color-text-light),0.18); padding:8px 14px; border-radius:8px; cursor:pointer; white-space:nowrap; transition:all .18s; color:rgb(var(--color-text)); font-weight:600; font-size:13px; gap:8px; }
-            .tr-btn:hover { border-color:rgba(var(--color-blue),0.5); transform:translateY(-2px); } .tr-btn.active { border-color:rgb(var(--color-blue)); background:rgba(var(--color-blue),0.15); color:rgb(var(--color-blue)); } .tr-btn.favorite { border-color:rgb(var(--color-pink, 243,139,168)); color:rgb(var(--color-pink, 243,139,168)); background:rgba(var(--color-pink, 243,139,168),0.06); } .tr-btn.favorite.active { background:rgba(var(--color-pink, 243,139,168),0.16); }
-            .tr-heart { font-size:15px; transition:transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); user-select:none; } .tr-heart:hover { transform:scale(1.3); } .tr-name { font-family:inherit; }
-            #ru-episodes-panel { width: 90%; max-width: 1100px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-height: 180px; overflow-y: auto; padding-right: 4px; flex-shrink: 0; }
-            #ru-episodes-panel::-webkit-scrollbar { width: 6px; } #ru-episodes-panel::-webkit-scrollbar-track { background: rgba(var(--color-text-light),0.08); border-radius: 4px; } #ru-episodes-panel::-webkit-scrollbar-thumb { background: rgba(var(--color-blue), 0.4); border-radius: 4px; }
-            .ep-btn { width: 46px; height: 36px; display: flex; justify-content: center; align-items: center; flex-shrink: 0; background: rgba(var(--color-foreground),0.8); border: 1px solid rgba(var(--color-text-light),0.18); color: rgb(var(--color-text)); font-weight: 700; font-size: 13px; border-radius: 8px; cursor: pointer; transition: all .18s; }
-            .ep-btn:hover { border-color: rgba(var(--color-blue), 0.5); transform: translateY(-2px); } .ep-btn.active { background: rgb(var(--color-blue)); color: #fff; border-color: rgb(var(--color-blue)); box-shadow: 0 4px 12px rgba(var(--color-blue), 0.3); }
+            #ru-sidebar { width:264px; flex-shrink:0; display:flex; flex-direction:column; gap:12px; background:rgba(var(--color-foreground),0.85); backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%); border-radius:12px; border:1px solid rgba(var(--color-text-light),0.15); padding:12px; }
+            #ru-sidebar-head { display:flex; align-items:center; gap:8px; }
+            #ru-sidebar-head .ru-sb-title { flex:1; color:rgb(var(--color-text)); font-weight:700; }
+            #ru-translations-panel { display:flex; flex-direction:column; gap:6px; max-height:42%; overflow-y:auto; padding-right:4px; }
+            #ru-eps-label { color:rgb(var(--color-text-light)); font-size:11px; text-transform:uppercase; letter-spacing:0.6px; font-weight:700; }
+            #ru-episodes-panel { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; overflow-y:auto; flex:1; align-content:start; padding-right:4px; }
+            .tr-btn { display:flex; align-items:center; gap:8px; background:rgba(var(--color-foreground),0.6); border:1px solid rgba(var(--color-text-light),0.18); padding:7px 10px; border-radius:8px; cursor:pointer; transition:all .18s; color:rgb(var(--color-text)); font-weight:600; font-size:13px; }
+            .tr-btn:hover { border-color:rgba(var(--am-accent),0.5); } .tr-btn.active { border-color:rgb(var(--am-accent)); background:rgba(var(--am-accent),0.15); color:rgb(var(--am-accent)); } .tr-btn.favorite { border-color:rgb(var(--color-pink, 243,139,168)); color:rgb(var(--color-pink, 243,139,168)); background:rgba(var(--color-pink, 243,139,168),0.06); } .tr-btn.favorite.active { background:rgba(var(--color-pink, 243,139,168),0.16); }
+            .tr-heart { display:flex; align-items:center; transition:transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); user-select:none; flex-shrink:0; } .tr-heart:hover { transform:scale(1.25); } .tr-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .ep-btn { height: 34px; display: flex; justify-content: center; align-items: center; background: rgba(var(--color-foreground),0.6); border: 1px solid rgba(var(--color-text-light),0.18); color: rgb(var(--color-text)); font-weight: 700; font-size: 13px; border-radius: 8px; cursor: pointer; transition: all .18s; }
+            .ep-btn:hover { border-color: rgba(var(--am-accent), 0.5); } .ep-btn.active { background: rgb(var(--am-accent)); color: #fff; border-color: rgb(var(--am-accent)); box-shadow: 0 4px 12px rgba(var(--am-accent), 0.3); }
             .ep-btn.watched { border-color: rgb(var(--color-green, 166,227,161)); color: rgb(var(--color-green, 166,227,161)); } .ep-btn.watched:hover { background: rgba(var(--color-green, 166,227,161),0.12); } .ep-btn.watched.active { background: rgb(var(--color-green, 166,227,161)); color: rgb(var(--color-background, 17,17,27)); border-color: rgb(var(--color-green, 166,227,161)); box-shadow: 0 4px 12px rgba(var(--color-green, 166,227,161),0.3); }
-            .animori-ratings { display:flex; flex-direction:column; gap:6px; margin-bottom:20px; background:rgba(var(--color-foreground),1); border-radius:12px; padding:14px 16px; border:1px solid rgba(var(--color-text-light),0.1); box-shadow:0 1px 3px rgba(0,0,0,0.06); }
-            .rating-item { display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid rgba(var(--color-text-light),0.08); } .rating-item:last-child { border-bottom:none; }
-            .rating-badge { transition:transform .15s; cursor:pointer; padding:5px 10px; border-radius:6px; font-size:11px; font-weight:800; letter-spacing:.8px; font-family:inherit; display:flex; align-items:center; background:rgba(var(--color-text-light),0.1); border:1px solid rgba(var(--color-text-light),0.14); border-left-width:3px; text-decoration:none; }
-            .rating-badge:hover { transform:translateY(-1px); }
-            .animori-ratings .rating-badge.shiki-badge { color:#e05264 !important; border-left-color:#e05264; } .animori-ratings .rating-badge.mal-badge { color:#5a7fd4 !important; border-left-color:#5a7fd4; } .animori-ratings .rating-badge.al-badge { color:rgb(var(--color-blue)) !important; border-left-color:rgb(var(--color-blue)); }
-            .rating-value { font-size:1.4rem; font-weight:700; color:rgb(var(--color-text)); }
+            .animori-ratings { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:20px; }
+            .rating-item { position:relative; display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:8px; font-family:inherit; text-decoration:none; transition:transform .15s; background:rgba(var(--rate-c),0.12); border:1px solid rgba(var(--rate-c),0.35); border-left:3px solid rgb(var(--rate-c)); color:rgb(var(--rate-c)); }
+            .rating-item:hover { transform:translateY(-3px); }
+            .rating-star { font-size:12px; line-height:1; }
+            .rating-label { font-size:11px; font-weight:800; letter-spacing:.8px; }
+            .rating-value { font-size:14px; font-weight:800; color:rgb(var(--color-text)); }
+            .am-histo { position:absolute; right:calc(100% + 10px); left:auto; top:50%; transform:translateY(-50%); display:none; flex-direction:column; width:200px; padding:12px; background:rgba(var(--color-background-200),0.98); border:1px solid rgba(var(--color-text-light),0.18); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,0.4); z-index:9999; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+            .rating-item:hover > .am-histo:not(.am-histo-shiki) { display:flex; }
+            /* График Shiki к бейджу MAL (не срезается шапкой), по наведению на Shiki */
+            .shiki-badge:hover ~ .mal-badge > .am-histo-shiki { display:flex; }
+            .am-histo-shiki { --rate-c:224,82,100; }
+            .am-histo-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:11px; color:rgb(var(--color-text-light)); }
+            .am-histo-bars { display:flex; align-items:flex-end; gap:3px; height:56px; }
+            .am-histo-bar { flex:1; height:100%; display:flex; align-items:flex-end; }
+            .am-histo-fill { width:100%; background:rgb(var(--rate-c, 224 82 100)); border-radius:3px 3px 0 0; min-height:2px; transition:height .2s; }
+            .am-histo-axis { display:flex; justify-content:space-between; margin-top:4px; font-size:10px; color:rgb(var(--color-text-light)); }
+            .animori-ratings .rating-item.shiki-badge { --rate-c:224,82,100; }
+            .animori-ratings .rating-item.mal-badge { --rate-c:90,127,212; }
+            .animori-ratings .rating-item.al-badge { --rate-c:61,180,242; }
             .animori-franchise { margin:0 0 20px; background:rgba(var(--color-foreground),1); border-radius:12px; padding:16px; border:1px solid rgba(var(--color-text-light),0.1); box-shadow:0 1px 3px rgba(0,0,0,0.06); }
             .animori-franchise h2 { font-size:1.2rem; margin:0 0 12px; color:rgb(var(--color-text)); font-weight:700; letter-spacing:.3px; }
 
             .franchise-list { max-height:300px; overflow-y:auto; scroll-behavior:smooth; padding-right:4px; position:relative; transition:max-height .4s ease; display:flex; flex-direction:column; gap:4px; } .franchise-list.expanded { max-height:none; }
-            .franchise-list::-webkit-scrollbar, .themes-list::-webkit-scrollbar { width:6px; } .franchise-list::-webkit-scrollbar-track, .themes-list::-webkit-scrollbar-track { background:transparent; } .franchise-list::-webkit-scrollbar-thumb, .themes-list::-webkit-scrollbar-thumb { background:rgba(var(--color-text-light),0.25); border-radius:4px; } .franchise-list::-webkit-scrollbar-thumb:hover, .themes-list::-webkit-scrollbar-thumb:hover { background:rgba(var(--color-blue),0.6); }
-            .franchise-node { display:flex; gap:10px; padding:8px 10px; border-radius:8px; text-decoration:none !important; border-left:3px solid transparent; align-items:center; transition:background .15s, border-color .15s; background:rgba(var(--color-text-light),0.04); } .franchise-node:hover { background:rgba(var(--color-text-light),0.1); } .franchise-node.active { background:rgba(var(--color-blue),0.12); border-left:3px solid rgb(var(--color-blue)); } .franchise-node.shiki-only { border-left:3px dashed rgba(var(--color-text-light),0.5); opacity:0.8; }
+            .franchise-list::-webkit-scrollbar, .themes-list::-webkit-scrollbar { width:6px; } .franchise-list::-webkit-scrollbar-track, .themes-list::-webkit-scrollbar-track { background:transparent; } .franchise-list::-webkit-scrollbar-thumb, .themes-list::-webkit-scrollbar-thumb { background:rgba(var(--color-text-light),0.25); border-radius:4px; } .franchise-list::-webkit-scrollbar-thumb:hover, .themes-list::-webkit-scrollbar-thumb:hover { background:rgba(var(--am-accent),0.6); }
+            .franchise-node { display:flex; gap:10px; padding:8px 10px; border-radius:8px; text-decoration:none !important; border-left:3px solid transparent; align-items:center; transition:background .15s, border-color .15s; background:rgba(var(--color-text-light),0.04); } .franchise-node:hover { background:rgba(var(--color-text-light),0.1); } .franchise-node.active { background:rgba(var(--am-accent),0.12); border-left:3px solid rgb(var(--am-accent)); } .franchise-node.shiki-only { border-left:3px dashed rgba(var(--color-text-light),0.5); opacity:0.8; }
             .node-year { font-size:0.95rem; color:rgb(var(--color-text-light)); min-width:38px; font-weight:600; font-variant-numeric:tabular-nums; } .node-title { font-size:1.15rem; color:rgb(var(--color-text)); flex-grow:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500; } .node-kind { font-size:0.85rem; padding:3px 8px; background:rgba(var(--color-text-light),0.12); color:rgb(var(--color-text-light)); border-radius:6px; text-transform:uppercase; font-weight:700; letter-spacing:.5px; flex-shrink:0; }
-            .franchise-toggle { display:block; width:100%; text-align:center; padding:9px; margin-top:10px; background:rgba(var(--color-text-light),0.08); border-radius:8px; color:rgb(var(--color-blue)); cursor:pointer; font-weight:600; font-size:1rem; transition:background .15s, border-color .15s; border:1px solid rgba(var(--color-blue),0.25); outline:none; } .franchise-toggle:hover { background:rgba(var(--color-blue),0.12); border-color:rgb(var(--color-blue)); }
+            .franchise-toggle { display:block; width:100%; text-align:center; padding:9px; margin-top:10px; background:rgba(var(--color-text-light),0.08); border-radius:8px; color:rgb(var(--am-accent)); cursor:pointer; font-weight:600; font-size:1rem; transition:background .15s, border-color .15s; border:1px solid rgba(var(--am-accent),0.25); outline:none; } .franchise-toggle:hover { background:rgba(var(--am-accent),0.12); border-color:rgb(var(--am-accent)); }
+
+            /* ===== AniMori: таймлайн хронологии (scoped на .franchise-list) ===== */
+            .franchise-list .franchise-node { position:relative; flex-wrap:wrap; column-gap:8px; row-gap:6px; align-items:center; padding:10px 12px 10px 30px; border-left:none; background:rgba(var(--color-background-100),0.5); border:1px solid rgba(var(--color-text-light),0.1); }
+            .franchise-list .franchise-node::before { content:''; position:absolute; left:13px; top:-3px; bottom:-3px; width:2px; background:rgba(var(--am-accent),0.35); }
+            .franchise-list .franchise-node:first-child::before { top:50%; }
+            .franchise-list .franchise-node:last-child::before { bottom:50%; }
+            .franchise-list .franchise-node::after { content:''; position:absolute; left:8px; top:50%; transform:translateY(-50%); width:12px; height:12px; border-radius:50%; background:rgb(var(--color-background-200)); border:2px solid rgba(var(--am-accent),0.7); z-index:1; box-sizing:border-box; }
+            .franchise-list .franchise-node:hover { background:rgba(var(--color-text-light),0.1); }
+            .franchise-list .franchise-node.active { background:rgba(var(--am-accent),0.12); border-color:rgba(var(--am-accent),0.5); box-shadow:0 4px 18px rgba(var(--am-accent),0.18); }
+            .franchise-list .franchise-node.active::after { background:rgb(var(--am-accent)); border-color:rgba(255,255,255,0.6); box-shadow:0 0 12px rgba(var(--am-accent),0.7); }
+            .franchise-list .franchise-node.shiki-only { opacity:1; }
+            .franchise-list .franchise-node.shiki-only::after { background:rgb(var(--color-foreground)); border-style:dashed; border-color:rgba(var(--color-text-light),0.6); box-shadow:none; }
+            .franchise-list .node-title { order:-1; flex-basis:100%; width:100%; white-space:normal; overflow:visible; text-overflow:clip; line-height:1.3; font-weight:600; }
+            .franchise-list .franchise-node.active .node-title { font-weight:700; }
+            .franchise-list .node-year { min-width:0; padding:2px 9px; border-radius:6px; background:rgba(var(--color-text-light),0.1); font-size:0.85rem; }
+            .franchise-list .franchise-node.active .node-year { color:rgb(var(--am-accent)); background:rgba(var(--am-accent),0.16); }
+
+            /* ===== AniMori: акцентные скроллбары (контейнеры тулкита) ===== */
+            .franchise-list, .themes-list, #ru-episodes-panel, #ru-translations-panel, #am-log-container, .amk-body, #am-panel { scrollbar-width:thin; scrollbar-color:rgba(var(--am-accent),0.5) transparent; }
+            .franchise-list::-webkit-scrollbar, .themes-list::-webkit-scrollbar, #ru-episodes-panel::-webkit-scrollbar, #ru-translations-panel::-webkit-scrollbar, #am-log-container::-webkit-scrollbar, .amk-body::-webkit-scrollbar, #am-panel::-webkit-scrollbar { width:8px; height:8px; }
+            .franchise-list::-webkit-scrollbar-track, .themes-list::-webkit-scrollbar-track, #ru-episodes-panel::-webkit-scrollbar-track, #ru-translations-panel::-webkit-scrollbar-track, #am-log-container::-webkit-scrollbar-track, .amk-body::-webkit-scrollbar-track, #am-panel::-webkit-scrollbar-track { background:rgba(var(--color-text-light),0.08); border-radius:8px; }
+            .franchise-list::-webkit-scrollbar-thumb, .themes-list::-webkit-scrollbar-thumb, #ru-episodes-panel::-webkit-scrollbar-thumb, #ru-translations-panel::-webkit-scrollbar-thumb, #am-log-container::-webkit-scrollbar-thumb, .amk-body::-webkit-scrollbar-thumb, #am-panel::-webkit-scrollbar-thumb { background:rgba(var(--am-accent),0.45); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
+            .franchise-list::-webkit-scrollbar-thumb:hover, .themes-list::-webkit-scrollbar-thumb:hover, #ru-episodes-panel::-webkit-scrollbar-thumb:hover, #ru-translations-panel::-webkit-scrollbar-thumb:hover, #am-log-container::-webkit-scrollbar-thumb:hover, .amk-body::-webkit-scrollbar-thumb:hover, #am-panel::-webkit-scrollbar-thumb:hover { background:rgba(var(--am-accent),0.8); background-clip:padding-box; }
             .franchise-toggle-top { margin-top:0; margin-bottom:12px; position:sticky; top:0; z-index:2; background:rgba(var(--color-foreground),0.92); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
-            .am-extlink { text-decoration:none; font-weight:700; font-size:1rem; padding:11px 20px; border-radius:9px; background:rgba(var(--c),0.14); color:rgb(var(--c)); border:1px solid rgba(var(--c),0.4); transition:background .15s, border-color .15s, transform .15s; letter-spacing:0.3px; display:inline-block; } .am-extlink:hover { transform:translateY(-2px); background:rgba(var(--c),0.24); border-color:rgb(var(--c)); }
+            /* ===== AniMori: внешние ссылки — строки-пилюли ===== */
+            .am-extlink { --c:120,130,150; display:flex; align-items:center; gap:12px; padding:9px 12px; border-radius:8px; text-decoration:none !important; background:rgba(var(--c),0.12); border:1px solid rgba(var(--c),0.35); border-left:3px solid rgb(var(--c)); transition:transform .15s, background .15s, border-color .15s; }
+            .am-extlink:hover { transform:translateY(-2px); background:rgba(var(--c),0.2); border-color:rgb(var(--c)); }
+            .am-extlink-av { width:30px; height:30px; flex-shrink:0; border-radius:8px; display:flex; align-items:center; justify-content:center; background:rgba(var(--c),0.16); border:1px solid rgba(var(--c),0.5); color:rgb(var(--c)); font-weight:800; font-size:14px; }
+            .am-extlink-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+            .am-extlink-name { color:rgb(var(--color-text)); font-weight:600; display:flex; align-items:center; gap:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .am-extlink-tag { font-size:9px; text-transform:uppercase; letter-spacing:.5px; padding:1px 5px; border-radius:4px; background:rgba(var(--c),0.2); color:rgb(var(--c)); font-weight:700; flex-shrink:0; }
+            .am-extlink-domain { color:rgb(var(--color-text-light)); font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .am-extlink-arrow { flex-shrink:0; color:rgb(var(--c)); font-size:13px; }
+            /* Редактор своих ссылок */
+            .am-cl-row { background:rgba(var(--color-background-100),0.5); border:1px solid rgba(var(--color-text-light),0.1); border-radius:10px; padding:10px; margin-bottom:8px; }
+            .am-cl-swatches { display:flex; gap:6px; align-items:center; }
+            .am-cl-sw { width:20px; height:20px; border-radius:6px; cursor:pointer; border:2px solid transparent; box-sizing:border-box; }
+            .am-cl-sw.active { border-color:rgb(var(--color-text)); box-shadow:0 0 0 1px rgba(var(--color-text),0.3); }
+            .am-cl-del { flex-shrink:0; }
             .am-service-toggle { display:flex; width:100%; box-sizing:border-box; background:rgba(var(--color-text-light),0.1); border-radius:8px; padding:3px; border:1px solid rgba(var(--color-text-light),0.15); gap:3px; margin:0 auto; } .am-service-btn { flex:1 1 0; min-width:0; display:flex; align-items:center; justify-content:center; padding:8px 0; border-radius:6px; cursor:pointer; transition:all .15s; color:rgb(var(--color-text-light)); user-select:none; } .am-service-btn svg { display:block; } .am-service-btn:hover:not(.active) { color:rgb(var(--color-text)); background:rgba(var(--color-text-light),0.1); } .am-service-btn.active { color:#fff; }
-            .am-service-btn.active[data-val="vk"] { background:rgb(var(--color-blue)); box-shadow:0 2px 8px rgba(var(--color-blue),0.35); }
+            .am-service-btn.active[data-val="vk"] { background:#3db4f2; box-shadow:0 2px 8px rgba(61,180,242,0.35); }
             .am-service-btn.active[data-val="yt"] { background:rgb(var(--color-red)); box-shadow:0 2px 8px rgba(var(--color-red),0.35); }
             .am-service-btn.active[data-val="spotify"] { background:rgb(var(--color-green)); box-shadow:0 2px 8px rgba(var(--color-green),0.35); }
             .am-service-btn.active[data-val="sc"] { background:rgb(var(--color-orange)); box-shadow:0 2px 8px rgba(var(--color-orange),0.35); }
-            body.am-ru-search-active .results .result-col:not(.animori-custom-result-col) { display: none !important; } .animori-custom-result-col { flex: 1; padding: 0 10px; } .am-ru-loading { text-align: center; padding: 20px; color: rgb(var(--color-text-light)); font-weight: bold; animation: am-pulse 1.5s infinite; width: 100%; } .am-ru-empty { text-align: center; padding: 20px; color: #fc8181; font-weight: bold; width: 100%; } .am-ru-injected-container { display: flex; width: 100%; }
+            /* ===== AniMori: муз. темы — пилюли в стиле бейджей рейтингов ===== */
+            .am-theme-track { --tc:var(--am-accent); display:flex; align-items:center; gap:12px; padding:9px 12px; border-radius:8px; text-decoration:none !important; cursor:pointer; background:rgba(var(--tc),0.12); border:1px solid rgba(var(--tc),0.35); border-left:3px solid rgb(var(--tc)); transition:transform .15s, background .15s, border-color .15s; }
+            .am-theme-track.is-ed { --tc:var(--color-red); }
+            .am-theme-track:hover { transform:translateY(-2px); background:rgba(var(--tc),0.2); border-color:rgb(var(--tc)); }
+            .am-theme-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+            .am-theme-title { color:rgb(var(--color-text)); font-weight:600; font-size:1rem; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .am-theme-artist { color:rgb(var(--color-text-light)); font-size:0.92rem; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            /* Лейбл OP/ED и копирование делят позицию слева */
+            .am-theme-lead { position:relative; flex-shrink:0; width:30px; height:26px; display:flex; align-items:center; }
+            .am-theme-label { font-size:11px; font-weight:800; letter-spacing:.8px; color:rgb(var(--tc)); transition:opacity .16s; }
+            .am-theme-copy { position:absolute; inset:0; display:inline-flex; align-items:center; justify-content:flex-start; padding-left:5px; border-radius:6px; color:rgb(var(--tc)); cursor:pointer; opacity:0; pointer-events:none; transition:opacity .16s, background .16s; }
+            .am-theme-track:hover .am-theme-label { opacity:0; }
+            .am-theme-lead:has(.am-theme-copy.am-copied) .am-theme-label { opacity:0; }
+            .am-theme-track:hover .am-theme-copy { opacity:0.85; pointer-events:auto; }
+            .am-theme-copy:hover { opacity:1; background:rgba(var(--tc),0.16); }
+            .am-theme-copy .am-check-ic { display:none; }
+            .am-theme-copy.am-copied { opacity:1 !important; pointer-events:auto; color:rgb(var(--color-green, 102,187,106)); background:rgba(var(--color-green, 102,187,106),0.18); }
+            .am-theme-copy.am-copied .am-copy-ic { display:none; }
+            .am-theme-copy.am-copied .am-check-ic { display:inline; }
+            /* Бегущая строка (ping-pong) при overflow */
+            .am-marq { overflow:hidden; }
+            .am-marq .am-marq-inner { display:inline-block; white-space:nowrap; will-change:transform; }
+            .am-marq.am-marq-on .am-marq-inner { animation: am-marq-pp var(--am-marq-dur, 8s) ease-in-out infinite alternate; }
+            @keyframes am-marq-pp { from { transform:translateX(0); } to { transform:translateX(var(--am-marq-shift, 0)); } }
+            @media (prefers-reduced-motion: reduce) { .am-marq.am-marq-on .am-marq-inner { animation:none; } }
+            body.am-ru-search-active .results .result-col:not(.animori-custom-result-col) { display: none !important; } body.am-ru-search-active .quick-search.visible .results { overflow: visible !important; } .am-ru-injected-container .animori-custom-result-col { flex: 1 1 0 !important; min-width: 0 !important; max-width: none !important; width: auto !important; padding: 0 10px; } .am-ru-loading { text-align: center; padding: 20px; color: rgb(var(--color-text-light)); font-weight: bold; animation: am-pulse 1.5s infinite; width: 100%; } .am-ru-empty { text-align: center; padding: 20px; color: #fc8181; font-weight: bold; width: 100%; } body.am-ru-search-active .am-ru-injected-container { position: fixed !important; left: 50% !important; transform: translateX(-50%); top: 150px; z-index: 200; display: flex; flex-wrap: nowrap; gap: 8px; align-items: flex-start; box-sizing: border-box; width: 92vw; max-width: 1200px; padding: 16px; border-radius: 4px; background: rgb(var(--color-foreground)); box-shadow: 0 4px 30px rgba(0,0,0,.45); max-height: 70vh; overflow-y: auto; }
 
             #am-logger-overlay { position:fixed; inset:0; z-index:999999; display:flex; justify-content:center; align-items:center; padding:24px; background:rgba(0,0,0,0.55); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); animation:amk-fade .18s ease; }
             .am-logger-modal { background:rgba(var(--color-foreground),0.8); backdrop-filter:blur(22px) saturate(170%); -webkit-backdrop-filter:blur(22px) saturate(170%); color:rgb(var(--color-text)); width:920px; max-width:96vw; height:82vh; border-radius:14px; border:1px solid rgba(var(--color-text-light),0.16); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 12px 44px rgba(0,0,0,0.22); animation:amk-pop .2s cubic-bezier(.2,.8,.2,1); }
@@ -3572,8 +4165,8 @@
             .am-logger-header h2 { margin:0; color:rgb(var(--color-text)); font-size:15px; font-weight:700; display:flex; align-items:center; gap:9px; }
             #am-log-search { background:rgba(var(--color-background-200),0.7) !important; border:1px solid rgba(var(--color-text-light),0.18) !important; color:rgb(var(--color-text)) !important; }
             .am-logger-filters { display:flex; gap:4px; background:rgba(var(--color-text-light),0.08); padding:4px; border-radius:8px; }
-            .am-log-filter { background:transparent; border:none; color:rgb(var(--color-text-light)); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; transition:.15s; } .am-log-filter:hover { background:rgba(var(--color-text-light),0.1); color:rgb(var(--color-text)); } .am-log-filter.active { background:rgba(var(--color-blue),0.18); color:rgb(var(--color-blue)); }
-            .am-logger-actions { display:flex; gap:8px; } .am-logger-actions button { background:rgba(var(--color-text-light),0.08); border:1px solid rgba(var(--color-text-light),0.18); color:rgb(var(--color-text)); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; transition:.15s; } .am-logger-actions button:hover { background:rgba(var(--color-text-light),0.15); border-color:rgb(var(--color-blue)); color:rgb(var(--color-blue)); }
+            .am-log-filter { background:transparent; border:none; color:rgb(var(--color-text-light)); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; transition:.15s; } .am-log-filter:hover { background:rgba(var(--color-text-light),0.1); color:rgb(var(--color-text)); } .am-log-filter.active { background:rgba(var(--am-accent),0.18); color:rgb(var(--am-accent)); }
+            .am-logger-actions { display:flex; gap:8px; } .am-logger-actions button { background:rgba(var(--color-text-light),0.08); border:1px solid rgba(var(--color-text-light),0.18); color:rgb(var(--color-text)); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; transition:.15s; } .am-logger-actions button:hover { background:rgba(var(--color-text-light),0.15); border-color:rgb(var(--am-accent)); color:rgb(var(--am-accent)); }
             #am-log-close { background:rgba(var(--color-red),0.14) !important; color:rgb(var(--color-red)) !important; border-color:rgba(var(--color-red),0.3) !important; } #am-log-close:hover { background:rgba(var(--color-red),0.24) !important; }
             #am-log-container { flex:1; overflow-y:auto; padding:14px; font-family:"Cascadia Code","Fira Code",Consolas,monospace; font-size:12px; background:rgba(var(--color-background),0.35); }
             #am-log-container::-webkit-scrollbar { width:8px; } #am-log-container::-webkit-scrollbar-thumb { background:rgba(var(--color-text-light),0.25); border-radius:4px; }
@@ -3582,48 +4175,113 @@
             .am-log-time { color:rgb(var(--color-text-light)); font-size:11px; flex-shrink:0; } .am-log-badge { padding:2px 6px; border-radius:4px; font-weight:700; font-size:10px; flex-shrink:0; width:50px; text-align:center; text-transform:uppercase; } .am-log-msg { color:rgb(var(--color-text)); flex-grow:1; word-break:break-word; } .am-log-expand { color:rgb(var(--color-text-light)); font-size:10px; transition:.2s; user-select:none; }
             .am-log-details { padding:10px 12px; background:rgba(var(--color-background),0.4); border-top:1px solid rgba(var(--color-text-light),0.08); border-radius:0 0 8px 8px; font-family:inherit; font-size:11.5px; line-height:1.4; }
             .am-log-details details summary::-webkit-details-marker { display:none; }
-            .type-info .am-log-badge { background:rgba(var(--color-blue),0.15); color:rgb(var(--color-blue)); border:1px solid rgba(var(--color-blue),0.3); } .type-api .am-log-badge { background:rgba(var(--color-purple),0.15); color:rgb(var(--color-purple)); border:1px solid rgba(var(--color-purple),0.3); } .type-db .am-log-badge { background:rgba(var(--color-green),0.15); color:rgb(var(--color-green)); border:1px solid rgba(var(--color-green),0.3); } .type-queue .am-log-badge { background:rgba(var(--color-orange),0.15); color:rgb(var(--color-orange)); border:1px solid rgba(var(--color-orange),0.3); } .type-error .am-log-badge { background:rgba(var(--color-red),0.15); color:rgb(var(--color-red)); border:1px solid rgba(var(--color-red),0.3); } .type-error { border-color:rgba(var(--color-red),0.2); background:rgba(var(--color-red),0.05); }
-            /* WARN — предупреждение (не критично, но требует внимания): жёлтый оттенок, т.к. в теме сайта нет отдельной CSS-переменной под "жёлтый" (--color-orange уже занят под QUEUE). DEBUG — служебная диагностика: приглушённый нейтральный цвет текста. */
+            .type-info .am-log-badge { background:rgba(var(--am-accent),0.15); color:rgb(var(--am-accent)); border:1px solid rgba(var(--am-accent),0.3); } .type-api .am-log-badge { background:rgba(var(--color-purple),0.15); color:rgb(var(--color-purple)); border:1px solid rgba(var(--color-purple),0.3); } .type-db .am-log-badge { background:rgba(var(--color-green),0.15); color:rgb(var(--color-green)); border:1px solid rgba(var(--color-green),0.3); } .type-queue .am-log-badge { background:rgba(var(--color-orange),0.15); color:rgb(var(--color-orange)); border:1px solid rgba(var(--color-orange),0.3); } .type-error .am-log-badge { background:rgba(var(--color-red),0.15); color:rgb(var(--color-red)); border:1px solid rgba(var(--color-red),0.3); } .type-error { border-color:rgba(var(--color-red),0.2); background:rgba(var(--color-red),0.05); }
+            /* WARN — жёлтый (--color-orange занят под QUEUE). DEBUG — приглушённый нейтральный. */
             .type-warn .am-log-badge { background:rgba(250,204,21,0.15); color:rgb(250,204,21); border:1px solid rgba(250,204,21,0.35); } .type-warn { border-color:rgba(250,204,21,0.2); background:rgba(250,204,21,0.05); }
             .type-debug .am-log-badge { background:rgba(var(--color-text-light),0.12); color:rgb(var(--color-text-light)); border:1px solid rgba(var(--color-text-light),0.3); }
             .am-log-path { color:rgb(var(--color-text-light)); font-size:10px; max-width:100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; background:rgba(var(--color-text-light),0.08); padding:2px 4px; border-radius:4px; cursor:default; }
             .am-log-btn-stack { font-size:10px; color:rgb(var(--color-red)); cursor:pointer; transition:.2s; user-select:none; font-weight:700; background:rgba(var(--color-red),0.1); padding:2px 4px; border-radius:4px; border:1px solid rgba(var(--color-red),0.3); }
             .am-log-btn-stack:hover { background:rgba(var(--color-red),0.24); }
+            /* ==== Локальный словарь ==== */
+            .amk-tab-count { display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px; margin-left:auto; border-radius:9px; background:rgba(var(--am-accent),0.18); color:rgb(var(--am-accent)); font-size:11px; font-weight:700; }
+            .amk-tab.active .amk-tab-count { background:rgba(var(--am-accent),0.28); }
+            .am-dict-row { display:flex; gap:8px; align-items:center; }
+            .am-dict-row .amk-input { flex:1; }
+            .am-dict-del { flex-shrink:0; padding:0 10px; }
+            /* Контекстный захват выделения */
+            .am-dict-capture { position:absolute; z-index:2147483000; }
+            .am-dict-cap-btn { display:inline-flex; align-items:center; gap:6px; background:rgb(var(--am-accent)); color:#fff; border:none; border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,0.35); }
+            .am-dict-cap-btn:hover { filter:brightness(1.08); }
+            .am-dict-capform { position:absolute; z-index:2147483000; width:280px; background:rgb(var(--color-background-200,var(--color-foreground))); border:1px solid rgba(var(--color-text-light),0.18); border-radius:12px; padding:12px; box-shadow:0 12px 34px rgba(0,0,0,0.45); }
+            .am-dict-capform-head { font-size:12px; font-weight:700; color:rgb(var(--color-text)); margin-bottom:6px; }
+            .am-dict-capform-src { font-size:12px; color:rgb(var(--color-text-light)); background:rgba(var(--color-text-light),0.1); padding:6px 8px; border-radius:6px; margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .am-dict-capform-inp { width:100%; margin-bottom:10px; }
+            .am-dict-capform-btns { display:flex; gap:8px; justify-content:flex-end; }
         `);
 
         if (IS_SHIKI) {
             initExporter();
         } else if (IS_ANILIST) {
-            const actionsRoot = document.createElement('div'); actionsRoot.id = 'animori-actions'; document.body.appendChild(actionsRoot);
+            const actionsRoot = document.createElement('div'); actionsRoot.id = 'animori-actions'; actionsRoot.classList.add('am-accent-scope'); document.body.appendChild(actionsRoot);
             const btnSet = document.createElement('button'); btnSet.id = 'am-set-btn'; btnSet.className = 'am-premium-btn'; btnSet.innerHTML = '⚙'; btnSet.title = 'Настройки AniMori';
             btnSet.onclick = () => { const p = document.getElementById('am-panel'); p.style.display = window.getComputedStyle(p).display === 'none' ? 'flex' : 'none'; };
             actionsRoot.appendChild(btnSet);
 
-            // Кнопка Логгера
+            // Кнопка логгера
             if (settings.enableLogger) {
                 const btnLog = document.createElement('button'); btnLog.id = 'am-log-btn'; btnLog.className = 'am-premium-btn'; btnLog.innerHTML = '&lt;/&gt;'; btnLog.title = 'Открыть логгер (AniMori)'; btnLog.onclick = openLoggerModal; actionsRoot.appendChild(btnLog);
             }
 
-            // Кнопка Сравнения списков (сканер дельты Shikimori <-> AniList)
+            // Кнопка сравнения списков (сканер дельты)
             const btnCmp = document.createElement('button'); btnCmp.id = 'am-cmp-btn'; btnCmp.className = 'am-premium-btn'; btnCmp.innerHTML = '⇄'; btnCmp.title = 'Сравнить списки Shikimori и AniList (AniMori)'; btnCmp.onclick = openCompareModal; actionsRoot.appendChild(btnCmp);
 
-            // sw() — доверенный HTML переключателя, оборачиваем в rawHTML().
+            // sw() — доверенный HTML → rawHTML()
             const sw = (id, on, extra = '') => rawHTML(`<label class="amk-switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''} ${extra}><span class="amk-track"></span><span class="amk-thumb"></span></label>`);
-            const panel = document.createElement('div'); panel.id = 'am-panel';
+            const panel = document.createElement('div'); panel.id = 'am-panel'; panel.classList.add('am-accent-scope');
             panel.innerHTML = html`
                 <div class="amk-modal">
                     <div class="amk-head">
                         <h2 class="amk-title"><span class="amk-dot"></span>AniMori <span class="amk-sub">настройки</span></h2>
                         <button class="amk-close" id="am-set-close" title="Закрыть">✕</button>
                     </div>
-                    <div class="amk-body">
+                    <div class="amk-body amk-tabbed">
+                        <nav class="amk-tabnav">
+                            <button type="button" class="amk-tab active" data-tab="translate"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18"/></svg></span>Перевод</button>
+                            <button type="button" class="amk-tab" data-tab="dict"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>Словарь<span class="amk-tab-count" id="am-dict-count" hidden>0</span></button>
+                            <button type="button" class="amk-tab" data-tab="modules"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg></span>Модули</button>
+                            <button type="button" class="amk-tab" data-tab="appearance"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s6 6.5 6 10.5a6 6 0 0 1-12 0C6 9.5 12 3 12 3z"/></svg></span>Оформление</button>
+                            <button type="button" class="amk-tab" data-tab="links"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 0 1 6 6l-2 2"/><path d="M13 18l-1 1a4 4 0 0 1-6-6l2-2"/></svg></span>Ссылки</button>
+                            <button type="button" class="amk-tab" data-tab="account"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="M16 7l3 3"/></svg></span>Аккаунт</button>
+                            <button type="button" class="amk-tab" data-tab="misc"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg></span>Прочее</button>
+                            <button type="button" class="amk-tab" data-tab="support"><span class="amk-tab-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>Поддержать</button>
+                        </nav>
+                        <div class="amk-tabpanes">
+                        <div class="amk-pane active" data-pane="translate">
                         <div class="amk-card">
                             <div class="amk-card-title">Перевод</div>
                             <div class="amk-row"><span class="amk-row-label"><b>Интерфейс</b></span>${sw('set_interface', settings.translateInterface)}</div>
-                            <div class="amk-row"><span class="amk-row-label"><b>Тайтлы и описания</b><span class="amk-row-hint">с Shikimori</span></span>${sw('set_titles', settings.translateTitles)}</div>
+                            <div class="amk-row"><span class="amk-row-label"><b>Тайтлы и описания</b><span class="amk-row-hint">основной источник · фоллбэк</span></span></div>
+                            <div class="amk-row" style="gap:8px; border-top:none; padding-top:0;">
+                                <select class="amk-select" id="set_title_primary" style="flex:1;">
+                                    <option value="shikimori">Shikimori</option>
+                                    <option value="anime365">anime365</option>
+                                    <option value="off">Выключено (оригинал)</option>
+                                </select>
+                                <select class="amk-select" id="set_title_fallback" style="flex:1;">
+                                    <option value="none">Без фоллбэка</option>
+                                    <option value="shikimori">Shikimori</option>
+                                    <option value="anime365">anime365</option>
+                                </select>
+                            </div>
                             <div class="amk-row"><span class="amk-row-label"><b>Персонажи</b><span class="amk-row-hint">с Shikimori</span></span>${sw('set_chars', settings.translateCharacters)}</div>
                             <div class="amk-row"><span class="amk-row-label"><b>Персонал</b><span class="amk-row-hint">с Shikimori</span></span>${sw('set_staff', settings.translateStaff)}</div>
                         </div>
+                        </div>
+                        <div class="amk-pane am-notr" data-pane="dict">
+                        <div class="amk-card">
+                            <div class="amk-card-title">Локальный словарь</div>
+                            <div class="amk-row-hint" style="padding:2px 2px 8px; line-height:1.5;">Свои переводы поверх общего словаря. Применяются на странице сразу, без перезагрузки. Регистр сохраняется.</div>
+                            <div style="display:flex; gap:8px; margin-bottom:8px;">
+                                <input class="amk-input" id="am-dict-src" placeholder="Оригинал (англ.)" style="flex:1;">
+                                <input class="amk-input" id="am-dict-tr" placeholder="Перевод (рус.)" style="flex:1;">
+                                <button class="amk-btn amk-btn-primary" id="am-dict-add">＋</button>
+                            </div>
+                            <input class="amk-input" id="am-dict-search" placeholder="Поиск по своим записям…" style="margin-bottom:8px;">
+                            <div id="am-dict-list" style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow:auto;"></div>
+                            <div id="am-dict-empty" class="amk-row-hint" style="padding:14px 2px; text-align:center; display:none;">Пока нет своих записей. Добавьте перевод выше или выделите текст на странице.</div>
+                        </div>
+                        <div class="amk-card">
+                            <div class="amk-card-title">Импорт / Экспорт</div>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="amk-btn amk-btn-ghost" id="am-dict-export" style="flex:1;">Экспорт</button>
+                                <button class="amk-btn amk-btn-ghost" id="am-dict-import" style="flex:1;">Импорт</button>
+                                <button class="amk-btn amk-btn-ghost" id="am-dict-copy" style="flex:1;">Копировать</button>
+                            </div>
+                            <button class="amk-btn amk-btn-primary amk-btn-block" id="am-dict-share" style="margin-top:8px; display:inline-flex; align-items:center; justify-content:center; gap:8px;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>Предложить в общую базу</button>
+                            <div class="amk-row-hint" style="padding:8px 2px 2px; line-height:1.5;">Экспорт скачивает JSON, «Копировать» кладёт его в буфер для отправки другим. Импорт объединяет с текущими записями.</div>
+                        </div>
+                        </div>
+                        <div class="amk-pane" data-pane="modules">
                         <div class="amk-card">
                             <div class="amk-card-title">Модули</div>
                             <div class="amk-row"><span class="amk-row-label"><b>Аниме-плеер</b></span>${sw('set_player', settings.enablePlayer)}</div>
@@ -3631,6 +4289,15 @@
                             <div class="amk-row"><span class="amk-row-label"><b>Дерево франшизы</b></span>${sw('set_franchise', settings.enableFranchise)}</div>
                             <div class="amk-row"><span class="amk-row-label"><b>Музыкальные темы</b></span>${sw('set_themes', settings.enableThemes)}</div>
                         </div>
+                        </div>
+                        <div class="amk-pane" data-pane="appearance">
+                        <div class="amk-card">
+                            <div class="amk-card-title">Оформление</div>
+                            <div class="amk-row-hint" style="padding:2px 2px 8px;">Акцентный цвет тулкита — тему AniList не меняет</div>
+                            <div class="amk-accents" id="am-accent-chips"></div>
+                        </div>
+                        </div>
+                        <div class="amk-pane" data-pane="links">
                         <div class="amk-card">
                             <div class="amk-card-title">Внешние ссылки</div>
                             <div class="amk-row"><span class="amk-row-label"><b>Показывать ссылки</b></span>${sw('set_extlinks', settings.enableExtLinks)}</div>
@@ -3643,15 +4310,44 @@
                             <input class="amk-input amk-mono" id="set_mangalib_domain" placeholder="mangalib.me" style="margin:2px 0 6px;">
                         </div>
                         <div class="amk-card">
+                            <div class="amk-card-title">Свои ссылки</div>
+                            <div id="am-custom-links-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                            <button class="amk-btn amk-btn-ghost" id="am-custom-add" style="width:100%; margin-top:10px;">＋ Добавить свою ссылку</button>
+                            <div class="amk-row-hint" style="padding:10px 2px 2px; line-height:1.5;">В URL-шаблоне подставляются: <code style="background:rgba(var(--color-text-light),0.12);padding:1px 5px;border-radius:4px;">{ru}</code> — русское название, <code style="background:rgba(var(--color-text-light),0.12);padding:1px 5px;border-radius:4px;">{romaji}</code> — ромадзи, <code style="background:rgba(var(--color-text-light),0.12);padding:1px 5px;border-radius:4px;">{query}</code> — авто (ru → romaji). Всё кодируется автоматически.</div>
+                        </div>
+                        </div>
+                        <div class="amk-pane" data-pane="account">
+                        <div class="amk-card">
                             <div class="amk-card-title">Авторизация AniList</div>
                             <div class="amk-row-hint" style="padding:8px 2px 6px;">Токен нужен для экспорта и сравнения списков. Создайте Client <a href="https://anilist.co/settings/developer" target="_blank" style="color:rgb(var(--color-blue));text-decoration:none;">здесь</a>, redirect URL: <code style="background:rgba(var(--color-text-light),0.12);padding:1px 5px;border-radius:4px;">https://anilist.co/api/v2/oauth/pin</code></div>
                             <input class="amk-input amk-mono" type="password" id="set_al_token" placeholder="Токен AniList" style="margin-bottom:8px;">
                             <div style="display:flex; gap:8px; margin-bottom:6px;"><input class="amk-input amk-mono" id="set_al_client" placeholder="Client ID" style="flex:1;"><button class="amk-btn amk-btn-ghost" id="set_al_gen" title="Создать ссылку авторизации">Ссылка</button></div>
                             <div id="set_al_link_wrap" style="text-align:center; font-size:12px;"></div>
                         </div>
+                        </div>
+                        <div class="amk-pane" data-pane="misc">
                         <div class="amk-card">
                             <div class="amk-card-title">Прочее</div>
                             <div class="amk-row"><span class="amk-row-label"><b>Логгер</b><span class="amk-row-hint">отслеживание действий скрипта (для отладки)</span></span>${sw('set_logger', settings.enableLogger)}</div>
+                        </div>
+                        </div>
+                        <div class="amk-pane" data-pane="support">
+                        <div class="amk-card">
+                            <div class="amk-card-title">Поддержать проект</div>
+                            <div class="amk-row-hint" style="padding:2px 2px 10px; line-height:1.55;">AniMori — бесплатный проект, я делаю его из любви к японским мультикам. Денег не нужно. Если тулкит вам пригодился, лучшая благодарность — пара действий ниже. Это правда помогает.</div>
+                            <button class="amk-btn amk-btn-primary amk-btn-block" id="am-sup-star" style="margin-bottom:8px; gap:8px;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>Star на GitHub</button>
+                            <button class="amk-btn amk-btn-ghost amk-btn-block" id="am-sup-review" style="margin-bottom:8px; gap:8px;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Оценить на Greasy Fork</button>
+                            <div class="amk-row-hint" style="padding:2px 2px 6px; line-height:1.5;">Отзыв двигает скрипт в выдаче — так его находят новые пользователи.</div>
+                        </div>
+                        <div class="amk-card">
+                            <div class="amk-card-title">Поделиться</div>
+                            <div class="amk-row-hint" style="padding:2px 2px 8px; line-height:1.5;">Рассказать друзьям — тоже поддержка. Ссылка на установку:</div>
+                            <div style="display:flex; gap:8px;">
+                                <input class="amk-input amk-mono" id="am-sup-link" readonly value="https://greasyfork.org/scripts/572948" style="flex:1;">
+                                <button class="amk-btn amk-btn-primary" id="am-sup-copy" style="gap:7px;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Копировать</span></button>
+                            </div>
+                        </div>
+                        </div>
                         </div>
                     </div>
                     <div class="amk-foot">
@@ -3662,18 +4358,213 @@
             `;
             document.body.appendChild(panel);
 
+            // Переключение вкладок настроек
+            panel.querySelectorAll('.amk-tab').forEach(tb => {
+                tb.onclick = () => {
+                    const key = tb.dataset.tab;
+                    panel.querySelectorAll('.amk-tab').forEach(x => x.classList.toggle('active', x === tb));
+                    panel.querySelectorAll('.amk-pane').forEach(pn => pn.classList.toggle('active', pn.dataset.pane === key));
+                };
+            });
+
+            // Вкладка «Поддержать»
+            const SUP_GITHUB = 'https://github.com/foulnike/AniMori-AniList-Toolkit';
+            const SUP_GREASY = 'https://greasyfork.org/scripts/572948';
+            const supStar = document.getElementById('am-sup-star');
+            if (supStar) supStar.onclick = () => window.open(SUP_GITHUB, '_blank', 'noopener');
+            const supReview = document.getElementById('am-sup-review');
+            if (supReview) supReview.onclick = () => window.open(SUP_GREASY + '/feedback', '_blank', 'noopener');
+            const supCopy = document.getElementById('am-sup-copy');
+            if (supCopy) supCopy.onclick = () => {
+                amCopy(SUP_GREASY, supCopy);
+                const lbl = supCopy.querySelector('span');
+                if (lbl) { const prev = lbl.textContent; lbl.textContent = 'Скопировано ✓'; setTimeout(() => { lbl.textContent = prev; }, 1200); }
+            };
+
+            // Чипы выбора акцента
+            const accWrap = document.getElementById('am-accent-chips');
+            if (accWrap) {
+                Object.keys(AM_ACCENTS).forEach(key => {
+                    const a = AM_ACCENTS[key];
+                    const chip = document.createElement('button');
+                    chip.type = 'button';
+                    chip.className = 'am-accent-chip' + (settings.accentPreset === key ? ' active' : '');
+                    chip.dataset.key = key;
+                    chip.innerHTML = `<span class="am-accent-dot" style="background:${a.dot};"></span>${a.name}`;
+                    chip.onclick = () => {
+                        settings.accentPreset = key;
+                        GM_setValue('am_accent', key);
+                        accWrap.querySelectorAll('.am-accent-chip').forEach(c => c.classList.remove('active'));
+                        chip.classList.add('active');
+                        amSetAccent(key);
+                    };
+                    accWrap.appendChild(chip);
+                });
+            }
+            // Сохранённый акцент к контейнерам (FAB, панель)
+            amSetAccent(settings.accentPreset);
+
             document.getElementById('set_yummy_domain').value = settings.yummyDomain; document.getElementById('set_animego_domain').value = settings.animegoDomain; document.getElementById('set_mangalib_domain').value = settings.mangalibDomain;
 
-            // Закрытие модалки настроек: клик по фону-оверлею или по кнопке ✕.
+            // Источники перевода тайтлов: значения + связка (фоллбэк != основной).
+            { const tp = document.getElementById('set_title_primary'), tf = document.getElementById('set_title_fallback');
+              if (tp && tf) {
+                tp.value = settings.titlePrimary; tf.value = settings.titleFallback;
+                const syncTitleSrc = () => {
+                    const off = tp.value === 'off';
+                    tf.disabled = off;
+                    Array.from(tf.options).forEach(o => { o.disabled = (o.value !== 'none' && o.value === tp.value); });
+                    if (off || tf.value === tp.value) tf.value = 'none';
+                };
+                syncTitleSrc();
+                tp.onchange = () => { GM_setValue('set_title_primary', tp.value); syncTitleSrc(); GM_setValue('set_title_fallback', tf.value); };
+                tf.onchange = () => { GM_setValue('set_title_fallback', tf.value); };
+              }
+            }
+
+            // Закрытие: клик по оверлею или ✕.
             panel.addEventListener('click', (e) => { if (e.target === panel) panel.style.display = 'none'; });
             { const c = document.getElementById('am-set-close'); if (c) c.onclick = () => { panel.style.display = 'none'; }; }
 
-            // Биндим сохранение настроек
-            const booleanSettings =['set_interface', 'set_titles', 'set_chars', 'set_staff', 'set_player', 'set_ratings', 'set_franchise', 'set_themes', 'set_extlinks', 'set_link_rutracker', 'set_link_yummy', 'set_link_animego', 'set_link_mangalib', 'set_logger'];
+            // Сохранение настроек
+            const booleanSettings =['set_interface', 'set_chars', 'set_staff', 'set_player', 'set_ratings', 'set_franchise', 'set_themes', 'set_extlinks', 'set_link_rutracker', 'set_link_yummy', 'set_link_animego', 'set_link_mangalib', 'set_logger'];
             booleanSettings.forEach(id => { const el = document.getElementById(id); if (el) el.onchange = (e) => GM_setValue(id, e.target.checked); });
 
             const textSettings =['set_yummy_domain', 'set_animego_domain', 'set_mangalib_domain'];
             textSettings.forEach(id => { const el = document.getElementById(id); if (el) el.onchange = (e) => GM_setValue(id, e.target.value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')); });
+
+            // Редактор своих ссылок
+            const renderCustomLinksEditor = () => {
+                const list = document.getElementById('am-custom-links-list');
+                if (!list) return;
+                const links = getCustomLinks();
+                list.innerHTML = '';
+                links.forEach((cl, idx) => {
+                    const row = document.createElement('div'); row.className = 'am-cl-row';
+                    const top = document.createElement('div'); top.style.cssText = 'display:flex; gap:8px; align-items:center;';
+                    const nameIn = document.createElement('input'); nameIn.className = 'amk-input'; nameIn.placeholder = 'Название'; nameIn.value = cl.name || ''; nameIn.style.flex = '1';
+                    const del = document.createElement('button'); del.className = 'amk-btn amk-btn-ghost am-cl-del'; del.textContent = '✕'; del.title = 'Удалить';
+                    top.append(nameIn, del);
+                    const urlIn = document.createElement('input'); urlIn.className = 'amk-input amk-mono'; urlIn.placeholder = 'https://site.com/search?q={query}'; urlIn.value = cl.url || ''; urlIn.style.marginTop = '6px';
+                    const sw = document.createElement('div'); sw.className = 'am-cl-swatches';
+                    CL_COLORS.forEach(c => {
+                        const s2 = document.createElement('span'); s2.className = 'am-cl-sw' + (cl.color === c ? ' active' : '');
+                        s2.style.background = `rgb(${c})`;
+                        s2.onclick = () => { const arr = getCustomLinks(); if (arr[idx]) { arr[idx].color = c; setCustomLinks(arr); renderCustomLinksEditor(); } };
+                        sw.appendChild(s2);
+                    });
+                    const save = () => { const arr = getCustomLinks(); if (arr[idx]) { arr[idx].name = nameIn.value.trim(); arr[idx].url = urlIn.value.trim(); setCustomLinks(arr); } };
+                    nameIn.onchange = save; urlIn.onchange = save;
+                    del.onclick = () => { const arr = getCustomLinks(); arr.splice(idx, 1); setCustomLinks(arr); renderCustomLinksEditor(); };
+                    row.append(top, urlIn, sw);
+                    list.appendChild(row);
+                });
+            };
+            renderCustomLinksEditor();
+            { const addBtn = document.getElementById('am-custom-add'); if (addBtn) addBtn.onclick = () => { const arr = getCustomLinks(); arr.push({ name: '', url: '', color: CL_COLORS[arr.length % CL_COLORS.length] }); setCustomLinks(arr); renderCustomLinksEditor(); }; }
+
+            // ==== Редактор локального словаря ====
+            const dictListEl = document.getElementById('am-dict-list');
+            const dictEmptyEl = document.getElementById('am-dict-empty');
+            const dictSearchEl = document.getElementById('am-dict-search');
+            const renderDictEditor = () => {
+                if (!dictListEl) return;
+                const ud = getUserDict();
+                const total = Object.keys(ud).length;
+                const badge = document.getElementById('am-dict-count');
+                if (badge) { badge.textContent = String(total); badge.hidden = total === 0; }
+                const q = normDictKey(dictSearchEl ? dictSearchEl.value : '').toLowerCase();
+                const keys = Object.keys(ud).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+                    .filter(k => !q || k.toLowerCase().includes(q) || String(ud[k]).toLowerCase().includes(q));
+                dictListEl.innerHTML = '';
+                if (dictEmptyEl) dictEmptyEl.style.display = Object.keys(ud).length ? 'none' : 'block';
+                keys.forEach(k => {
+                    const row = document.createElement('div'); row.className = 'am-dict-row';
+                    const srcIn = document.createElement('input'); srcIn.className = 'amk-input'; srcIn.value = k; srcIn.style.flex = '1';
+                    const trIn = document.createElement('input'); trIn.className = 'amk-input'; trIn.value = ud[k]; trIn.style.flex = '1';
+                    const del = document.createElement('button'); del.className = 'amk-btn amk-btn-ghost am-dict-del'; del.textContent = '✕'; del.title = 'Удалить';
+                    const commit = () => {
+                        const nk = normDictKey(srcIn.value), nv = normDictKey(trIn.value);
+                        if (!nk || !nv) return;
+                        if (nk !== k) removeUserDictEntry(k);
+                        upsertUserDictEntry(nk, nv);
+                        if (nk !== k) renderDictEditor();
+                    };
+                    srcIn.onchange = commit; trIn.onchange = commit;
+                    del.onclick = () => { removeUserDictEntry(k); renderDictEditor(); };
+                    row.append(srcIn, trIn, del);
+                    dictListEl.appendChild(row);
+                });
+            };
+            if (dictSearchEl) dictSearchEl.oninput = renderDictEditor;
+            renderDictEditor();
+            {
+                const addBtn = document.getElementById('am-dict-add');
+                const srcEl = document.getElementById('am-dict-src');
+                const trEl = document.getElementById('am-dict-tr');
+                if (addBtn && srcEl && trEl) {
+                    addBtn.onclick = () => {
+                        if (upsertUserDictEntry(srcEl.value, trEl.value)) {
+                            srcEl.value = ''; trEl.value = ''; srcEl.focus(); renderDictEditor();
+                        }
+                    };
+                    trEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBtn.click(); });
+                }
+                const expBtn = document.getElementById('am-dict-export');
+                if (expBtn) expBtn.onclick = () => {
+                    const data = JSON.stringify(getUserDict(), null, 2);
+                    const blob = new Blob([data], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = 'animori-dictionary.json';
+                    document.body.appendChild(a); a.click(); a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 2000);
+                };
+                const copyBtn = document.getElementById('am-dict-copy');
+                if (copyBtn) copyBtn.onclick = () => {
+                    try { GM_setClipboard(JSON.stringify(getUserDict(), null, 2)); const t = copyBtn.textContent; copyBtn.textContent = '✓ Скопировано'; setTimeout(() => copyBtn.textContent = t, 1400); } catch (e) { /* noop */ }
+                };
+                const impBtn = document.getElementById('am-dict-import');
+                if (impBtn) impBtn.onclick = () => {
+                    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json';
+                    inp.onchange = () => {
+                        const f = inp.files && inp.files[0]; if (!f) return;
+                        const fr = new FileReader();
+                        fr.onload = () => {
+                            try {
+                                const obj = JSON.parse(String(fr.result));
+                                if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('bad');
+                                const ud = getUserDict();
+                                Object.keys(obj).forEach(k => { const nk = normDictKey(k), nv = normDictKey(obj[k]); if (nk && nv) ud[nk] = nv; });
+                                setUserDict(ud); rebuildDictionary();
+                                if (typeof amRetranslate === 'function') amRetranslate();
+                                renderDictEditor();
+                            } catch (e) { alert('Не удалось разобрать файл словаря (ожидается JSON вида {"English":"Русский"}).'); }
+                        };
+                        fr.readAsText(f);
+                    };
+                    inp.click();
+                };
+                const shareBtn = document.getElementById('am-dict-share');
+                if (shareBtn) shareBtn.onclick = () => {
+                    const ud = getUserDict();
+                    const n = Object.keys(ud).length;
+                    if (!n) { alert('Пока нечем делиться — добавьте хотя бы одну запись.'); return; }
+                    const json = JSON.stringify(ud, null, 2);
+                    const title = `[Словарь] ${n} ${n === 1 ? 'запись' : (n < 5 ? 'записи' : 'записей')} от пользователя`;
+                    const body = `Предлагаю добавить эти переводы в общий словарь AniMori:\n\n\u0060\u0060\u0060json\n${json}\n\u0060\u0060\u0060\n`;
+                    const base = 'https://github.com/foulnike/AniMori-AniList-Toolkit/issues/new';
+                    const url = `${base}?title=${encodeURIComponent(title)}&labels=dictionary&body=${encodeURIComponent(body)}`;
+                    // Лимит URL GitHub (~8 КБ): большой словарь → JSON в буфер, открываем пустую форму issue.
+                    if (url.length > 7000) {
+                        try { GM_setClipboard(json); } catch (e) { /* noop */ }
+                        const short = `${base}?title=${encodeURIComponent(title)}&labels=dictionary&body=${encodeURIComponent('Словарь скопирован в буфер обмена — вставьте его сюда внутри блока \u0060\u0060\u0060json ... \u0060\u0060\u0060')}`;
+                        alert('Словарь большой и не помещается в ссылку — он скопирован в буфер обмена. Откроется форма issue, вставьте (Ctrl+V) содержимое в тело.');
+                        window.open(short, '_blank');
+                    } else {
+                        window.open(url, '_blank');
+                    }
+                };
+            }
 
             const tokenInput = document.getElementById('set_al_token');
             if (tokenInput) { tokenInput.value = GM_getValue("AL_TOKEN", ""); tokenInput.onchange = (e) => GM_setValue("AL_TOKEN", e.target.value.trim()); }
@@ -3696,22 +4587,24 @@
 
             await openDB();
 
-            // Старт модуля перевода и загрузка внешнего словаря
+            // Старт перевода + загрузка словаря
             if (settings.translateInterface || settings.translateTitles || settings.translateCharacters || settings.translateStaff) {
                 Logger('API', 'Загрузка словаря интерфейса...');
                 GM_xmlhttpRequest({
                     method: "GET", url: DICT_URL,
                     onload: (res) => {
-                        if (res.status === 200) { try { dictionary = Object.assign(Object.create(null), JSON.parse(res.responseText)); Logger('INFO', 'Словарь загружен и распарсен'); } catch (e) { Logger('ERROR', 'Ошибка парсинга словаря', e); } }
+                        if (res.status === 200) { try { remoteDict = Object.assign(Object.create(null), JSON.parse(res.responseText)); Logger('INFO', 'Словарь загружен и распарсен'); } catch (e) { Logger('ERROR', 'Ошибка парсинга словаря', e); } }
+                        rebuildDictionary();
                         initTranslator();
                     },
-                    onerror: (e) => { Logger('ERROR', 'Сетевая ошибка при загрузке словаря', e); initTranslator(); }
+                    onerror: (e) => { Logger('ERROR', 'Сетевая ошибка при загрузке словаря', e); rebuildDictionary(); initTranslator(); }
                 });
-            } else { initTranslator(); }
+            } else { rebuildDictionary(); initTranslator(); }
 
             initRussianSearch();
+            initDictCapture();
 
-            // Перехват SPA-навигации для инъекции виджетов
+            // Перехват SPA-навигации → инъекция виджетов
             const originalPushState = history.pushState;
             history.pushState = function() {
                 originalPushState.apply(this, arguments);
@@ -3731,7 +4624,7 @@
                 setTimeout(injectMediaExtensions, 50);
             });
 
-            // Страховочный пулинг для отлова смены URL
+            // Страховочный пулинг URL
             let lastUrl = location.href;
             setInterval(() => {
                 if (location.href !== lastUrl) {
@@ -3748,7 +4641,7 @@
 
             injectMediaExtensions();
 
-            // Запускаем очистку старого кэша через 15 секунд
+            // Очистка старого кэша через 15с
             setTimeout(runGarbageCollector, 15000);
         }
     }

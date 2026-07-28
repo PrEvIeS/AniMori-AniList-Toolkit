@@ -2383,15 +2383,15 @@
             const sw = (id, on = true) => `<label class="amk-switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span class="amk-track"></span><span class="amk-thumb"></span></label>`;
             const overlayTemplate = `
                 <div id="shiki-export-overlay" class="amk-overlay" style="display:flex;">
-                    <div class="amk-modal" style="width:500px;">
+                    <div class="amk-modal" style="width:500px;background:rgba(255,255,255,0.85);">
                         <div class="amk-head">
-                            <h2 class="amk-title"><span class="amk-dot"></span><span style="color:rgb(var(--color-pink));">Shikimori</span>&nbsp;➜&nbsp;<span style="color:rgb(var(--color-blue));">AniList</span> <span class="amk-sub">экспорт</span></h2>
+                            <h2 class="amk-title" style="color:#000;"><span class="amk-dot"></span><span style="color:#e05264;">Shikimori</span>&nbsp;➜&nbsp;<span style="color:#3dbbee;">AniList</span> <span class="amk-sub">экспорт</span></h2>
                             <button class="amk-close" id="se-close" title="Закрыть">✕</button>
                         </div>
                         <div class="amk-body">
                             <div style="display:flex;gap:10px;">
-                                <input class="amk-input" id="se-user" placeholder="Логин Shikimori" style="flex:1;width:auto;">
-                                <input class="amk-input amk-mono" type="password" id="se-token" placeholder="Токен AniList" style="flex:1;width:auto;">
+                                <input class="amk-input" id="se-user" placeholder="Логин Shikimori" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);">
+                                <input class="amk-input amk-mono" type="password" id="se-token" placeholder="Токен AniList" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);">
                             </div>
                             <div class="amk-card">
                                 <div class="amk-card-title">Что переносить</div>
@@ -2402,16 +2402,16 @@
                             </div>
                             <div class="amk-card">
                                 <div class="amk-card-title">Токен AniList</div>
-                                <div class="amk-row-hint" style="padding:8px 2px 6px;">Создайте Client <a href="https://anilist.co/settings/developer" target="_blank" style="color:rgb(var(--color-blue));text-decoration:none;">здесь</a>, redirect URL: <code style="background:rgba(var(--color-text-light),0.12);padding:1px 5px;border-radius:4px;">https://anilist.co/api/v2/oauth/pin</code></div>
+                                <div class="amk-row-hint" style="padding:8px 2px 6px;">Создайте Client <a href="https://anilist.co/settings/developer" target="_blank" style="color:#3dbbee;text-decoration:none;">здесь</a>, redirect URL: <code style="background:rgba(0,0,0,0.1);padding:1px 5px;border-radius:4px;">https://anilist.co/api/v2/oauth/pin</code></div>
                                 <div style="display:flex;gap:8px;">
-                                    <input class="amk-input amk-mono" id="se-gen-client" placeholder="Client ID" style="flex:1;width:auto;">
+                                    <input class="amk-input amk-mono" id="se-gen-client" placeholder="Client ID" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);">
                                     <button class="amk-btn amk-btn-ghost" id="se-gen-btn">Создать URL</button>
                                 </div>
                                 <div id="se-gen-url" style="margin-top:10px;text-align:center;font-size:12px;"></div>
                             </div>
                         </div>
                         <div class="amk-foot">
-                            <button class="amk-btn amk-btn-primary amk-btn-block" id="se-start">Запуск</button>
+                            <button class="amk-btn amk-btn-primary amk-btn-block" id="se-start" style="border:1px solid rgba(0,0,0,0.3);">Запуск</button>
                         </div>
                     </div>
                 </div>
@@ -4197,6 +4197,13 @@
             .am-dict-capform-src { font-size:12px; color:rgb(var(--color-text-light)); background:rgba(var(--color-text-light),0.1); padding:6px 8px; border-radius:6px; margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             .am-dict-capform-inp { width:100%; margin-bottom:10px; }
             .am-dict-capform-btns { display:flex; gap:8px; justify-content:flex-end; }
+            
+            /* ===== Улучшения экспортера Shikimori ===== */
+            #shiki-export-overlay .amk-modal { background:rgba(255,255,255,0.85) !important; }
+            #shiki-export-overlay .amk-title { color:#000 !important; }
+            #shiki-export-overlay .amk-switch .amk-track { border:1px solid rgba(0,0,0,0.25); }
+            #shiki-export-overlay .amk-switch .amk-thumb { border:1px solid rgba(0,0,0,0.15); }
+            #shiki-export-overlay .amk-btn-primary { border:1px solid rgba(0,0,0,0.3) !important; }
         `);
 
         if (IS_SHIKI) {

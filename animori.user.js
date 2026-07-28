@@ -2390,8 +2390,8 @@
                         </div>
                         <div class="amk-body">
                             <div style="display:flex;gap:10px;">
-                                <input class="amk-input" id="se-user" placeholder="Логин Shikimori" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);">
-                                <input class="amk-input amk-mono" type="password" id="se-token" placeholder="Токен AniList" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);">
+                                <input class="amk-input" id="se-user" placeholder="Логин Shikimori" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);" />
+                                <input class="amk-input amk-mono" type="password" id="se-token" placeholder="Токен AniList" style="flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);" />
                             </div>
                             <div class="amk-card">
                                 <div class="amk-card-title">Что переносить</div>
@@ -4203,7 +4203,8 @@
             #shiki-export-overlay .amk-title { color:#000 !important; }
             #shiki-export-overlay .amk-switch .amk-track { border:1px solid rgba(0,0,0,0.25); }
             #shiki-export-overlay .amk-switch .amk-thumb { border:1px solid rgba(0,0,0,0.15); }
-            #shiki-export-overlay .amk-btn-primary { border:1px solid rgba(0,0,0,0.3) !important; }
+            #shiki-export-overlay .amk-input::placeholder { color:rgba(0,0,0,0.35) !important; }
+            #shiki-export-overlay .amk-btn-primary { border:1px solid rgba(0,0,0,0.3) !important; color:#000 !important; }
         `);
 
         if (IS_SHIKI) {

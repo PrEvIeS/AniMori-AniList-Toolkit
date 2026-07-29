@@ -6,6 +6,8 @@ import { openDB } from './core/db'
 import { rebuildDictionary, setRemoteDict } from './core/dictionary'
 import { loadSettings, settings } from './core/settings'
 import { initExporter } from './features/exporter'
+import { initMedia, registerMediaWidget } from './features/media'
+import { playerWidget } from './features/media/player'
 import { openCompareModal } from './features/scanner'
 import { initTranslator } from './features/translator'
 import { Logger } from './utils/logger'
@@ -50,7 +52,7 @@ function loadInterfaceDictionary(): Promise<void> {
 
 /**
  * Порядок важен и взят из монолита (строки 4597-4610):
- * настройки → БД → словарь → переводчик.
+ * настройки → БД → словарь → переводчик → медиа-виджеты.
  * РИСК №1 из AUDITION.md: на Этапе 4 настройки станут асинхронными, поэтому
  * наблюдатель запускается только после того, как настройки уже в памяти.
  */
@@ -76,6 +78,10 @@ async function bootstrap(): Promise<void> {
   rebuildDictionary()
 
   initTranslator()
+
+  // Медиа-виджеты живут на наблюдателе переводчика, поэтому регистрируются после него.
+  registerMediaWidget(playerWidget)
+  initMedia()
 }
 
 void bootstrap()

@@ -1,0 +1,18 @@
+# По умолчанию Git сам определяет текстовые файлы.
+* text=auto
+
+# Исходники проекта хранятся в LF (Prettier также пишет LF).
+*.ts   text eol=lf
+*.vue  text eol=lf
+*.scss text eol=lf
+*.css  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.rs   text eol=lf
+*.toml text eol=lf
+
+# Монолит хранится байт-в-байт (у него CRLF): никаких конвертаций
+# и никаких предупреждений про LF/CRLF на каждый git add.
+animori.user.js -text

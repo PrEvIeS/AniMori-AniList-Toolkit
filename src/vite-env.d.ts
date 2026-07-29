@@ -1,9 +1,37 @@
 /// <reference types="vite/client" />
-/// <reference types="vite-plugin-monkey/client" />
 
-/**
- * Целевая платформа сборки. Подставляется Vite через define на этапе
- * компиляции. Используется на Этапе 3 в src/bridge/index.ts для выбора
- * реализации IBridge с tree-shaking лишнего кода.
- */
+// Платформа сборки (см. define в vite.config.ts).
 declare const __ANIMORI_PLATFORM__: 'userscript' | 'tauri'
+
+// ==== GM_* API ====
+// @types/greasemonkey описывает только GM.* (GM4), а монолит использует GM_*.
+// Этап 3 спрячет эти вызовы за Bridge; до тех пор описываем ровно то, что есть в @grant.
+declare function GM_getValue<T>(key: string, defaultValue: T): T
+declare function GM_getValue(key: string): unknown
+declare function GM_setValue(key: string, value: unknown): void
+declare function GM_addStyle(css: string): HTMLStyleElement
+declare function GM_setClipboard(text: string, type?: string): void
+
+declare interface GMXhrResponse {
+  readonly status: number
+  readonly statusText: string
+  readonly responseText: string
+  readonly responseHeaders: string
+  readonly finalUrl: string
+  readonly response: unknown
+}
+
+declare interface GMXhrDetails {
+  method?: 'GET' | 'POST' | 'HEAD' | 'PUT' | 'DELETE' | 'PATCH'
+  url: string
+  headers?: Record<string, string>
+  data?: string
+  responseType?: 'text' | 'json' | 'blob' | 'arraybuffer'
+  timeout?: number
+  onload?: (response: GMXhrResponse) => void
+  onerror?: (response: GMXhrResponse) => void
+  ontimeout?: (response: GMXhrResponse) => void
+  onabort?: (response: GMXhrResponse) => void
+}
+
+declare function GM_xmlhttpRequest(details: GMXhrDetails): { abort: () => void }

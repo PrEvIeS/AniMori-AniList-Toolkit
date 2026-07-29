@@ -10,12 +10,7 @@ export type MediaType = 'ANIME' | 'MANGA'
 
 /** Статусы в терминах Shikimori — к ним нормализуются и записи AniList. */
 export type ShikiStatus =
-  | 'watching'
-  | 'rewatching'
-  | 'planned'
-  | 'completed'
-  | 'on_hold'
-  | 'dropped'
+  'watching' | 'rewatching' | 'planned' | 'completed' | 'on_hold' | 'dropped'
 
 export interface AniListMediaTitle {
   romaji?: string | null

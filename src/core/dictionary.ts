@@ -41,8 +41,7 @@ function normDictKey(v: string | null | undefined): string {
 export function getUserDict(): Record<string, string> {
   try {
     const raw = GM_getValue('am_user_dict', '{}')
-    const obj =
-      raw && typeof raw === 'object' ? raw : JSON.parse((raw as string) || '{}')
+    const obj = raw && typeof raw === 'object' ? raw : JSON.parse((raw as string) || '{}')
     return obj && typeof obj === 'object' && !Array.isArray(obj)
       ? (obj as Record<string, string>)
       : {}

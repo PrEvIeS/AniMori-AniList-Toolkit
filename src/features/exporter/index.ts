@@ -5,7 +5,15 @@
 import { Logger } from '../../utils/logger'
 import { anilistQuery } from '../../api/anilist'
 
-type ShikiStatus = 'planned' | 'watching' | 'reading' | 'completed' | 'on_hold' | 'dropped' | 'rewatching' | 'rereading'
+type ShikiStatus =
+  | 'planned'
+  | 'watching'
+  | 'reading'
+  | 'completed'
+  | 'on_hold'
+  | 'dropped'
+  | 'rewatching'
+  | 'rereading'
 type AniListStatus = 'PLANNING' | 'CURRENT' | 'COMPLETED' | 'PAUSED' | 'DROPPED' | 'REPEATING'
 type ScoreFormat = 'POINT_100' | 'POINT_10_DECIMAL' | 'POINT_10' | 'POINT_5' | 'POINT_3'
 type MediaType = 'anime' | 'manga'
@@ -80,6 +88,8 @@ interface HistoryDates {
   end: Date | null
 }
 
+let exportFailures = 0
+
 const mapStatusShikiToAL: Record<ShikiStatus, AniListStatus> = {
   planned: 'PLANNING',
   watching: 'CURRENT',
@@ -124,7 +134,7 @@ function makeFuzzyDate(d?: string | Date): FuzzyDate | undefined {
 }
 
 async function fetchShikiUserId(username: string): Promise<number> {
-  const res = await fetch(`${window.location.origin}/api/users/${username}`)
+  const res = await fetch(`${window.location.origin}/api/users/${encodeURIComponent(username)}`)
   if (!res.ok) throw new Error('Пользователь Shikimori не найден.')
   const data = (await res.json()) as { id: number }
   return data.id
@@ -166,9 +176,9 @@ async function fetchShikimoriListV2(userId: number, type: MediaType): Promise<Sh
 async function fetchShikiHistoryDates(
   userId: number,
   btn?: HTMLButtonElement,
-): Promise<Record<number, HistoryDates>> {
+): Promise<Record<string, HistoryDates>> {
   let page = 1
-  const datesMap: Record<number, { starts: number[]; ends: number[] }> = {}
+  const datesMap: Record<string, { starts: number[]; ends: number[] }> = {}
   while (true) {
     if (btn) btn.textContent = `Анализ таймингов (стр. ${page})...`
     try {
@@ -184,6 +194,7 @@ async function fetchShikiHistoryDates(
       }
       const data = (await res.json()) as Array<{
         target?: { id: number }
+        target_type?: string
         created_at: string
         description?: string
       }>
@@ -191,7 +202,9 @@ async function fetchShikiHistoryDates(
 
       data.forEach((item) => {
         if (!item.target) return
-        const id = item.target.id
+        const targetType = item.target_type?.toLowerCase()
+        if (targetType !== 'anime' && targetType !== 'manga') return
+        const id = `${targetType}:${item.target.id}`
         const dateObj = new Date(item.created_at)
         const desc = (item.description || '').toLowerCase()
 
@@ -221,16 +234,12 @@ async function fetchShikiHistoryDates(
       page++
       await new Promise((r) => setTimeout(r, 350))
     } catch (e) {
-      Logger(
-        'ERROR',
-        `fetchShikiHistoryDates: сбой на странице ${page}, обработка прервана`,
-        e,
-      )
+      Logger('ERROR', `fetchShikiHistoryDates: сбой на странице ${page}, обработка прервана`, e)
       break
     }
   }
 
-  const finalMap: Record<number, HistoryDates> = {}
+  const finalMap: Record<string, HistoryDates> = {}
   for (const id in datesMap) {
     const entry = datesMap[id]
     if (!entry) continue
@@ -243,7 +252,9 @@ async function fetchShikiHistoryDates(
   return finalMap
 }
 
-async function fetchShikimoriFavorites(usernameOrId: string | number): Promise<ShikiFavorites | null> {
+async function fetchShikimoriFavorites(
+  usernameOrId: string | number,
+): Promise<ShikiFavorites | null> {
   const endpoints = [
     `/api/users/${usernameOrId}/favorites`,
     `/api/users/${usernameOrId}/favourites`,
@@ -380,7 +391,7 @@ async function syncShikiToAlList(
   shikiItems: ShikiUserRate[],
   type: MediaType,
   alUser: AniListUser,
-  historyDates: Record<number, HistoryDates> | null,
+  historyDates: Record<string, HistoryDates> | null,
   btn?: HTMLButtonElement,
 ): Promise<void> {
   if (!shikiItems || shikiItems.length === 0) return
@@ -424,12 +435,11 @@ async function syncShikiToAlList(
 
     let startedAt: FuzzyDate | undefined
     let completedAt: FuzzyDate | undefined
-    if (historyDates && historyDates[item.target_id]) {
-      const dates = historyDates[item.target_id]
-      if (dates?.start)
-        startedAt = makeFuzzyDate(dates.start || undefined)
-      if (dates?.end)
-        completedAt = makeFuzzyDate(dates.end || undefined)
+    const historyKey = `${type}:${item.target_id}`
+    if (historyDates && historyDates[historyKey]) {
+      const dates = historyDates[historyKey]
+      if (dates?.start) startedAt = makeFuzzyDate(dates.start || undefined)
+      if (dates?.end) completedAt = makeFuzzyDate(dates.end || undefined)
     }
     if (!startedAt && item.status !== 'planned' && item.created_at)
       startedAt = makeFuzzyDate(item.created_at)
@@ -458,7 +468,7 @@ async function syncShikiToAlList(
     }
 
     const variables: Record<string, unknown> = { mediaId: alId, status, scoreRaw, progress, repeat }
-    if (type === 'manga' && progressVolumes > 0) variables.progressVolumes = progressVolumes
+    if (type === 'manga') variables.progressVolumes = progressVolumes
     if (notes !== undefined) variables.notes = notes
     if (startedAt) variables.startedAt = startedAt
     if (completedAt) variables.completedAt = completedAt
@@ -482,11 +492,8 @@ async function syncShikiToAlList(
     try {
       await anilistQuery(mutation, variables, true)
     } catch (e) {
-      Logger(
-        'ERROR',
-        `syncShikiToAlList: сбой SaveMediaListEntry (mediaId=${alId}, ${type})`,
-        e,
-      )
+      exportFailures++
+      Logger('ERROR', `syncShikiToAlList: сбой SaveMediaListEntry (mediaId=${alId}, ${type})`, e)
     }
     await new Promise((r) => setTimeout(r, 700))
   }
@@ -533,11 +540,8 @@ async function syncShikiToAlFavorites(
         try {
           await anilistQuery(mutation, { id: alId }, true)
         } catch (e) {
-          Logger(
-            'ERROR',
-            `syncShikiToAlFavorites: сбой ToggleFavourite (id=${alId}, ${alType})`,
-            e,
-          )
+          exportFailures++
+          Logger('ERROR', `syncShikiToAlFavorites: сбой ToggleFavourite (id=${alId}, ${alType})`, e)
         }
         await new Promise((r) => setTimeout(r, 700))
       }
@@ -554,6 +558,7 @@ async function syncShikiToAlFavorites(
         try {
           await anilistQuery(mutation, { id: alId }, true)
         } catch (e) {
+          exportFailures++
           Logger(
             'ERROR',
             `syncShikiToAlFavorites: сбой ToggleFavourite по имени (id=${alId}, ${alType})`,
@@ -582,11 +587,7 @@ function amkShikiTokens(el: HTMLElement): void {
     return m ? `${m[1]} ${m[2]} ${m[3]}` : fb
   }
   let bg = getComputedStyle(document.body).backgroundColor
-  if (
-    !bg ||
-    bg === 'transparent' ||
-    bg.replace(/\s/g, '').includes('rgba(0,0,0,0)')
-  )
+  if (!bg || bg === 'transparent' || bg.replace(/\s/g, '').includes('rgba(0,0,0,0)'))
     bg = getComputedStyle(document.documentElement).backgroundColor
   const bgT = triple(bg, '18 18 28')
   const txT = triple(getComputedStyle(document.body).color, '226 232 240')
@@ -615,7 +616,9 @@ async function openExportModal(btn: HTMLButtonElement): Promise<void> {
   if (document.getElementById('shiki-export-overlay')) return
   const urlPath = window.location.pathname.split('/')
   const dUser =
-    urlPath.length > 1 && urlPath[1] && !['animes', 'mangas', 'forum'].includes(urlPath[1]) ? urlPath[1] : ''
+    urlPath.length > 1 && urlPath[1] && !['animes', 'mangas', 'forum'].includes(urlPath[1])
+      ? urlPath[1]
+      : ''
   const tok = GM_getValue('AL_TOKEN', '') as string
 
   const sw = (id: string, on = true) =>
@@ -671,7 +674,8 @@ async function openExportModal(btn: HTMLButtonElement): Promise<void> {
   document.getElementById('se-gen-btn')!.onclick = () => {
     const cid = (document.getElementById('se-gen-client') as HTMLInputElement).value.trim()
     if (!cid) return alert('Введите Client ID')
-    const authUrl = 'https://anilist.co/api/v2/oauth/authorize?client_id=' + cid + '&response_type=token'
+    const authUrl =
+      'https://anilist.co/api/v2/oauth/authorize?client_id=' + cid + '&response_type=token'
     const authLink = document.createElement('a')
     authLink.href = authUrl
     authLink.target = '_blank'
@@ -700,6 +704,7 @@ async function openExportModal(btn: HTMLButtonElement): Promise<void> {
     btn.disabled = true
 
     try {
+      exportFailures = 0
       btn.textContent = 'Соединение с AniList...'
       const res = await anilistQuery<{ Viewer: AniListUser }>(
         'query{Viewer{id name mediaListOptions{scoreFormat}}}',
@@ -718,7 +723,7 @@ async function openExportModal(btn: HTMLButtonElement): Promise<void> {
       )
         return
 
-      let historyDates: Record<number, HistoryDates> | null = null
+      let historyDates: Record<string, HistoryDates> | null = null
       if (exportDates && (exportAnime || exportManga))
         historyDates = await fetchShikiHistoryDates(shikiId, btn)
       if (exportAnime) {
@@ -734,20 +739,28 @@ async function openExportModal(btn: HTMLButtonElement): Promise<void> {
         const shikiFavs = await fetchShikimoriFavorites(user)
         await syncShikiToAlFavorites(shikiFavs, exFavs, btn)
       }
-      alert('Экспорт успешно завершен!')
+      if (exportFailures > 0) {
+        alert(
+          `Экспорт завершён частично: ${exportFailures} операций не выполнено. Подробности в логгере.`,
+        )
+      } else {
+        alert('Экспорт успешно завершен!')
+      }
     } catch (e) {
       Logger('ERROR', 'Экспорт Shikimori → AniList: ошибка выполнения', e)
       alert('Ошибка: ' + ((e as Error).message || e))
     } finally {
       btn.disabled = false
-      setTimeout(() => (btn.textContent = 'ЭКСПОРТ'), 2000)
+      setTimeout(() => (btn.textContent = 'Экспорт'), 2000)
     }
   }
 }
 
 export function initExporter(): void {
+  if (document.getElementById('animori-export-button')) return
   Logger('INFO', 'Инициализация модуля Экспортера')
   const btn = document.createElement('button')
+  btn.id = 'animori-export-button'
   btn.textContent = 'Экспорт'
   btn.style.cssText =
     'position:fixed;bottom:20px;left:20px;z-index:9999;padding:11px 20px;background:rgba(var(--color-foreground),0.8);backdrop-filter:blur(16px) saturate(170%);-webkit-backdrop-filter:blur(16px) saturate(170%);border:1px solid rgba(var(--color-text-light),0.2);color:rgb(var(--color-text));border-radius:12px;cursor:pointer;font-weight:600;font-size:14px;box-shadow:0 4px 20px rgba(0,0,0,0.18);transition:border-color .2s, color .2s;letter-spacing:0.3px;'

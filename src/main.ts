@@ -1,29 +1,25 @@
-/**
- * AniMori — точка входа (п. 1.8 плана).
- *
- * ВАЖНО (аудит, риск №1 — синхронность хранилища):
- * bootstrap() сразу спроектирован асинхронным. Ни MutationObserver переводчика,
- * ни рендеринг UI не должны стартовать до того, как настройки полностью
- * загружены (await). В юзерскрипте GM_getValue синхронен, но в Tauri
- * хранилище строго асинхронное — если заложиться на синхронное чтение сейчас,
- * на Этапе 3 все флаги превратятся в undefined.
- *
- * На данный момент — каркас. Логика переносится из animori.user.js пошагово
- * в рамках пунктов 1.3—1.7.
- */
+/** AniMori userscript entry point. */
 
 import './style.scss'
+import { IS_ANILIST, IS_SHIKI } from './core/constants'
+import { initExporter } from './features/exporter'
+import { openCompareModal } from './features/scanner'
+
+function initScannerLauncher(): void {
+  if (document.getElementById('animori-compare-button')) return
+  const btn = document.createElement('button')
+  btn.id = 'animori-compare-button'
+  btn.type = 'button'
+  btn.textContent = 'Сравнить списки'
+  btn.style.cssText =
+    'position:fixed;bottom:20px;left:20px;z-index:9999;padding:11px 20px;background:rgba(var(--color-foreground),.9);border:1px solid rgba(var(--color-text-light),.2);color:rgb(var(--color-text));border-radius:12px;cursor:pointer;font-weight:600;box-shadow:0 4px 20px rgba(0,0,0,.18)'
+  btn.onclick = () => void openCompareModal()
+  document.body.appendChild(btn)
+}
 
 async function bootstrap(): Promise<void> {
-  // 1) Настройки — строго до всего остального (см. риск №1 выше).
-  // await loadSettings()
-  // 2) Логгер и глобальные перехватчики ошибок (п. 1.5).
-  // initLogger()
-  // 3) IndexedDB и миграции схемы (п. 1.4).
-  // await openDB()
-  // 4) Маршрутизация по среде выполнения (повторяет логику init()).
-  // if (IS_ANILIST) await initAniList()
-  // if (IS_SHIKI) await initShikimori()
+  if (IS_SHIKI) initExporter()
+  if (IS_ANILIST) initScannerLauncher()
 }
 
 void bootstrap()

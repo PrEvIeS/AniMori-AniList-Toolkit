@@ -1,9 +1,15 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import monkey from 'vite-plugin-monkey'
 
 // Метаданные ниже перенесены 1:1 из шапки монолита animori.user.js (строки 1-25).
 // Не добавляй @match/@grant/@connect "на всякий случай": лишние права ломают ревью GreasyFork.
 export default defineConfig(({ mode }) => ({
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   define: {
     // Этап 3-4: выбор реализации Bridge на этапе сборки.
     __ANIMORI_PLATFORM__: JSON.stringify(mode === 'tauri' ? 'tauri' : 'userscript'),

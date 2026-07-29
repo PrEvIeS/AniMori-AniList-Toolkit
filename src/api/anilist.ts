@@ -79,7 +79,14 @@ export async function anilistQuery<T = unknown>(
         if (res.status === 200) {
           const timeTaken = Math.round(performance.now() - startTime)
           Logger('API', `[DONE] GraphQL запрос (AniList) выполнен за ${timeTaken}ms`)
-          resolve(JSON.parse(res.responseText) as GraphQLResponse<T>)
+          const payload = JSON.parse(res.responseText) as GraphQLResponse<T>
+          if (payload.errors) {
+            const message = JSON.stringify(payload.errors)
+            Logger('ERROR', 'AniList GraphQL Error', payload.errors)
+            reject(new Error(`AniList GraphQL Error: ${message}`))
+            return
+          }
+          resolve(payload)
         } else if (res.status === 429) {
           const match = res.responseHeaders?.match(/retry-after:\s*(\d+)/i)
           const waitTime = match?.[1] ? parseInt(match[1]) * 1000 : 5000

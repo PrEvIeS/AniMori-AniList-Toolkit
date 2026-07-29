@@ -80,5 +80,6 @@ export async function fetchShiki<T = unknown>(path: string): Promise<ShikiRespon
     }
   }
 
-  return lastNotFound ?? { data: null, domain: null }
+  if (lastNotFound) return lastNotFound
+  throw new Error(`Все зеркала Shikimori недоступны для ${path}`)
 }

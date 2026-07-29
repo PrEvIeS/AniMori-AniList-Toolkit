@@ -513,11 +513,12 @@ function cmpRenderDiff(
   diff: CmpDiffResult,
   ignore: Set<number>,
   catalog: { alHas: Set<number>; shikiHas: Set<number> } | null,
+  ignoreSign: 1 | -1,
 ): string {
   const notIgn = <T extends { id: number }>(arr: T[]): T[] =>
-    arr.filter((x) => !ignore.has(Number(x.id)))
+    arr.filter((x) => !ignore.has(Number(x.id) * ignoreSign))
   const ignBtn = (id: number) =>
-    `<span class="amk-x cmp-ignore" data-id="${id}" title="Скрыть (в игнор)">✕</span>`
+    `<span class="amk-x cmp-ignore" data-id="${id * ignoreSign}" title="Скрыть (в игнор)">✕</span>`
   const row = (x: { id: number; title: string }, right?: string) =>
     `<div class="amk-diffrow"><span class="amk-name">${cmpEsc(x.title)}</span><span class="amk-meta">${right || ''}</span>${ignBtn(x.id)}</div>`
   const sec = (
@@ -555,8 +556,12 @@ function cmpRenderDiff(
       (x) => row(x, cmpEsc((x as CmpDiffItem).info)),
     )
   } else {
-    h += sec('В списке только на Shikimori', diff.onlyShiki, (x) => row(x, cmpEsc((x as CmpDiffItem).info)))
-    h += sec('В списке только на AniList', diff.onlyAl, (x) => row(x, cmpEsc((x as CmpDiffItem).info)))
+    h += sec('В списке только на Shikimori', diff.onlyShiki, (x) =>
+      row(x, cmpEsc((x as CmpDiffItem).info)),
+    )
+    h += sec('В списке только на AniList', diff.onlyAl, (x) =>
+      row(x, cmpEsc((x as CmpDiffItem).info)),
+    )
   }
   const rel = [...diff.onlyShikiRel, ...diff.onlyAlRel]
   h += sec('Связано с уже отслеживаемым (деление на сезоны / сиквелы)', rel, (x) =>
@@ -565,12 +570,17 @@ function cmpRenderDiff(
   h += sec('Разный статус', diff.status, (x) =>
     row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
   )
-  h += sec('Разная оценка', diff.score, (x) => row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`))
+  h += sec('Разная оценка', diff.score, (x) =>
+    row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
+  )
   h += sec('Разный прогресс', diff.progress, (x) =>
     row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
   )
   h += sec('Разные пересмотры', diff.rewatch, (x) =>
-    row(x, `S: ${cmpEsc((x as CmpDiffItemRewatch).shiki)} | A: ${cmpEsc((x as CmpDiffItemRewatch).al)}`),
+    row(
+      x,
+      `S: ${cmpEsc((x as CmpDiffItemRewatch).shiki)} | A: ${cmpEsc((x as CmpDiffItemRewatch).al)}`,
+    ),
   )
   h += sec('Разные заметки', diff.notes, (x) =>
     row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
@@ -594,32 +604,32 @@ function cmpRenderFavs(
   favM: CmpFavDiffResult,
   ignore: Set<number>,
 ): string {
-  const notIgn = <T extends { id: number }>(arr: T[]): T[] =>
-    arr.filter((x) => !ignore.has(Number(x.id)))
-  const ignBtn = (id: number) =>
-    `<span class="amk-x cmp-ignore" data-id="${id}" title="Скрыть (в игнор)">✕</span>`
-  const sec = (label: string, arr: Array<{ id: number; title: string }>): string => {
-    const a = notIgn(arr)
+  const notIgn = <T extends { id: number }>(arr: T[], sign: 1 | -1): T[] =>
+    arr.filter((x) => !ignore.has(Number(x.id) * sign))
+  const ignBtn = (id: number, sign: 1 | -1) =>
+    `<span class="amk-x cmp-ignore" data-id="${id * sign}" title="Скрыть (в игнор)">✕</span>`
+  const sec = (label: string, arr: Array<{ id: number; title: string }>, sign: 1 | -1): string => {
+    const a = notIgn(arr, sign)
     if (!a.length) return ''
     const items = a
       .slice(0, 500)
       .map(
         (x) =>
-          `<div class="amk-diffrow"><span class="amk-name">${cmpEsc(x.title)}</span>${ignBtn(x.id)}</div>`,
+          `<div class="amk-diffrow"><span class="amk-name">${cmpEsc(x.title)}</span>${ignBtn(x.id, sign)}</div>`,
       )
       .join('')
     return `<details class="amk-collapse"><summary>${cmpEsc(label)} <span class="amk-count">(${a.length})</span></summary><div class="amk-collapse-body">${items}</div></details>`
   }
   let h = `<div style="font-size:13px;margin-bottom:6px;">Избранное — Аниме: <b style="color:rgb(var(--color-pink));">${favA.shikiCount}</b> Shiki / <b style="color:rgb(var(--color-blue));">${favA.alCount}</b> AniList · Манга: <b style="color:rgb(var(--color-pink));">${favM.shikiCount}</b> / <b style="color:rgb(var(--color-blue));">${favM.alCount}</b></div>`
-  h += sec('Избранное аниме: только в Shikimori', favA.onlyShiki)
-  h += sec('Избранное аниме: только в AniList', favA.onlyAl)
-  h += sec('Избранное манга: только в Shikimori', favM.onlyShiki)
-  h += sec('Избранное манга: только в AniList', favM.onlyAl)
+  h += sec('Избранное аниме: только в Shikimori', favA.onlyShiki, 1)
+  h += sec('Избранное аниме: только в AniList', favA.onlyAl, 1)
+  h += sec('Избранное манга: только в Shikimori', favM.onlyShiki, -1)
+  h += sec('Избранное манга: только в AniList', favM.onlyAl, -1)
   if (
-    !notIgn(favA.onlyShiki).length &&
-    !notIgn(favA.onlyAl).length &&
-    !notIgn(favM.onlyShiki).length &&
-    !notIgn(favM.onlyAl).length
+    !notIgn(favA.onlyShiki, 1).length &&
+    !notIgn(favA.onlyAl, 1).length &&
+    !notIgn(favM.onlyShiki, -1).length &&
+    !notIgn(favM.onlyAl, -1).length
   )
     h += `<div style="opacity:.6;padding:8px;">Избранное совпадает.</div>`
   return h
@@ -655,12 +665,15 @@ function cmpRender(resultEl: HTMLElement): void {
   const favChar = cmpNameDiff(shFav.characters || [], alFavChar || [])
   const favStaff = cmpNameDiff(shFav.people || [], alFavStaff || [])
   const titleOf = (id: number | string): string => {
-    const numId = Number(id)
-    for (const m of [shA, alA, shM, alM]) {
+    const signedId = Number(id)
+    const numId = Math.abs(signedId)
+    const mediaMaps = signedId < 0 ? [shM, alM] : [shA, alA]
+    for (const m of mediaMaps) {
       const e = m.get(numId)
       if (e) return e.title
     }
-    for (const fm of [shFav.anime, alFavA, shFav.manga, alFavM]) {
+    const favMaps = signedId < 0 ? [shFav.manga, alFavM] : [shFav.anime, alFavA]
+    for (const fm of favMaps) {
       if (fm.has(numId)) return fm.get(numId) ?? ''
     }
     return 'MAL#' + numId
@@ -680,9 +693,9 @@ function cmpRender(resultEl: HTMLElement): void {
     <div style="margin-top:6px;">${rawHTML(cmpRenderFavs(favA, favM, ignore))}</div>
     ${rawHTML(cmpRenderNameFavs('Избранные персонажи', favChar))}${rawHTML(cmpRenderNameFavs('Избранный стафф', favStaff))}
     <h3 style="margin:16px 0 4px;color:rgb(var(--color-text));">Аниме</h3>
-    ${rawHTML(cmpRenderDiff(dA, ignore, catalog))}
+    ${rawHTML(cmpRenderDiff(dA, ignore, catalog, 1))}
     <h3 style="margin:16px 0 4px;color:rgb(var(--color-text));">Манга</h3>
-    ${rawHTML(cmpRenderDiff(dM, ignore, catalog))} ${rawHTML(ignHtml)}
+    ${rawHTML(cmpRenderDiff(dM, ignore, catalog, -1))} ${rawHTML(ignHtml)}
     <div style="opacity:.5;font-size:11px;margin-top:14px;line-height:1.5;">
       «В списке только на одной площадке» — различие каталогов/списков, не ошибка синка. «Связано с
       уже отслеживаемым» — вероятно деление на сезоны или сиквелы (по связям AniList). Крестик ✕ —

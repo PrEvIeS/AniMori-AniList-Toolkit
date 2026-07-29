@@ -17,6 +17,11 @@ let anime365RateLimitPause = 0
 let anime365FailStreak = 0
 let anime365Disabled = false
 
+/** Собирает абсолютный адрес для конкретного зеркала. */
+function mirrorUrl(domain: string, path: string): string {
+  return 'https://' + domain + path
+}
+
 /** Отключён ли источник до конца сессии (для отображения в настройках). */
 export function isAnime365Disabled(): boolean {
   return anime365Disabled
@@ -69,7 +74,7 @@ export async function fetchAnime365ByMal(
       const res = await new Promise<Attempt>((resolve, reject) => {
         GM_xmlhttpRequest({
           method: 'GET',
-          url: `https://${domain}/api/series?myAnimeListId=${malId}&limit=1`,
+          url: mirrorUrl(domain, `/api/series?myAnimeListId=${malId}&limit=1`),
           timeout: 5000,
           onload: (r) => {
             if (r.status === 200)
@@ -126,7 +131,7 @@ export async function fetchAnime365ByMal(
         return {
           russian: item.titles?.ru ?? '',
           description: desc,
-          url: item.url || `https://${domain}/`,
+          url: item.url || mirrorUrl(domain, '/'),
           domain,
         }
       }

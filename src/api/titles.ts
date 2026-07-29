@@ -38,7 +38,7 @@ export async function resolveTitle(
         return {
           russian: shiki.data.russian,
           description: shiki.data.description ?? null,
-          url: `https://${shiki.domain}${shiki.data.url ?? ''}`,
+          url: 'https://' + (shiki.domain ?? '') + (shiki.data.url ?? ''),
           sourceName: 'Shikimori',
         }
       }

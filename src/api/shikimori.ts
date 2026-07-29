@@ -14,6 +14,11 @@ import { Logger } from '../utils/logger'
 /** Unix-время, до которого запросы к Shikimori приостановлены после 429. */
 let shikiRateLimitPause = 0
 
+/** Собирает абсолютный адрес для конкретного зеркала. */
+function mirrorUrl(domain: string, path: string): string {
+  return 'https://' + domain + path
+}
+
 export interface ShikiResponse<T = unknown> {
   /** null означает "не найдено" либо полный сбой всех зеркал. */
   data: T | null
@@ -42,7 +47,7 @@ export async function fetchShiki<T = unknown>(path: string): Promise<ShikiRespon
       const res = await new Promise<Attempt<T>>((resolve, reject) => {
         GM_xmlhttpRequest({
           method: 'GET',
-          url: `https://${domain}${path}`,
+          url: mirrorUrl(domain, path),
           timeout: 5000,
           onload: (r) => {
             if (r.status === 200) resolve({ data: JSON.parse(r.responseText) as T, domain })

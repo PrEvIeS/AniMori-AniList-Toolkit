@@ -8,6 +8,7 @@ import { loadSettings, settings } from './core/settings'
 import { initExporter } from './features/exporter'
 import { initMedia, registerMediaWidget } from './features/media'
 import { playerWidget } from './features/media/player'
+import { ratingsWidget } from './features/media/ratings'
 import { openCompareModal } from './features/scanner'
 import { initTranslator } from './features/translator'
 import { Logger } from './utils/logger'
@@ -80,7 +81,9 @@ async function bootstrap(): Promise<void> {
   initTranslator()
 
   // Медиа-виджеты живут на наблюдателе переводчика, поэтому регистрируются после него.
+  // Порядок регистрации задаёт порядок монтирования блоков в сайдбаре.
   registerMediaWidget(playerWidget)
+  registerMediaWidget(ratingsWidget)
   initMedia()
 }
 

@@ -2,7 +2,7 @@
 
 > Ветка: `desktop-dev`  
 > Состояние на: 30 июля 2026 года  
-> Базовая проверенная ревизия перед документацией: `e2cc891`  
+> Базовая проверенная ревизия: `71fb01e`  
 > Версия: `1.9.1`
 
 ## Назначение
@@ -196,7 +196,48 @@ Code review показал, что чистый `tsc` не гарантиров�
 - Vite настроен на alias `@`;
 - добавлены `@types/node` и Node types для Vite config.
 
-## 12. Финальная проверка
+## 12. Translator
+
+Переводчик интерфейса вынесен из монолита (строки 2502-3060) и разделён на три файла, чтобы правила перевода, работа с DOM и lifecycle не были связаны между собой.
+
+### `6d1bfee` — rate-limit getters
+
+В `src/api/anilist.ts` и `src/api/shikimori.ts` добавлены `isAniListRateLimited()`, `pauseAniList()`, `isShikimoriRateLimited()` и `pauseShikimori()`. Сами счётчики остались приватными: очередь перевода читает состояние через функции, а не через глобальные переменные.
+
+### `dc5349e` — bootstrap
+
+`src/main.ts` пересобран в строгом порядке: `loadSettings()` → exporter на Shikimori → выход вне AniList → scanner launcher → проверка необходимости переводчика → `openDB()` → загрузка словаря → `rebuildDictionary()` → `initTranslator()`.
+
+Добавлен `loadInterfaceDictionary()`, который никогда не отклоняется: недоступный remote dictionary логируется, но не блокирует запуск остального скрипта.
+
+### `8cd3b9f` — сам переводчик
+
+- `src/features/translator/rules.ts` (319 строк) — чистые правила перевода строк: единственный экспорт `translateAdvanced()`, без DOM и без сети;
+- `src/features/translator/dom.ts` (144 строки) — `translateNode()`, `safelySetText()`, `setupVueInputInterceptor()`, `cleanShikiBB()` и константа `am-notr`;
+- `src/features/translator/index.ts` (638 строк) — очередь, кэш IndexedDB, batching AniList/Shikimori и MutationObserver.
+
+### Отличия от монолита
+
+Все отличия сознательные. В нормальном сценарии поведение совпадает с 1.9.1; большинство правок затрагивает только аварийные ветки, которые в монолите не были покрыты.
+
+1. Каждый элемент batch обрабатывается в `try/catch`. Одна ошибка сети больше не останавливает всю очередь перевода.
+2. Неизвестные ключи месяцев, дней, сезонов и единиц времени возвращают оригинальный текст вместо `undefined` в вёрстке.
+3. Оригинальное описание AniList внутри `<details>` помечено `am-notr` и не переводится повторно.
+4. `window.ensureWidgets` заменён на `registerMutationHook()`, `globalPendingQueues` — на `getPendingQueueSizes()`, флаг `activeRound` стал переменной модуля. Глобальных точек связи больше нет.
+5. Сборка ссылки на страницу персоны исправлена: в монолите был тот же дефект шаблонного URL, что чинил `1306f00`.
+6. `pending.CHR2` и `pending.STF3` упрощены с `Map` до `Set<number>`.
+
+### Проверка правил
+
+До push правила прогнаны через изолированный smoke-скрипт на 29 реальных строках AniList, например `"Ep 5 airing in 2 days"` → `"5 серия выйдет через 2 дня"`, `"Mon Jan 15 2024"` → `"Пн, 15 января 2024 г."`, `"8.5"` → `null`. Скрипт оставлен вне репозитория: он требует заглушек для `core/*` и не является полноценным тестовым каркасом.
+
+### Инцидент неполного push
+
+Два первых пакетных push довезли только часть файлов без какой-либо ошибки. В результате `main.ts` некоторое время ссылался на несуществующий `./features/translator`, и ветка временно не собиралась.
+
+Правило на будущее: крупные файлы отправлять по одному за вызов и после push проверять содержимое каталога на ветке.
+
+## 13. Финальная проверка
 
 После `e2cc891`:
 
@@ -208,17 +249,29 @@ dist/animori.meta.js: 1.07 kB
 dist/animori.user.js: 99.16 kB (gzip 24.29 kB)
 ```
 
-До подключения features Vite обрабатывал 2 модуля, а bundle был 38.02 kB. Рост до 99.16 kB подтверждает реальное включение scanner/exporter.
+После `8cd3b9f`, проверено на машине разработчика:
 
-## 13. Инструментальные решения
+```text
+npm run typecheck — 0 ошибок
+npm run build — успешно
+Vite: 19 modules transformed
+dist/animori.meta.js: 1.07 kB
+dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
+npm run format — все файлы unchanged
+```
+
+Рост 10 → 19 модулей и 99.16 → 144.91 kB подтверждает реальное включение translator в bundle.
+
+## 14. Инструментальные решения
 
 - Prettier: `semi: false`, `singleQuote: true`, `printWidth: 100`.
 - Монолит и крупные data files исключены из форматирования.
 - `npm audit fix --force` не применялся из-за риска неконтролируемого major upgrade.
 - Из-за отсутствия DNS в sandbox часть build-проверок выполнялась на машине разработчика.
 - Временная GitHub Actions automation аудита не запускалась от push интеграции и была полностью удалена вместе с payload.
+- Sandbox TypeScript новее репозиторного `^5.6.2` и не принимает `baseUrl`. Корневой `tsconfig.json` не правился; обход делался только в черновом каталоге.
 
-## 14. Состояние этапа 1
+## 15. Состояние этапа 1
 
 ### Завершено
 
@@ -236,41 +289,43 @@ dist/animori.user.js: 99.16 kB (gzip 24.29 kB)
 - [x] exporter;
 - [x] scanner/exporter wiring;
 - [x] hardening audit;
-- [x] clean typecheck/build.
+- [x] `src/features/translator/`;
+- [x] translator wiring в `main.ts`;
+- [x] чистые typecheck/build с translator.
 
 ### Осталось
 
-- [ ] `src/features/translator/`;
 - [ ] `src/features/media/`;
 - [ ] `src/features/search/` и dictionary capture;
 - [ ] UI logger через `registerLogSink()`;
-- [ ] полноценный bootstrap: settings, IndexedDB, translator, SPA lifecycle;
+- [ ] полноценный bootstrap: SPA lifecycle, URL polling, garbage collector;
 - [ ] удалить `GM_addStyle` grant после проверки runtime dependencies;
 - [ ] проверить `src/_extracted_style.css`;
-- [ ] удалить лишние `.gitkeep`;
-- [ ] исправить `THEMES_` против `THEMES2_`;
-- [ ] browser smoke-tests scanner/exporter.
+- [ ] удалить лишние `.gitkeep`, включая `src/features/translator/.gitkeep`;
+- [ ] удалить случайно закоммиченные `exporter-block.txt` и `scanner-current.txt` (коммит `71fb01e`) и добавить их в `.gitignore`;
+- [ ] исправить `THEMES_` против `THEMES2_`: `getDbStats` всегда показывает 0 тем;
+- [ ] browser smoke-tests scanner/exporter/translator.
 
-## 15. Обязательные риски
+## 16. Обязательные риски
 
 Подробности: [`AUDITION.md`](./refactoring/AUDITION.md).
 
 1. Асинхронное Tauri storage: UI ждёт `await bridge.storage.getAll()`.
 2. Rust HTTP не получает cookies WebView автоматически.
 3. React может уничтожать Vue widgets: нужен `unmount()` и remount.
-4. Vue roots исключаются из MutationObserver translator.
+4. Vue roots исключаются из MutationObserver translator: константа `am-notr` теперь живёт в `translator/dom.ts` и должна использоваться всеми Vue-компонентами этапа 2.
 5. Linux WebKitGTK может требовать GStreamer H.264/AAC codecs.
 6. Desktop logger требует ring buffer и streaming в файл.
 
-## 16. Следующий шаг
+## 17. Следующий шаг
 
-Продолжить этап 1 с `src/features/translator/`:
+Продолжить этап 1 с `src/features/media/` (строки 3061-3733 монолита):
 
-1. извлечь `initTranslator()` и связанные функции;
-2. сохранить `.am-notr` guard;
-3. использовать `core/dictionary.ts`;
-4. отделить translation logic от observer/lifecycle;
-5. типизировать DOM traversal без `any`;
+1. извлечь `injectMediaExtensions()` и связанные виджеты;
+2. заменить глобальный `window.ensureWidgets` подпиской `registerMutationHook()` из translator;
+3. учесть РИСК №3: виджеты должны переустанавливаться после пересборки блоков AniList;
+4. типизировать DOM traversal без `any`;
+5. проверить `THEMES_` против `THEMES2_` при переносе кэша тем;
 6. подключить к bootstrap после чистого typecheck/build;
 7. зафиксировать отдельным атомарным commit.
 

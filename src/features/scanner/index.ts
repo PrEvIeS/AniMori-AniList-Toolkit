@@ -7,7 +7,7 @@ import { Logger } from '../../utils/logger'
 import { html, rawHTML } from '../../utils/dom'
 import { anilistQuery } from '../../api/anilist'
 import { fetchShiki } from '../../api/shikimori'
-import type { CmpAniListEntry, CmpShikiEntry } from '../../core/types'
+import type { CmpAniListEntry, CmpShikiEntry, ShikiStatus } from '../../core/types'
 
 const CMP_STATUS_ORDER = [
   'watching',
@@ -26,7 +26,7 @@ const CMP_STATUS_LABEL: Record<string, string> = {
   dropped: 'Брошено',
   null: '—',
 }
-const AL_STATUS_MAP: Record<string, string> = {
+const AL_STATUS_MAP: Record<string, ShikiStatus> = {
   CURRENT: 'watching',
   REPEATING: 'rewatching',
   PLANNING: 'planned',
@@ -125,11 +125,12 @@ async function cmpFetchAniListList(
   for (const l of lists) {
     for (const e of l.entries ?? []) {
       const mal = e.media?.idMal
-      if (!mal) continue
+      if (!mal || !e.media) continue
+      const mappedStatus = e.status ? AL_STATUS_MAP[e.status] : null
       map.set(mal, {
         malId: mal,
         title: e.media.title?.romaji || e.media.title?.english || 'MAL#' + mal,
-        status: AL_STATUS_MAP[e.status ?? ''] || null,
+        status: mappedStatus ?? null,
         score10: e.score ? e.score / 10 : 0,
         progress: e.progress || 0,
         volumes: e.progressVolumes || 0,
@@ -175,6 +176,18 @@ async function cmpFetchAniListFavs(
   return map
 }
 
+type ShikiRateItem<T extends 'anime' | 'manga'> = {
+  status?: string
+  score?: number
+  episodes?: number
+  chapters?: number
+  volumes?: number
+  rewatches?: number
+  text?: string
+} & {
+  [K in T]: { id?: number; russian?: string; name?: string }
+}
+
 async function cmpFetchShikiList(
   userId: number | string,
   type: 'anime' | 'manga',
@@ -182,28 +195,20 @@ async function cmpFetchShikiList(
   const map = new Map<number, CmpShikiEntry>()
   let page = 1
   while (true) {
-    const r = await fetchShiki<
-      Array<{
-        status?: string
-        score?: number
-        episodes?: number
-        chapters?: number
-        volumes?: number
-        rewatches?: number
-        text?: string
-        [K in typeof type]?: { id?: number; russian?: string; name?: string }
-      }>
-    >(`/api/users/${userId}/${type}_rates?limit=5000&page=${page}`)
+    const r = await fetchShiki<Array<ShikiRateItem<typeof type>>>(
+      `/api/users/${userId}/${type}_rates?limit=5000&page=${page}`,
+    )
     const data = r.data
     if (!Array.isArray(data) || data.length === 0) break
     for (const it of data) {
       const media = it[type]
       if (!media?.id) continue
       const mal = media.id
+      const mappedStatus = it.status as ShikiStatus | null
       map.set(mal, {
         malId: mal,
         title: media.russian || media.name || 'MAL#' + mal,
-        status: it.status || null,
+        status: mappedStatus || null,
         score10: it.score || 0,
         progress: type === 'anime' ? it.episodes || 0 : it.chapters || 0,
         volumes: type === 'manga' ? it.volumes || 0 : 0,
@@ -380,7 +385,10 @@ function cmpStats(map: Map<number, { status: string | null; score10: number }>):
   let scored = 0,
     sum = 0
   for (const e of map.values()) {
-    if (e.status && st[e.status] !== undefined) st[e.status]++
+    if (e.status && st[e.status] !== undefined) {
+      const count = st[e.status]
+      if (count !== undefined) st[e.status] = count + 1
+    }
     if (e.score10 > 0) {
       scored++
       sum += e.score10
@@ -389,16 +397,20 @@ function cmpStats(map: Map<number, { status: string | null; score10: number }>):
   return { total: map.size, byStatus: st, mean: scored ? sum / scored : 0 }
 }
 
+type CmpDiffItem = { id: number; title: string; info: string }
+type CmpDiffItemPair = { id: number; title: string; shiki: string; al: string }
+type CmpDiffItemRewatch = { id: number; title: string; shiki: number; al: number }
+
 interface CmpDiffResult {
-  onlyShiki: Array<{ id: number; title: string; info: string }>
-  onlyShikiRel: Array<{ id: number; title: string; info: string }>
-  onlyAl: Array<{ id: number; title: string; info: string }>
-  onlyAlRel: Array<{ id: number; title: string; info: string }>
-  status: Array<{ id: number; title: string; shiki: string; al: string }>
-  score: Array<{ id: number; title: string; shiki: string; al: string }>
-  progress: Array<{ id: number; title: string; shiki: string; al: string }>
-  rewatch: Array<{ id: number; title: string; shiki: number; al: number }>
-  notes: Array<{ id: number; title: string; shiki: string; al: string }>
+  onlyShiki: CmpDiffItem[]
+  onlyShikiRel: CmpDiffItem[]
+  onlyAl: CmpDiffItem[]
+  onlyAlRel: CmpDiffItem[]
+  status: CmpDiffItemPair[]
+  score: CmpDiffItemPair[]
+  progress: CmpDiffItemPair[]
+  rewatch: CmpDiffItemRewatch[]
+  notes: CmpDiffItemPair[]
 }
 function cmpDiff(
   shiki: Map<number, CmpShikiEntry>,
@@ -486,9 +498,11 @@ async function cmpResolveShikiUser(login: string): Promise<number> {
 
 function cmpRenderSummary(label: string, sh: CmpStats, al: CmpStats): string {
   const rows = CMP_STATUS_ORDER.map((s) => {
-    const delta = al.byStatus[s] - sh.byStatus[s]
+    const shCount = sh.byStatus[s] ?? 0
+    const alCount = al.byStatus[s] ?? 0
+    const delta = alCount - shCount
     const deltaStr = delta > 0 ? '+' + delta : delta < 0 ? String(delta) : ''
-    return `<tr><td>${CMP_STATUS_LABEL[s]}</td><td>${sh.byStatus[s]}</td><td>${al.byStatus[s]}</td><td style="color:rgb(var(--color-text-light));">${deltaStr}</td></tr>`
+    return `<tr><td>${CMP_STATUS_LABEL[s]}</td><td>${shCount}</td><td>${alCount}</td><td style="color:rgb(var(--color-text-light));">${deltaStr}</td></tr>`
   }).join('')
   const totalDelta = al.total - sh.total
   const totalDeltaStr = totalDelta !== 0 ? String(totalDelta) : ''
@@ -508,8 +522,8 @@ function cmpRenderDiff(
     `<div class="amk-diffrow"><span class="amk-name">${cmpEsc(x.title)}</span><span class="amk-meta">${right || ''}</span>${ignBtn(x.id)}</div>`
   const sec = (
     label: string,
-    arr: Array<{ id: number; title: string; info?: string }>,
-    fmt: (x: { id: number; title: string; info?: string }) => string,
+    arr: Array<{ id: number; title: string }>,
+    fmt: (x: { id: number; title: string }) => string,
   ): string => {
     const a = notIgn(arr)
     if (!a.length) return ''
@@ -523,57 +537,54 @@ function cmpRenderDiff(
     h += sec(
       'Только на Shikimori — ЕСТЬ в каталоге AniList (можно добавить)',
       diff.onlyShiki.filter((x) => catalog.alHas.has(Number(x.id))),
-      (x) => row(x, cmpEsc(x.info)),
+      (x) => row(x, cmpEsc((x as CmpDiffItem).info)),
     )
     h += sec(
       'Только на Shikimori — НЕТ в каталоге AniList',
       diff.onlyShiki.filter((x) => !catalog.alHas.has(Number(x.id))),
-      (x) => row(x, cmpEsc(x.info)),
+      (x) => row(x, cmpEsc((x as CmpDiffItem).info)),
     )
     h += sec(
       'Только на AniList — ЕСТЬ в каталоге Shikimori (можно добавить)',
       diff.onlyAl.filter((x) => catalog.shikiHas.has(Number(x.id))),
-      (x) => row(x, cmpEsc(x.info)),
+      (x) => row(x, cmpEsc((x as CmpDiffItem).info)),
     )
     h += sec(
       'Только на AniList — НЕТ в каталоге Shikimori',
       diff.onlyAl.filter((x) => !catalog.shikiHas.has(Number(x.id))),
-      (x) => row(x, cmpEsc(x.info)),
+      (x) => row(x, cmpEsc((x as CmpDiffItem).info)),
     )
   } else {
-    h += sec('В списке только на Shikimori', diff.onlyShiki, (x) => row(x, cmpEsc(x.info)))
-    h += sec('В списке только на AniList', diff.onlyAl, (x) => row(x, cmpEsc(x.info)))
+    h += sec('В списке только на Shikimori', diff.onlyShiki, (x) => row(x, cmpEsc((x as CmpDiffItem).info)))
+    h += sec('В списке только на AniList', diff.onlyAl, (x) => row(x, cmpEsc((x as CmpDiffItem).info)))
   }
   const rel = [...diff.onlyShikiRel, ...diff.onlyAlRel]
   h += sec('Связано с уже отслеживаемым (деление на сезоны / сиквелы)', rel, (x) =>
-    row(x, cmpEsc(x.info)),
+    row(x, cmpEsc((x as CmpDiffItem).info)),
   )
   h += sec('Разный статус', diff.status, (x) =>
-    row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`),
+    row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
   )
-  h += sec('Разная оценка', diff.score, (x) => row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`))
+  h += sec('Разная оценка', diff.score, (x) => row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`))
   h += sec('Разный прогресс', diff.progress, (x) =>
-    row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`),
+    row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
   )
   h += sec('Разные пересмотры', diff.rewatch, (x) =>
-    row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`),
+    row(x, `S: ${cmpEsc((x as CmpDiffItemRewatch).shiki)} | A: ${cmpEsc((x as CmpDiffItemRewatch).al)}`),
   )
   h += sec('Разные заметки', diff.notes, (x) =>
-    row(x, `S: ${cmpEsc(x.shiki)} | A: ${cmpEsc(x.al)}`),
+    row(x, `S: ${cmpEsc((x as CmpDiffItemPair).shiki)} | A: ${cmpEsc((x as CmpDiffItemPair).al)}`),
   )
-  const total = (
-    [
-      'onlyShiki',
-      'onlyAl',
-      'onlyShikiRel',
-      'onlyAlRel',
-      'status',
-      'score',
-      'progress',
-      'rewatch',
-      'notes',
-    ] as const
-  ).reduce((n, k) => n + notIgn(diff[k]).length, 0)
+  const total =
+    notIgn(diff.onlyShiki).length +
+    notIgn(diff.onlyAl).length +
+    notIgn(diff.onlyShikiRel).length +
+    notIgn(diff.onlyAlRel).length +
+    notIgn(diff.status).length +
+    notIgn(diff.score).length +
+    notIgn(diff.progress).length +
+    notIgn(diff.rewatch).length +
+    notIgn(diff.notes).length
   if (!total) h += `<div style="opacity:.6;padding:8px;">Расхождений нет.</div>`
   return h
 }
@@ -707,7 +718,8 @@ async function cmpRunScan(
     if (!alName) {
       setStatus('Определяю пользователя AniList...')
       const v = await anilistQuery<{ Viewer?: { name?: string } }>('query{Viewer{name}}', {}, true)
-      alName = v?.data?.Viewer?.name ?? ''
+      const n = v && v.data && v.data.Viewer && v.data.Viewer.name
+      alName = n ?? ''
       if (!alName)
         throw new Error(
           'Не удалось определить AniList-пользователя. Укажите имя вручную или задайте токен в настройках.',
@@ -801,9 +813,9 @@ export async function openCompareModal(): Promise<void> {
   const shikiInput = document.getElementById('am-cmp-shiki') as HTMLInputElement
   const alInput = document.getElementById('am-cmp-al') as HTMLInputElement
   shikiInput.value = GM_getValue('SHIKI_LOGIN', '') as string
-  anilistQuery('query{Viewer{name}}', {}, true)
+  anilistQuery<{ Viewer?: { name?: string } }>('query{Viewer{name}}', {}, true)
     .then((v) => {
-      const n = v && v.data && v.data.Viewer && (v.data.Viewer as { name?: string }).name
+      const n = v?.data?.Viewer?.name
       if (n && !alInput.value) alInput.placeholder = n + ' (по токену)'
     })
     .catch(() => {})

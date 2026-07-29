@@ -307,8 +307,7 @@ export async function resolveShikiPersonByMedia(
   personData: AniListPersonRef,
   type: 'characters' | 'staff',
 ): Promise<PersonCandidate | null> {
-  const mediaNodes =
-    (type === 'characters' ? personData.media : personData.staffMedia)?.nodes ?? []
+  const mediaNodes = (type === 'characters' ? personData.media : personData.staffMedia)?.nodes ?? []
   const mediaRefs = mediaNodes
     .filter((m) => m.idMal)
     .map((m) => ({ id: m.idMal as number, kind: m.type === 'MANGA' ? 'mangas' : 'animes' }))

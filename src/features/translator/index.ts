@@ -1,0 +1,638 @@
+// Этап 1 п.1.9: переводчик — очередь, кэш и наблюдатель (строки 2502-3060 монолита).
+//
+// Что здесь происходит, по шагам:
+//   1) MutationObserver видит новые узлы страницы и переводит интерфейс по словарю;
+//   2) debouncedFindContent собирает со страницы ссылки на тайтлы/персонажей/авторов;
+//   3) queueContent смотрит в кэш IndexedDB и кладёт в очередь только промахи;
+//   4) processTransQueue берёт пачку, спрашивает AniList и Shikimori, кладёт в кэш;
+//   5) applyTranslation подставляет русское название в конкретные элементы.
+//
+// Отличия от монолита (все сознательные):
+//   - глобальный window.ensureWidgets заменён на подписку registerMutationHook():
+//     модуль медиа-виджетов подпишется сам, когда будет вынесен;
+//   - globalPendingQueues наружу не торчит, вместо него getPendingQueueSizes();
+//   - флаг activeRound висел на самой функции, теперь это переменная модуля;
+//   - каждый элемент пачки обрабатывается в try/catch: одна битая карточка больше
+//     не роняет всю очередь перевода (в монолите один сбой сети мог её заморозить).
+//
+// РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
+// обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
+
+import { anilistQuery, isAniListRateLimited } from '../../api/anilist'
+import { fetchShiki, isShikimoriRateLimited, pauseShikimori } from '../../api/shikimori'
+import {
+  fetchShikiPersonREST,
+  resolveShikiPersonByMedia,
+  type AniListPersonRef,
+  type PersonEndpoint,
+} from '../../api/shikimori-people'
+import { resolveTitle } from '../../api/titles'
+import { CACHE_TIME, SHIKI_DOMAINS } from '../../core/constants'
+import { dbGet, dbSet } from '../../core/db'
+import { registerRetranslateCallback } from '../../core/dictionary'
+import { settings } from '../../core/settings'
+import type { AniListMedia, MediaType, ShikiCacheRecord } from '../../core/types'
+import { Logger } from '../../utils/logger'
+import {
+  NO_TRANSLATE_CLASS,
+  TRANSLATABLE_ATTRS,
+  cleanShikiBB,
+  safelySetText,
+  setupVueInputInterceptor,
+  translateNode,
+} from './dom'
+
+/** Категории очереди. Они же — префиксы ключей в IndexedDB. */
+export type QueueKind = 'MED2' | 'CHR2' | 'STF3'
+
+/** Что лежит в кэше: русское имя и готовый HTML описания. */
+interface TranslationPayload {
+  ru: string
+  desc?: string
+}
+
+/** Один элемент страницы, ждущий перевода. */
+interface QueueEntry {
+  el: HTMLElement
+  /** true — это заголовок самой страницы: там же меняется и заголовок вкладки. */
+  extra: boolean
+}
+
+/** Маркер «искали, русского нет» — чтобы не долбить API по кругу. */
+const NOT_FOUND = 'NOT_FOUND'
+
+const MEDIA_BATCH = 40
+const PERSON_BATCH = 10
+
+const MEDIA_QUERY = `query ($ids: [Int]) {
+  Page {
+    media(id_in: $ids) {
+      id
+      type
+      idMal
+      seasonYear
+      title { romaji }
+    }
+  }
+}`
+
+const PERSON_QUERY: Record<'CHR2' | 'STF3', string> = {
+  CHR2: `query ($ids: [Int]) {
+  Page(page: 1, perPage: ${PERSON_BATCH}) {
+    characters(id_in: $ids) {
+      id
+      name { full native }
+      media(sort: POPULARITY_DESC, page: 1, perPage: 6) { nodes { idMal type } }
+    }
+  }
+}`,
+  STF3: `query ($ids: [Int]) {
+  Page(page: 1, perPage: ${PERSON_BATCH}) {
+    staff(id_in: $ids) {
+      id
+      name { full native }
+      staffMedia(sort: POPULARITY_DESC, page: 1, perPage: 6) { nodes { idMal type } }
+    }
+  }
+}`,
+}
+
+/** Настройки двух почти одинаковых веток: персонажи и авторы. */
+const PERSON_CONFIG: Record<
+  'CHR2' | 'STF3',
+  {
+    gqlField: 'characters' | 'staff'
+    endpoint: PersonEndpoint
+    resolveType: 'characters' | 'staff'
+  }
+> = {
+  CHR2: { gqlField: 'characters', endpoint: 'characters', resolveType: 'characters' },
+  STF3: { gqlField: 'staff', endpoint: 'people', resolveType: 'staff' },
+}
+
+interface AniListMediaRow {
+  id: number
+  type: MediaType
+  idMal: number | null
+  seasonYear?: number | null
+  title?: { romaji?: string | null }
+}
+
+type AniListPersonRow = AniListPersonRef & { id: number }
+
+// ==== Состояние модуля ====
+// Всё приватное: наружу отдаются только функции.
+
+/** Ключ вида "MED2_123" -> элементы страницы, которые надо обновить. */
+const queue = new Map<string, QueueEntry[]>()
+
+/** ID, по которым ещё не сделан запрос. */
+const pending: Record<QueueKind, Set<number>> = {
+  MED2: new Set<number>(),
+  CHR2: new Set<number>(),
+  STF3: new Set<number>(),
+}
+
+let isProcessing = false
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let mutationHookTimer: ReturnType<typeof setTimeout> | null = null
+let isStarted = false
+let mutationHook: (() => void) | null = null
+
+/**
+ * Подписка на изменения страницы. Нужна медиа-виджетам: AniList любит
+ * пересобирать блоки, и их надо вставлять заново.
+ * В монолите роль играла глобальная window.ensureWidgets.
+ */
+export function registerMutationHook(hook: (() => void) | null): void {
+  mutationHook = hook
+}
+
+/** Размеры очередей для инспектора логгера (только чтение). */
+export function getPendingQueueSizes(): Record<QueueKind, number> {
+  return { MED2: pending.MED2.size, CHR2: pending.CHR2.size, STF3: pending.STF3.size }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function totalPending(): number {
+  return pending.MED2.size + pending.CHR2.size + pending.STF3.size
+}
+
+// ==== Очередь ====
+
+/**
+ * Кладёт элемент в очередь перевода или сразу берёт готовое из кэша.
+ * @param extra true только для главного заголовка страницы.
+ */
+async function queueContent(
+  id: number,
+  kind: QueueKind,
+  el: HTMLElement,
+  extra = false,
+): Promise<void> {
+  if (el.dataset.queued === '1' && !extra) return
+  el.dataset.queued = '1'
+
+  const key = `${kind}_${id}`
+  const cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
+
+  if (cached && Date.now() - cached.ts < CACHE_TIME) {
+    const ageMin = Math.round((Date.now() - cached.ts) / 60000)
+    Logger('QUEUE', `[Cache HIT] ${key} (возраст ${ageMin} мин)`)
+    const list = queue.get(key) ?? []
+    list.push({ el, extra })
+    queue.set(key, list)
+    applyTranslation(kind, id, cached.data)
+    return
+  }
+
+  Logger('QUEUE', `[Cache MISS] ${key} ➜ Помещено в очередь перевода`)
+  const list = queue.get(key) ?? []
+  list.push({ el, extra })
+  queue.set(key, list)
+  pending[kind].add(id)
+
+  setTimeout(() => void processTransQueue(), 500)
+}
+
+/** Основной цикл: пачка за пачкой, пока очередь не опустеет. */
+async function processTransQueue(): Promise<void> {
+  if (isProcessing) return
+  isProcessing = true
+
+  try {
+    while (totalPending() > 0) {
+      Logger('QUEUE', `[Process] Запуск обработки. В ожидании: ${totalPending()} элементов.`)
+
+      // Лимит со стороны API: отступаем и пробуем позже, а не колотим в закрытую дверь.
+      if (isAniListRateLimited() || isShikimoriRateLimited()) {
+        const wait = 1000 + Math.floor(Math.random() * 500)
+        Logger('QUEUE', `[Process] Активен лимит API, повтор через ${wait}ms`)
+        setTimeout(() => void processTransQueue(), wait)
+        return
+      }
+
+      if (pending.MED2.size > 0) await processMediaBatch()
+      else if (pending.CHR2.size > 0) await processPersonBatch('CHR2')
+      else if (pending.STF3.size > 0) await processPersonBatch('STF3')
+    }
+
+    Logger('QUEUE', '[Process] Очередь пуста. Ожидание новых элементов.')
+  } finally {
+    isProcessing = false
+  }
+}
+
+/** Пачка тайтлов: один запрос в AniList на до 40 штук, дальше — поштучно в Shikimori. */
+async function processMediaBatch(): Promise<void> {
+  const ids = [...pending.MED2].slice(0, MEDIA_BATCH)
+  ids.forEach((id) => pending.MED2.delete(id))
+
+  let rows: AniListMediaRow[] = []
+  try {
+    const res = await anilistQuery<{ Page?: { media?: AniListMediaRow[] } }>(MEDIA_QUERY, { ids })
+    rows = res.data?.Page?.media ?? []
+  } catch (e) {
+    Logger('ERROR', 'Перевод названий: сбой запроса к AniList', e)
+    return
+  }
+
+  for (const row of rows) {
+    try {
+      await dbSet('malCache', { id: row.id, data: row as AniListMedia })
+
+      const resolved = row.idMal ? await resolveTitle(row.idMal, row.type) : null
+      const payload: TranslationPayload = resolved
+        ? {
+            ru: resolved.russian,
+            desc: resolved.description
+              ? cleanShikiBB(resolved.description, resolved.url, resolved.sourceName)
+              : undefined,
+          }
+        : { ru: NOT_FOUND }
+
+      await dbSet('shikiCache', { key: `MED2_${row.id}`, data: payload, ts: Date.now() })
+      applyTranslation('MED2', row.id, payload)
+    } catch (e) {
+      Logger('ERROR', `Перевод названия: сбой на id ${row.id}`, e)
+    }
+    await sleep(250)
+  }
+}
+
+/** Пачка персонажей или авторов: сначала поиск по ролям, потом по имени. */
+async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
+  const cfg = PERSON_CONFIG[kind]
+  const ids = [...pending[kind]].slice(0, PERSON_BATCH)
+  ids.forEach((id) => pending[kind].delete(id))
+
+  let rows: AniListPersonRow[] = []
+  try {
+    const res = await anilistQuery<{ Page?: Record<string, AniListPersonRow[] | undefined> }>(
+      PERSON_QUERY[kind],
+      { ids },
+    )
+    rows = res.data?.Page?.[cfg.gqlField] ?? []
+  } catch (e) {
+    Logger('ERROR', `Перевод имён (${kind}): сбой запроса к AniList`, e)
+    return
+  }
+
+  for (const row of rows) {
+    try {
+      let person: {
+        russian: string | null
+        description: string | null
+        link: string | null
+      } | null = null
+
+      // Путь 1: через роли в общих тайтлах — надёжнее всего против тёзок.
+      const byMedia = await resolveShikiPersonByMedia(row, cfg.resolveType)
+      if (byMedia?.id) {
+        const details = await fetchShiki<{ description?: string | null; url?: string | null }>(
+          `/api/${cfg.endpoint}/${byMedia.id}`,
+        )
+        person = {
+          russian: byMedia.russian ?? null,
+          description: details.data?.description ?? null,
+          link: buildPersonLink(details.domain, details.data?.url ?? null),
+        }
+      } else {
+        // Путь 2: поиск по имени со всеми вариантами порядка слов.
+        const res = await fetchShikiPersonREST(
+          cfg.endpoint,
+          row.name.full,
+          row.name.native,
+          collectTargetMalIds(row, cfg.resolveType),
+        )
+
+        if (res.status === 429) {
+          // Возвращаем id в очередь и выходим: дожмём позже, ничего не потеряв.
+          pauseShikimori(6000)
+          pending[kind].add(row.id)
+          Logger('QUEUE', `Перевод имён (${kind}): лимит Shikimori, пауза 6с`)
+          return
+        }
+
+        if (res.status === 200 && res.data) {
+          person = {
+            russian: res.data.russian,
+            description: res.data.description,
+            link: buildPersonLink(res.data.domain, res.data.url),
+          }
+        }
+      }
+
+      const payload: TranslationPayload =
+        person && person.russian
+          ? {
+              ru: person.russian,
+              desc:
+                person.description && person.link
+                  ? cleanShikiBB(person.description, person.link)
+                  : undefined,
+            }
+          : { ru: NOT_FOUND }
+
+      await dbSet('shikiCache', { key: `${kind}_${row.id}`, data: payload, ts: Date.now() })
+      applyTranslation(kind, row.id, payload)
+    } catch (e) {
+      Logger('ERROR', `Перевод имён (${kind}): сбой на id ${row.id}`, e)
+    }
+    await sleep(300)
+  }
+}
+
+/**
+ * Собирает MAL id тайтлов персоны — их требует гард тёзок в shikimori-people.
+ */
+function collectTargetMalIds(row: AniListPersonRow, type: 'characters' | 'staff'): number[] {
+  const nodes = (type === 'characters' ? row.media : row.staffMedia)?.nodes ?? []
+  const ids: number[] = []
+  for (const node of nodes) {
+    if (node.idMal) ids.push(node.idMal)
+  }
+  return ids
+}
+
+/**
+ * Собирает абсолютную ссылку на страницу персоны.
+ * В монолите здесь была ошибка склейки (тот же класс багов, что чинил коммит 1306f00):
+ * домен и фоллбэк подставлялись внутрь шаблонной строки, и ссылка ломалась.
+ */
+function buildPersonLink(domain: string | null, url: string | null): string | null {
+  if (!url) return null
+  const host = domain ?? SHIKI_DOMAINS[0] ?? 'shikimori.io'
+  return 'https://' + host + url
+}
+
+// ==== Применение к странице ====
+
+/** Подставляет готовый перевод во все элементы, ждавшие этот id. */
+function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload): void {
+  const key = `${kind}_${id}`
+  const entries = queue.get(key) ?? []
+  if (data.ru === NOT_FOUND) {
+    queue.delete(key)
+    return
+  }
+
+  for (const { el, extra } of entries) {
+    try {
+      // 1. Плавающая подсказка под курсором.
+      if (el.classList.contains('title') && el.closest('.tooltip')) {
+        el.dataset.ru = data.ru
+        if (!safelySetText(el, data.ru)) el.textContent = data.ru
+        el.dataset.translated = '1'
+        continue
+      }
+
+      // 2. Главный заголовок страницы и заголовок вкладки браузера.
+      if (extra) {
+        if (!safelySetText(el, data.ru)) el.textContent = data.ru
+        document.title = `${data.ru} · AniList`
+        el.dataset.translated = '1'
+        continue
+      }
+
+      // 3. Блок описания.
+      if (el.classList.contains('description')) {
+        applyDescription(el, data)
+        el.dataset.translated = '1'
+        continue
+      }
+
+      // 4. Обычная карточка в списке или сетке.
+      const nameEl = el.querySelector<HTMLElement>('.name') ?? el
+      if (!safelySetText(nameEl, data.ru)) nameEl.textContent = data.ru
+      if (el.getAttribute('title')) el.setAttribute('title', data.ru)
+      if (el.getAttribute('aria-label')) el.setAttribute('aria-label', data.ru)
+      el.dataset.translated = '1'
+    } catch (e) {
+      Logger('WARN', `Не удалось применить перевод для ${key}`, e)
+    }
+  }
+
+  queue.delete(key)
+}
+
+/**
+ * Вставляет русское описание, а оригинал прячет в раскрывашку.
+ * Оригинал помечается am-notr, иначе переводчик со временем перепишет его фразы
+ * и смысл кнопки «Оригинальное описание» теряется.
+ */
+function applyDescription(el: HTMLElement, data: TranslationPayload): void {
+  if (!data.desc) return
+  if (el.querySelector('.ru-desc')) return
+
+  const originalHtml = el.innerHTML
+
+  const ru = document.createElement('div')
+  ru.className = 'ru-desc'
+  ru.style.marginBottom = '20px'
+  ru.innerHTML = data.desc
+
+  const details = document.createElement('details')
+  details.classList.add(NO_TRANSLATE_CLASS)
+  const summary = document.createElement('summary')
+  summary.textContent = 'Оригинальное описание (AniList)'
+  summary.style.cssText = 'cursor:pointer;color:#3dbbee;font-weight:bold;outline:none;'
+  const original = document.createElement('div')
+  original.innerHTML = originalHtml
+  details.append(summary, original)
+
+  el.innerHTML = ''
+  el.append(ru, details)
+}
+
+/** Подсказка при наведении: надо угадать, к какой карточке она относится. */
+function processTooltip(tooltipNode: HTMLElement): void {
+  const titleEl = tooltipNode.querySelector<HTMLElement>('.title')
+  if (!titleEl || titleEl.dataset.translated === '1') return
+
+  const hovered = document.querySelectorAll<HTMLElement>(':hover')
+  const target = hovered.length > 0 ? hovered[hovered.length - 1] : null
+  if (!target) return
+
+  const link = target.closest<HTMLAnchorElement>(
+    'a[href^="/anime/"], a[href^="/manga/"], a[href^="/character/"], a[href^="/staff/"]',
+  )
+  const holder =
+    link ??
+    target.closest<HTMLElement>(
+      '.media-card, .character-card, .staff-card, .relation-card, .studio-anime',
+    )
+  if (!holder) return
+
+  const href = holder instanceof HTMLAnchorElement ? holder.getAttribute('href') : null
+  const parsed = href ? parseAniListHref(href) : null
+  if (!parsed) return
+
+  titleEl.dataset.translatingId = String(parsed.id)
+  void queueContent(parsed.id, parsed.kind, titleEl)
+}
+
+/** Разбирает ссылку AniList вида /anime/123/... в пару «тип очереди + id». */
+function parseAniListHref(href: string): { kind: QueueKind; id: number } | null {
+  const m = href.match(/^\/(anime|manga|character|staff)\/(\d+)/)
+  if (!m || !m[1] || !m[2]) return null
+  const id = parseInt(m[2], 10)
+  if (!id) return null
+
+  if (m[1] === 'character') return settings.translateCharacters ? { kind: 'CHR2', id } : null
+  if (m[1] === 'staff') return settings.translateStaff ? { kind: 'STF3', id } : null
+  return settings.translateTitles ? { kind: 'MED2', id } : null
+}
+
+/** Насколько ссылка похожа на обычную карточку, а не на обложку или меню. */
+function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
+  if (link.dataset.translated === '1' || link.dataset.queued === '1') return false
+  if (link.querySelector('img')) return false
+  if (link.classList.contains('cover')) return false
+  if (link.closest('.nav')) return false
+  if (kind === 'MED2') {
+    if (link.classList.contains('relation-title')) return false
+    if (link.closest('.relations')) return false
+    if (link.classList.contains('role')) return false
+  }
+  return true
+}
+
+/**
+ * Обходит страницу и собирает всё, что надо перевести.
+ * Задержка 300 мс — чтобы при быстром скролле не бегать по DOM на каждый чих.
+ */
+function debouncedFindContent(): void {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    if (!settings.translateTitles && !settings.translateCharacters && !settings.translateStaff) {
+      return
+    }
+
+    // Ссылки в списках и сетках.
+    const linkSelectors: Array<{ selector: string; kind: QueueKind; enabled: boolean }> = [
+      {
+        selector: 'a[href^="/anime/"], a[href^="/manga/"]',
+        kind: 'MED2',
+        enabled: settings.translateTitles,
+      },
+      { selector: 'a[href^="/character/"]', kind: 'CHR2', enabled: settings.translateCharacters },
+      { selector: 'a[href^="/staff/"]', kind: 'STF3', enabled: settings.translateStaff },
+    ]
+
+    for (const { selector, kind, enabled } of linkSelectors) {
+      if (!enabled) continue
+      document.querySelectorAll<HTMLAnchorElement>(selector).forEach((link) => {
+        if (!isTranslatableLink(link, kind)) return
+        const parsed = parseAniListHref(link.getAttribute('href') ?? '')
+        if (!parsed || parsed.kind !== kind) return
+        void queueContent(parsed.id, kind, link)
+      })
+    }
+
+    // Заголовок и описание текущей страницы.
+    const page = parseAniListHref(window.location.pathname)
+    if (!page) return
+
+    const headerSelector =
+      page.kind === 'MED2'
+        ? '.header .content h1'
+        : '.header .names h1.name, .header h1.name, .header .content h1'
+
+    const h1 = document.querySelector<HTMLElement>(headerSelector)
+    if (h1 && h1.dataset.translated !== '1') void queueContent(page.id, page.kind, h1, true)
+
+    const desc = document.querySelector<HTMLElement>('.description')
+    if (desc && !(desc.querySelector('.ru-desc') && desc.dataset.translated === '1')) {
+      void queueContent(page.id, page.kind, desc)
+    }
+  }, 300)
+}
+
+// ==== Наблюдатель ====
+
+/**
+ * Запускает переводчик: один раз на страницу.
+ * Вызывать только ПОСЛЕ loadSettings(), openDB() и загрузки словаря.
+ */
+export function initTranslator(): void {
+  if (isStarted) return
+  isStarted = true
+
+  let mutationQueue: MutationRecord[] = []
+  let rafId: number | null = null
+
+  const processMutations = (): void => {
+    rafId = null
+    const batch = mutationQueue
+    mutationQueue = []
+    const startTime = performance.now()
+
+    for (const mutation of batch) {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          translateNode(node)
+          if (!(node instanceof HTMLElement)) return
+
+          // AniList прячет длинные описания под кнопку — раскрываем сразу,
+          // иначе русское описание встанет в обрезанный блок.
+          if (node.classList.contains('description-length-toggle')) node.click()
+          else node.querySelector<HTMLElement>('.description-length-toggle')?.click()
+
+          if (node.classList.contains('tooltip')) processTooltip(node)
+          else {
+            const tooltip = node.querySelector<HTMLElement>('.tooltip')
+            if (tooltip) processTooltip(tooltip)
+          }
+        })
+      } else if (mutation.type === 'characterData') {
+        translateNode(mutation.target)
+      } else if (mutation.type === 'attributes') {
+        const name = mutation.attributeName
+        if (name && TRANSLATABLE_ATTRS.includes(name)) translateNode(mutation.target)
+      }
+    }
+
+    const spent = Math.round(performance.now() - startTime)
+    if (spent > 50) Logger('WARN', `[Performance] Обновление интерфейса заняло ${spent}ms`)
+
+    debouncedFindContent()
+
+    // Виджеты медиа-страницы восстанавливаем с задержкой, чтобы не дёргать их на каждый чих.
+    if (mutationHook) {
+      if (mutationHookTimer) clearTimeout(mutationHookTimer)
+      mutationHookTimer = setTimeout(() => mutationHook?.(), 150)
+    }
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    mutationQueue.push(...mutations)
+    if (rafId === null) rafId = requestAnimationFrame(processMutations)
+  })
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+    attributeFilter: [...TRANSLATABLE_ATTRS],
+  })
+
+  setupVueInputInterceptor()
+
+  // После редактирования словаря перевод применяется сразу, без перезагрузки страницы.
+  registerRetranslateCallback(() => {
+    try {
+      translateNode(document.body)
+    } catch (e) {
+      Logger('WARN', 'Ре-скан перевода не удался', e)
+    }
+  })
+
+  Logger('INFO', 'Переводчик интерфейса запущен')
+  translateNode(document.body)
+  debouncedFindContent()
+}

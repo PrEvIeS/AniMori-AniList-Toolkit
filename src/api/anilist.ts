@@ -12,6 +12,19 @@ import { Logger } from '../utils/logger'
 /** Unix-время, до которого запросы к AniList приостановлены после 429. */
 let alRateLimitPause = 0
 
+/**
+ * Активна ли сейчас пауза по лимиту AniList.
+ * Нужно очереди перевода: она не начинает новую пачку, пока сервер держит паузу.
+ */
+export function isAniListRateLimited(): boolean {
+  return Date.now() < alRateLimitPause
+}
+
+/** Ставит паузу вручную. Существующая более долгая пауза не укорачивается. */
+export function pauseAniList(ms: number): void {
+  alRateLimitPause = Math.max(alRateLimitPause, Date.now() + ms)
+}
+
 export interface GraphQLResponse<T = unknown> {
   data?: T
   errors?: unknown

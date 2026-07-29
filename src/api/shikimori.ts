@@ -14,6 +14,19 @@ import { Logger } from '../utils/logger'
 /** Unix-время, до которого запросы к Shikimori приостановлены после 429. */
 let shikiRateLimitPause = 0
 
+/**
+ * Активна ли сейчас пауза по лимиту Shikimori.
+ * Очередь перевода проверяет это перед каждой пачкой.
+ */
+export function isShikimoriRateLimited(): boolean {
+  return Date.now() < shikiRateLimitPause
+}
+
+/** Ставит паузу вручную (например, 429 увидел поиск персон). */
+export function pauseShikimori(ms: number): void {
+  shikiRateLimitPause = Math.max(shikiRateLimitPause, Date.now() + ms)
+}
+
 /** Собирает абсолютный адрес для конкретного зеркала. */
 function mirrorUrl(domain: string, path: string): string {
   return 'https://' + domain + path

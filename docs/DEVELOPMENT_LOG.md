@@ -2,7 +2,7 @@
 
 > Ветка: `desktop-dev`  
 > Состояние на: 30 июля 2026 года  
-> Базовая проверенная ревизия: `71fb01e`  
+> Базовая проверенная ревизия: `6efaf4f`  
 > Версия: `1.9.1`
 
 ## Назначение
@@ -237,7 +237,33 @@ Code review показал, что чистый `tsc` не гарантиров�
 
 Правило на будущее: крупные файлы отправлять по одному за вызов и после push проверять содержимое каталога на ветке.
 
-## 13. Финальная проверка
+## 13. Медиа-страница
+
+Медиа-виджеты монолита (строки 3061-3733) переносятся тремя частями, чтобы каждый push оставался проверяемым:
+
+1. каркас и подписка на изменения DOM;
+2. плеер Kodik;
+3. рейтинги, франшиза, музыкальные темы и внешние ссылки.
+
+### `a83f595` и `6efaf4f` — часть 1 из 3
+
+- `src/features/media/types.ts` (61 строка) — `MediaAniListData`, `MediaShikiData`, `MediaContext` и контракт `MediaWidget`. Только типы: виджеты не импортируют друг друга ради общих интерфейсов.
+- `src/features/media/index.ts` (223 строки) — жизненный цикл страницы: разбор роута, очистка при смене тайтла, однократная загрузка данных AniList и Shikimori через кэш, реестр виджетов и `ensureMediaWidgets()`.
+
+Экспорты: `registerMediaWidget()`, `ensureMediaWidgets()`, `initMedia()`.
+
+Файлы намеренно не подключены к `main.ts`: каркас без виджетов не выполняет работы. Wiring выполняется в части 2 вместе с плеером, поэтому bundle остался на 19 модулях и 144.91 kB. Typecheck при этом покрывает новые файлы, так как корневой `tsconfig.json` включает весь `src`.
+
+### Отличия от монолита
+
+1. Вместо глобальной `window.ensureWidgets` используется подписка `registerMutationHook()` из translator. Внешний код больше не может перезаписать точку восстановления виджетов.
+2. Каждый виджет монтируется в собственном `try/catch`. Ошибка одного блока не убирает со страницы остальные, как это происходило в монолите.
+3. Добавлен флаг `isLoading`: параллельные загрузки по одному тайтлу больше не наслаиваются, данные предыдущего тайтла не попадают на страницу следующего.
+4. Очистка виджетов декларативна: селекторы объявляет сам виджет в `cleanupSelectors`, а не хардкод-список в функции загрузки.
+5. Уход со страницы тайтла теперь тоже обрабатывается: состояние сбрасывается, отложенные виджеты не всплывают на списках и профиле.
+6. `MediaContext.sidebar` перечитывается при каждом монтировании, так как React заменяет узел сайдбара при переходах.
+
+## 14. Финальная проверка
 
 После `e2cc891`:
 
@@ -262,7 +288,18 @@ npm run format — все файлы unchanged
 
 Рост 10 → 19 модулей и 99.16 → 144.91 kB подтверждает реальное включение translator в bundle.
 
-## 14. Инструментальные решения
+После `6efaf4f`, проверено на машине разработчика:
+
+```text
+npm run typecheck — 0 ошибок
+npm run build — успешно
+Vite: 19 modules transformed
+dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
+```
+
+Неизменный размер ожидаем: каркас медиа-модуля ещё не подключён к точке входа.
+
+## 15. Инструментальные решения
 
 - Prettier: `semi: false`, `singleQuote: true`, `printWidth: 100`.
 - Монолит и крупные data files исключены из форматирования.
@@ -270,8 +307,9 @@ npm run format — все файлы unchanged
 - Из-за отсутствия DNS в sandbox часть build-проверок выполнялась на машине разработчика.
 - Временная GitHub Actions automation аудита не запускалась от push интеграции и была полностью удалена вместе с payload.
 - Sandbox TypeScript новее репозиторного `^5.6.2` и не принимает `baseUrl`. Корневой `tsconfig.json` не правился; обход делался только в черновом каталоге.
+- Машина разработчика работает в Windows PowerShell: POSIX-флаги вида `ls -la` недоступны, в инструкциях используется `Get-ChildItem` или `dir`.
 
-## 15. Состояние этапа 1
+## 16. Состояние этапа 1
 
 ### Завершено
 
@@ -291,11 +329,14 @@ npm run format — все файлы unchanged
 - [x] hardening audit;
 - [x] `src/features/translator/`;
 - [x] translator wiring в `main.ts`;
-- [x] чистые typecheck/build с translator.
+- [x] чистые typecheck/build с translator;
+- [x] `src/features/media/` часть 1: каркас, типы и подписка.
 
 ### Осталось
 
-- [ ] `src/features/media/`;
+- [ ] `src/features/media/` часть 2: плеер Kodik;
+- [ ] `src/features/media/` часть 3: рейтинги, франшиза, темы, внешние ссылки;
+- [ ] media wiring в `main.ts`;
 - [ ] `src/features/search/` и dictionary capture;
 - [ ] UI logger через `registerLogSink()`;
 - [ ] полноценный bootstrap: SPA lifecycle, URL polling, garbage collector;
@@ -306,27 +347,27 @@ npm run format — все файлы unchanged
 - [ ] исправить `THEMES_` против `THEMES2_`: `getDbStats` всегда показывает 0 тем;
 - [ ] browser smoke-tests scanner/exporter/translator.
 
-## 16. Обязательные риски
+## 17. Обязательные риски
 
 Подробности: [`AUDITION.md`](./refactoring/AUDITION.md).
 
 1. Асинхронное Tauri storage: UI ждёт `await bridge.storage.getAll()`.
 2. Rust HTTP не получает cookies WebView автоматически.
-3. React может уничтожать Vue widgets: нужен `unmount()` и remount.
+3. React может уничтожать Vue widgets: нужен `unmount()` и remount. Точка восстановления для userscript-режима — `ensureMediaWidgets()` в `features/media/index.ts`.
 4. Vue roots исключаются из MutationObserver translator: константа `am-notr` теперь живёт в `translator/dom.ts` и должна использоваться всеми Vue-компонентами этапа 2.
 5. Linux WebKitGTK может требовать GStreamer H.264/AAC codecs.
 6. Desktop logger требует ring buffer и streaming в файл.
 
-## 17. Следующий шаг
+## 18. Следующий шаг
 
-Продолжить этап 1 с `src/features/media/` (строки 3061-3733 монолита):
+Часть 2 из 3 медиа-модуля — плеер Kodik (строки 3529-3733 монолита):
 
-1. извлечь `injectMediaExtensions()` и связанные виджеты;
-2. заменить глобальный `window.ensureWidgets` подпиской `registerMutationHook()` из translator;
-3. учесть РИСК №3: виджеты должны переустанавливаться после пересборки блоков AniList;
-4. типизировать DOM traversal без `any`;
-5. проверить `THEMES_` против `THEMES2_` при переносе кэша тем;
-6. подключить к bootstrap после чистого typecheck/build;
+1. вынести кнопку `#ru-player-btn`, overlay `#ru-player-overlay` и панели озвучек/эпизодов в `src/features/media/player.ts`;
+2. зарегистрировать плеер через `registerMediaWidget()` с собственными `cleanupSelectors`;
+3. сохранить seamless-смену серии через `postMessage` Kodik API без перезагрузки iframe;
+4. сохранить fallback на `find-player` при ошибке поиска и избранные озвучки в `am_fav_translations`;
+5. типизировать ответ Kodik без `any`;
+6. подключить `initMedia()` к `main.ts` после чистого typecheck/build;
 7. зафиксировать отдельным атомарным commit.
 
 ---

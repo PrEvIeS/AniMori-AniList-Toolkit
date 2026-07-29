@@ -2,7 +2,7 @@
 
 > Ветка: `desktop-dev`  
 > Состояние на: 30 июля 2026 года  
-> Базовая проверенная ревизия: `6efaf4f`  
+> Базовая проверенная ревизия: `9efefe5`  
 > Версия: `1.9.1`
 
 ## Назначение
@@ -254,7 +254,7 @@ Code review показал, что чистый `tsc` не гарантиров�
 
 Файлы намеренно не подключены к `main.ts`: каркас без виджетов не выполняет работы. Wiring выполняется в части 2 вместе с плеером, поэтому bundle остался на 19 модулях и 144.91 kB. Typecheck при этом покрывает новые файлы, так как корневой `tsconfig.json` включает весь `src`.
 
-### Отличия от монолита
+### Отличия от монолита — каркас
 
 1. Вместо глобальной `window.ensureWidgets` используется подписка `registerMutationHook()` из translator. Внешний код больше не может перезаписать точку восстановления виджетов.
 2. Каждый виджет монтируется в собственном `try/catch`. Ошибка одного блока не убирает со страницы остальные, как это происходило в монолите.
@@ -262,6 +262,24 @@ Code review показал, что чистый `tsc` не гарантиров�
 4. Очистка виджетов декларативна: селекторы объявляет сам виджет в `cleanupSelectors`, а не хардкод-список в функции загрузки.
 5. Уход со страницы тайтла теперь тоже обрабатывается: состояние сбрасывается, отложенные виджеты не всплывают на списках и профиле.
 6. `MediaContext.sidebar` перечитывается при каждом монтировании, так как React заменяет узел сайдбара при переходах.
+
+### `2c5820d` и `9efefe5` — часть 2 из 3: плеер Kodik
+
+- `src/features/media/player.ts` (428 строк) — кнопка `#ru-player-btn`, overlay `#ru-player-overlay`, панель озвучек с избранными, сетка эпизодов с подсветкой просмотренных, бегущая строка заголовка и fallback на `find-player`.
+- `src/main.ts` — после `initTranslator()` вызываются `registerMediaWidget(playerWidget)` и `initMedia()`. Медиа-модуль живёт на наблюдателе translator, поэтому порядок жёсткий.
+
+Ответ Kodik `/search` типизирован без `any`: `KodikSearchItem`, `KodikSearchResponse` и нормализованный `Translation`.
+
+### Отличия от монолита — плеер
+
+1. Контейнер `#animori-actions` в монолите создавался UI настроек (строка 4213), который ещё не вынесен. Плеер создаёт контейнер сам, если его нет; будущий UI настроек переиспользует тот же узел.
+2. Проверка `getAlToken()` заменена безусловным запросом прогресса в `try/catch`. Без авторизации плеер открывается как обычно, только без подсветки просмотренных серий.
+3. Слушатель событий плеера больше не хранится в `window.__amKodikSync`: это переменная модуля, слушатель всегда ровно один.
+4. Обработчик кнопки перевешивается только при смене тайтла (`dataset.amMediaId`), а не на каждом вызове `mount()`.
+5. Номера эпизодов из `seasons` сортируются числово и фильтруются от мусора; озвучки дедуплицируются через `Map` по названию.
+6. Seamless-смена серии через `postMessage` сохранена и дополнительно обёрнута в `try/catch`.
+
+РИСК №5 из AUDITION.md остаётся открытым: в Tauri на Linux (WebKitGTK) плеер может дать чёрный экран без GStreamer H.264/AAC. В userscript-режиме проблема не проявляется.
 
 ## 14. Финальная проверка
 
@@ -299,6 +317,19 @@ dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
 
 Неизменный размер ожидаем: каркас медиа-модуля ещё не подключён к точке входа.
 
+После `9efefe5`, проверено на машине разработчика:
+
+```text
+npm run typecheck — 0 ошибок
+npm run build — успешно
+Vite: 22 modules transformed
+dist/animori.meta.js: 1.07 kB
+dist/animori.user.js: 162.08 kB (gzip 41.88 kB)
+git status — working tree clean
+```
+
+Рост 19 → 22 модулей и 144.91 → 162.08 kB подтверждает, что медиа-модуль и плеер реально попали в bundle.
+
 ## 15. Инструментальные решения
 
 - Prettier: `semi: false`, `singleQuote: true`, `printWidth: 100`.
@@ -330,13 +361,13 @@ dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
 - [x] `src/features/translator/`;
 - [x] translator wiring в `main.ts`;
 - [x] чистые typecheck/build с translator;
-- [x] `src/features/media/` часть 1: каркас, типы и подписка.
+- [x] `src/features/media/` часть 1: каркас, типы и подписка;
+- [x] `src/features/media/` часть 2: плеер Kodik;
+- [x] media wiring в `main.ts` и подтверждённый рост bundle.
 
 ### Осталось
 
-- [ ] `src/features/media/` часть 2: плеер Kodik;
 - [ ] `src/features/media/` часть 3: рейтинги, франшиза, темы, внешние ссылки;
-- [ ] media wiring в `main.ts`;
 - [ ] `src/features/search/` и dictionary capture;
 - [ ] UI logger через `registerLogSink()`;
 - [ ] полноценный bootstrap: SPA lifecycle, URL polling, garbage collector;
@@ -345,7 +376,7 @@ dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
 - [ ] удалить лишние `.gitkeep`, включая `src/features/translator/.gitkeep`;
 - [ ] удалить случайно закоммиченные `exporter-block.txt` и `scanner-current.txt` (коммит `71fb01e`) и добавить их в `.gitignore`;
 - [ ] исправить `THEMES_` против `THEMES2_`: `getDbStats` всегда показывает 0 тем;
-- [ ] browser smoke-tests scanner/exporter/translator.
+- [ ] browser smoke-tests scanner/exporter/translator/плеера.
 
 ## 17. Обязательные риски
 
@@ -355,20 +386,19 @@ dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
 2. Rust HTTP не получает cookies WebView автоматически.
 3. React может уничтожать Vue widgets: нужен `unmount()` и remount. Точка восстановления для userscript-режима — `ensureMediaWidgets()` в `features/media/index.ts`.
 4. Vue roots исключаются из MutationObserver translator: константа `am-notr` теперь живёт в `translator/dom.ts` и должна использоваться всеми Vue-компонентами этапа 2.
-5. Linux WebKitGTK может требовать GStreamer H.264/AAC codecs.
+5. Linux WebKitGTK может требовать GStreamer H.264/AAC codecs. Касается плеера Kodik из `media/player.ts`.
 6. Desktop logger требует ring buffer и streaming в файл.
 
 ## 18. Следующий шаг
 
-Часть 2 из 3 медиа-модуля — плеер Kodik (строки 3529-3733 монолита):
+Часть 3 из 3 медиа-модуля (строки 3097-3530 монолита). Разбивается на четыре виджета, каждый со своими `cleanupSelectors` и отдельным файлом:
 
-1. вынести кнопку `#ru-player-btn`, overlay `#ru-player-overlay` и панели озвучек/эпизодов в `src/features/media/player.ts`;
-2. зарегистрировать плеер через `registerMediaWidget()` с собственными `cleanupSelectors`;
-3. сохранить seamless-смену серии через `postMessage` Kodik API без перезагрузки iframe;
-4. сохранить fallback на `find-player` при ошибке поиска и избранные озвучки в `am_fav_translations`;
-5. типизировать ответ Kodik без `any`;
-6. подключить `initMedia()` к `main.ts` после чистого typecheck/build;
-7. зафиксировать отдельным атомарным commit.
+1. `ratings.ts` — бейджи Shikimori/MAL/AniList и гистограмма оценок;
+2. `franchise.ts` — хронология франшизы со статусами списка и ветками Shiki-only;
+3. `themes.ts` — музыкальные темы OP/ED и выбор музыкального сервиса, включая исправление префикса кэша `THEMES_`/`THEMES2_`;
+4. `extlinks.ts` — внешние ссылки и пользовательские сервисы.
+
+После каждого виджета — регистрация в `main.ts`, чистые typecheck/build на машине разработчика и отдельный атомарный commit.
 
 ---
 

@@ -84,6 +84,19 @@ function cleanupWidgets(): void {
 }
 
 /**
+ * Гасит кнопку плеера при уходе со страницы тайтла.
+ *
+ * Кнопка живёт в общей панели действий `#animori-actions`, а не в разметке виджета,
+ * поэтому `cleanupSelectors` её не снимает: иначе кнопка осталась бы висеть на списках
+ * и в профиле. Монолит решал это тем же хардкодом внутри пулинга URL (строка 4643);
+ * здесь селектор упомянут в единственном месте, которое знает об уходе со страницы.
+ */
+function hidePlayerButton(): void {
+  const btn = document.getElementById('ru-player-btn')
+  if (btn) btn.style.display = 'none'
+}
+
+/**
  * Вставляет или восстанавливает все виджеты.
  *
  * Безопасно вызывать сколько угодно раз: каждый виджет сам проверяет своё наличие.
@@ -136,6 +149,7 @@ async function loadMediaPage(): Promise<void> {
   if (!route) {
     if (currentMediaId !== null) {
       cleanupWidgets()
+      hidePlayerButton()
       currentMediaId = null
       currentContext = null
     }
@@ -204,6 +218,18 @@ async function loadMediaPage(): Promise<void> {
   } finally {
     isLoading = false
   }
+}
+
+/**
+ * Полный проход по текущему адресу: загрузка данных при смене тайтла, восстановление
+ * разметки на том же тайтле, очистка при уходе со страницы.
+ *
+ * Это аналог `injectMediaExtensions()` монолита. Нужен снаружи, чтобы SPA-обвязка из
+ * `core/lifecycle.ts` могла реагировать на смену роута: наблюдателя мутаций для этого
+ * недостаточно, потому что переход между страницами не всегда меняет разметку сайдбара.
+ */
+export function refreshMediaPage(): void {
+  void loadMediaPage()
 }
 
 /**

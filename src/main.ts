@@ -7,6 +7,7 @@ import { rebuildDictionary, setRemoteDict } from './core/dictionary'
 import { loadSettings, settings } from './core/settings'
 import { initExporter } from './features/exporter'
 import { initMedia, registerMediaWidget } from './features/media'
+import { extLinksWidget } from './features/media/extlinks'
 import { franchiseWidget } from './features/media/franchise'
 import { playerWidget } from './features/media/player'
 import { ratingsWidget } from './features/media/ratings'
@@ -88,6 +89,7 @@ async function bootstrap(): Promise<void> {
   registerMediaWidget(ratingsWidget)
   registerMediaWidget(franchiseWidget)
   registerMediaWidget(themesWidget)
+  registerMediaWidget(extLinksWidget)
   initMedia()
 }
 

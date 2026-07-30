@@ -1,14 +1,16 @@
 // Этап 2 п.2.4: точка монтирования сканера.
+// Этап 2 п.2.6: сюда же переехала регистрация кнопки ⇄ из main.ts.
 //
 // До рефакторинга здесь лежали 34 857 б: загрузка, сверка, четыре функции рендера
 // и ручная сборка DOM. Сейчас логика в compare.ts, состояние в scanner-state.ts,
 // разметка в ScannerModal.vue — та же схема, что у logger-ui.ts и settings.ts.
 //
-// Сигнатура openCompareModal() сохранена намеренно: main.ts регистрирует кнопку
-// am-cmp-btn с этим обработчиком, а перенос регистрации кнопок в сами фичи — это п.2.6.
-// Не смешиваем два пункта в одной итерации, чтобы точка отката оставалась чистой.
+// Теперь модуль сам заявляет о себе в панели действий через initScannerUI(), как это
+// делают initSettingsUI() и initLoggerUI(). main.ts больше не знает ни про id кнопки,
+// ни про её порядок, ни про обработчик: фича самодостаточна и снимается одной строкой.
 
 import { mountApp, unmountApp } from '../../utils/vue-mounter'
+import { ACTION_ORDER, registerActionButton } from '../ui/actions'
 import ScannerModal from './ScannerModal.vue'
 import { closeScanner, isScannerOpen, openScanner } from './scanner-state'
 
@@ -41,6 +43,23 @@ export function closeCompareModal(): void {
 export function toggleCompareModal(): void {
   if (isScannerOpen.value) closeScanner()
   else void openCompareModal()
+}
+
+/**
+ * Регистрирует кнопку ⇄ в панели действий.
+ *
+ * Вызывать до initActionBar(), как и остальные init*UI(): порядок пилюль задаёт
+ * ACTION_ORDER, а не очередь вызовов. Модалка здесь намеренно не монтируется —
+ * ленивое монтирование при первом открытии сохраняется.
+ */
+export function initScannerUI(): void {
+  registerActionButton({
+    id: 'am-cmp-btn',
+    label: '⇄',
+    title: 'Сравнить списки Shikimori и AniList (AniMori)',
+    order: ACTION_ORDER.compare,
+    onClick: () => void openCompareModal(),
+  })
 }
 
 /** Снятие приложения с реестра — понадобится при SPA-связывании на п.2.9. */

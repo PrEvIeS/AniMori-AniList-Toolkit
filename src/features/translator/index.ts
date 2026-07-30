@@ -17,6 +17,11 @@
 //   - перевод никогда не пишется через textContent в элемент, внутри которого есть
 //     разметка (см. writeText): монолит на этом ломал вёрстку карточек.
 //
+// ВАЖНО про маркеры. AniList переиспользует один и тот же узел .tooltip для разных
+// карточек, а ссылки в списках переиспользует при виртуальном скролле. Поэтому
+// dataset.translated и dataset.queued хранят id (ключ) тайтла, а не флаг '1', иначе
+// узел навсегда глохнет после первого перевода и покажет оригинал.
+//
 // РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
 // обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
 
@@ -176,17 +181,22 @@ function totalPending(): number {
 /**
  * Кладёт элемент в очередь перевода или сразу берёт готовое из кэша.
  * @param extra true только для главного заголовка страницы.
+ * @param force игнорировать маркер «уже в очереди». Нужен тултипам: AniList переиспользует
+ *   один узел и сам возвращает в него оригинальный текст, так что перевод надо
+ *   применять заново. Лишних запросов не будет: данные берутся из IndexedDB,
+ *   а pending — это Set.
  */
 async function queueContent(
   id: number,
   kind: QueueKind,
   el: HTMLElement,
   extra = false,
+  force = false,
 ): Promise<void> {
-  if (el.dataset.queued === '1' && !extra) return
-  el.dataset.queued = '1'
-
   const key = `${kind}_${id}`
+  if (el.dataset.queued === key && !extra && !force) return
+  el.dataset.queued = key
+
   const cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
 
   if (cached && Date.now() - cached.ts < CACHE_TIME) {
@@ -418,10 +428,13 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
   for (const { el, extra } of entries) {
     try {
       // 1. Плавающая подсказка под курсором.
+      // Узел общий для всех карточек, поэтому пишем только если курсор всё ещё
+      // на том тайтле, для которого заказывали перевод (монолит: translatingId).
       if (el.classList.contains('title') && el.closest('.tooltip')) {
+        if (el.dataset.translatingId !== String(id)) continue
         el.dataset.ru = data.ru
         writeText(el, data.ru)
-        el.dataset.translated = '1'
+        el.dataset.translated = String(id)
         continue
       }
 
@@ -429,14 +442,14 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
       if (extra) {
         writeText(el, data.ru)
         document.title = `${data.ru} · AniList`
-        el.dataset.translated = '1'
+        el.dataset.translated = String(id)
         continue
       }
 
       // 3. Блок описания.
       if (el.classList.contains('description')) {
         applyDescription(el, data)
-        el.dataset.translated = '1'
+        el.dataset.translated = String(id)
         continue
       }
 
@@ -447,7 +460,7 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
       writeText(nameEl, data.ru)
       if (el.getAttribute('title')) el.setAttribute('title', data.ru)
       if (el.getAttribute('aria-label')) el.setAttribute('aria-label', data.ru)
-      el.dataset.translated = '1'
+      el.dataset.translated = String(id)
     } catch (e) {
       Logger('WARN', `Не удалось применить перевод для ${key}`, e)
     }
@@ -485,10 +498,20 @@ function applyDescription(el: HTMLElement, data: TranslationPayload): void {
   el.append(ru, details)
 }
 
-/** Подсказка при наведении: надо угадать, к какой карточке она относится. */
+/**
+ * Подсказка при наведении: надо угадать, к какой карточке она относится.
+ *
+ * Узел тултипа один на всю страницу: AniList переписывает его текст под каждую
+ * новую карточку. Поэтому ориентируемся не на маркер «уже переводили», а на то,
+ * совпадает ли видимый текст с тем, что мы туда вписали в последний раз.
+ */
 function processTooltip(tooltipNode: HTMLElement): void {
   const titleEl = tooltipNode.querySelector<HTMLElement>('.title')
-  if (!titleEl || titleEl.dataset.translated === '1') return
+  if (!titleEl) return
+
+  // В тултипе уже стоит наш перевод — трогать нечего.
+  const current = (titleEl.textContent ?? '').trim()
+  if (titleEl.dataset.ru && titleEl.dataset.ru === current) return
 
   const hovered = document.querySelectorAll<HTMLElement>(':hover')
   const target = hovered.length > 0 ? hovered[hovered.length - 1] : null
@@ -504,12 +527,19 @@ function processTooltip(tooltipNode: HTMLElement): void {
     )
   if (!holder) return
 
-  const href = holder instanceof HTMLAnchorElement ? holder.getAttribute('href') : null
+  const href =
+    holder instanceof HTMLAnchorElement
+      ? holder.getAttribute('href')
+      : (holder
+          .querySelector<HTMLAnchorElement>(
+            'a[href^="/anime/"], a[href^="/manga/"], a[href^="/character/"], a[href^="/staff/"]',
+          )
+          ?.getAttribute('href') ?? null)
   const parsed = href ? parseAniListHref(href) : null
   if (!parsed) return
 
   titleEl.dataset.translatingId = String(parsed.id)
-  void queueContent(parsed.id, parsed.kind, titleEl)
+  void queueContent(parsed.id, parsed.kind, titleEl, false, true)
 }
 
 /** Разбирает ссылку AniList вида /anime/123/... в пару «тип очереди + id». */
@@ -526,8 +556,6 @@ function parseAniListHref(href: string): { kind: QueueKind; id: number } | null 
 
 /** Насколько ссылка похожа на обычную карточку, а не на обложку или меню. */
 function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
-  if (link.dataset.translated === '1' || link.dataset.queued === '1') return false
-
   // Свой UI переводить нельзя: там уже русский текст и своя разметка.
   if (link.closest(`.${NO_TRANSLATE_CLASS}`)) return false
   if (link.closest(SELF_UI_SELECTOR)) return false
@@ -551,6 +579,7 @@ function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
 /**
  * Обходит страницу и собирает всё, что надо перевести.
  * Задержка 300 мс — чтобы при быстром скролле не бегать по DOM на каждый чих.
+ * Повторные постановки отсекает сам queueContent по маркеру dataset.queued.
  */
 function debouncedFindContent(): void {
   if (debounceTimer) clearTimeout(debounceTimer)
@@ -590,16 +619,26 @@ function debouncedFindContent(): void {
         : '.header .names h1.name, .header h1.name, .header .content h1'
 
     const h1 = document.querySelector<HTMLElement>(headerSelector)
-    if (h1 && h1.dataset.translated !== '1') void queueContent(page.id, page.kind, h1, true)
+    if (h1 && h1.dataset.translated !== String(page.id)) {
+      void queueContent(page.id, page.kind, h1, true)
+    }
 
     const desc = document.querySelector<HTMLElement>('.description')
-    if (desc && !(desc.querySelector('.ru-desc') && desc.dataset.translated === '1')) {
+    if (desc && !(desc.querySelector('.ru-desc') && desc.dataset.translated === String(page.id))) {
       void queueContent(page.id, page.kind, desc)
     }
   }, 300)
 }
 
 // ==== Наблюдатель ====
+
+/** Ищет тултип, к которому относится изменённый узел. */
+function findTooltip(node: Node | null): HTMLElement | null {
+  const el = node instanceof HTMLElement ? node : (node?.parentElement ?? null)
+  if (!el) return null
+  if (el.classList.contains('tooltip')) return el
+  return el.closest<HTMLElement>('.tooltip')
+}
 
 /**
  * Запускает переводчик: один раз на страницу.
@@ -635,8 +674,16 @@ export function initTranslator(): void {
             if (tooltip) processTooltip(tooltip)
           }
         })
+
+        // Содержимое уже существующего тултипа заменили под новую карточку
+        // (строка 3021 монолита): переводим его заново.
+        const reused = findTooltip(mutation.target)
+        if (reused) processTooltip(reused)
       } else if (mutation.type === 'characterData') {
         translateNode(mutation.target)
+        // Тултип часто обновляется точечной правкой текста (строка 3016 монолита).
+        const tooltip = findTooltip(mutation.target)
+        if (tooltip) processTooltip(tooltip)
       } else if (mutation.type === 'attributes') {
         const name = mutation.attributeName
         if (name && TRANSLATABLE_ATTRS.includes(name)) translateNode(mutation.target)

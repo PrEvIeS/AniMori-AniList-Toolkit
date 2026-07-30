@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
 import monkey from 'vite-plugin-monkey'
 
 // Метаданные ниже перенесены 1:1 из шапки монолита animori.user.js (строки 1-25),
@@ -14,6 +15,11 @@ export default defineConfig(({ mode }) => ({
   define: {
     // Этап 3-4: выбор реализации Bridge на этапе сборки.
     __ANIMORI_PLATFORM__: JSON.stringify(mode === 'tauri' ? 'tauri' : 'userscript'),
+    // Этап 2: флаги сборки Vue. Без них рантаим сыплет предупреждения в консоль.
+    // Options API нигде не используется — только Composition API, поэтому false.
+    __VUE_OPTIONS_API__: 'false',
+    __VUE_PROD_DEVTOOLS__: 'false',
+    __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'false',
   },
   css: {
     preprocessorOptions: {
@@ -21,6 +27,8 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [
+    // vue() строго до monkey(): к monkey код должен прийти уже без SFC.
+    vue(),
     monkey({
       entry: 'src/main.ts',
       userscript: {

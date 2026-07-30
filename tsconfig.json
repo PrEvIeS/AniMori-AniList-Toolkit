@@ -19,6 +19,9 @@
     "useDefineForClassFields": true,
     "forceConsistentCasingInFileNames": true,
 
+    // Этап 2: SFC компилирует vue-tsc, ему нужен preserve.
+    "jsx": "preserve",
+
     "noEmit": true,
     "sourceMap": true,
 
@@ -27,6 +30,6 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "vite.config.ts"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"],
   "exclude": ["node_modules", "dist", "src-tauri"]
 }

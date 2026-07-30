@@ -20,17 +20,37 @@ import { Logger } from '../../utils/logger'
 import { initDictCapture } from './dict-capture'
 
 /**
- * Поиск опознаётся по placeholder'у, а он уже переведён нашим же переводчиком.
- * Поведение монолита сохранено дословно: при выключенном переводе интерфейса
- * placeholder останется английским и русский поиск не заведётся.
+ * Признак поля поиска в шапке сайта.
+ *
+ * Монолит сравнивал placeholder со строкой 'Поиск в AniList', то есть с результатом
+ * работы своего же переводчика. Побочный эффект: при translateInterface: false
+ * или при правке формулировки в dictionary.json русский поиск молча переставал работать:
+ * две независимые функции оказались связаны через текст интерфейса.
+ *
+ * Здесь поле опознаётся по смыслу placeholder'а: упоминание AniList плюс глагол поиска
+ * на любом из двух языков. Подходит и 'Поиск в AniList', и исходное 'Search AniList'.
  */
-const SEARCH_PLACEHOLDER = 'Поиск в AniList'
+const SEARCH_SITE_RE = /anilist/i
+const SEARCH_VERB_RE = /search|поиск|искать/i
+
 const DEBOUNCE_MS = 600
 const PER_CATEGORY = 4
 
 /** Абсолютный адрес на зеркале Shikimori (для фоллбэков без пары на AniList). */
 function shikiUrl(domain: string, path: string): string {
   return 'https://' + domain + path
+}
+
+/**
+ * Это поле поиска сайта?
+ *
+ * Проверка сознательно узкая: ложное срабатывание показало бы выпадашку поиска
+ * поверх чужого поля — например, поверх заметки к тайтлу или поля фильтров списка.
+ */
+function isSiteSearchInput(el: HTMLInputElement): boolean {
+  const placeholder = el.getAttribute('placeholder') ?? ''
+  if (placeholder === '') return false
+  return SEARCH_SITE_RE.test(placeholder) && SEARCH_VERB_RE.test(placeholder)
 }
 
 interface ShikiSearchMedia {
@@ -237,7 +257,7 @@ async function performRussianSearch(query: string): Promise<void> {
       return
     }
 
-    // Один запрос на всё: медиа по MAL id + персонажи/стафф через алиасы Page.
+    // Один запрос на всё: медиа по MAL id + персонажи/стафф через алиасы.
     const malIds = [...shikiAnime.map((i) => i.id), ...shikiManga.map((i) => i.id)]
     const varDefs = ['$m:[Int]']
     const rootFields = [
@@ -304,7 +324,7 @@ export function initRussianSearch(): void {
   document.body.addEventListener('input', (e) => {
     const target = e.target
     if (!(target instanceof HTMLInputElement)) return
-    if (target.getAttribute('placeholder') !== SEARCH_PLACEHOLDER) return
+    if (!isSiteSearchInput(target)) return
 
     const query = target.value.trim()
     const hasCyrillic = /[а-яА-ЯёЁ]/.test(query)

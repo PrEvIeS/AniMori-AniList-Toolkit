@@ -7,6 +7,7 @@ import { rebuildDictionary, setRemoteDict } from './core/dictionary'
 import { loadSettings, settings } from './core/settings'
 import { initExporter } from './features/exporter'
 import { initMedia, registerMediaWidget } from './features/media'
+import { franchiseWidget } from './features/media/franchise'
 import { playerWidget } from './features/media/player'
 import { ratingsWidget } from './features/media/ratings'
 import { openCompareModal } from './features/scanner'
@@ -84,6 +85,7 @@ async function bootstrap(): Promise<void> {
   // Порядок регистрации задаёт порядок монтирования блоков в сайдбаре.
   registerMediaWidget(playerWidget)
   registerMediaWidget(ratingsWidget)
+  registerMediaWidget(franchiseWidget)
   initMedia()
 }
 

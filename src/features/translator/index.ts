@@ -13,7 +13,9 @@
 //   - globalPendingQueues наружу не торчит, вместо него getPendingQueueSizes();
 //   - флаг activeRound висел на самой функции, теперь это переменная модуля;
 //   - каждый элемент пачки обрабатывается в try/catch: одна битая карточка больше
-//     не роняет всю очередь перевода (в монолите один сбой сети мог её заморозить).
+//     не роняет всю очередь перевода (в монолите один сбой сети мог её заморозить);
+//   - перевод никогда не пишется через textContent в элемент, внутри которого есть
+//     разметка (см. writeText): монолит на этом ломал вёрстку карточек.
 //
 // РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
 // обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
@@ -63,6 +65,14 @@ const NOT_FOUND = 'NOT_FOUND'
 
 const MEDIA_BATCH = 40
 const PERSON_BATCH = 10
+
+/**
+ * Свои виджеты: их содержимое уже на русском и собрано вручную.
+ * Ссылки внутри них переводчику отдавать нельзя — он перепишет наш текст
+ * и снесёт бейджи (год, тип, статус в списке).
+ */
+const SELF_UI_SELECTOR =
+  '.animori-franchise, .animori-themes, .animori-extlinks, .animori-ratings, #animori-actions'
 
 const MEDIA_QUERY = `query ($ids: [Int]) {
   Page {
@@ -371,6 +381,31 @@ function buildPersonLink(domain: string | null, url: string | null): string | nu
 
 // ==== Применение к странице ====
 
+/** Есть ли у элемента свой видимый текст (прямой непустой текстовый узел). */
+function hasOwnText(el: Element): boolean {
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE && (child.nodeValue ?? '').trim().length > 0) return true
+  }
+  return false
+}
+
+/**
+ * Пишет перевод в элемент, не разрушая разметку.
+ *
+ * Правило: textContent допустим ТОЛЬКО для элемента без дочерних элементов.
+ * Иначе внутри лежит вёрстка (обложка карточки, бейджи года и типа в хронологии
+ * франшизы), и присваивание текста снесло бы её целиком — так ломались карточки
+ * избранного на профиле и строки виджета франшизы.
+ *
+ * @returns false, если писать было некуда: вызывающий сам решает, что делать.
+ */
+function writeText(el: HTMLElement, text: string): boolean {
+  if (safelySetText(el, text)) return true
+  if (el.children.length > 0) return false
+  el.textContent = text
+  return true
+}
+
 /** Подставляет готовый перевод во все элементы, ждавшие этот id. */
 function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload): void {
   const key = `${kind}_${id}`
@@ -385,14 +420,14 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
       // 1. Плавающая подсказка под курсором.
       if (el.classList.contains('title') && el.closest('.tooltip')) {
         el.dataset.ru = data.ru
-        if (!safelySetText(el, data.ru)) el.textContent = data.ru
+        writeText(el, data.ru)
         el.dataset.translated = '1'
         continue
       }
 
       // 2. Главный заголовок страницы и заголовок вкладки браузера.
       if (extra) {
-        if (!safelySetText(el, data.ru)) el.textContent = data.ru
+        writeText(el, data.ru)
         document.title = `${data.ru} · AniList`
         el.dataset.translated = '1'
         continue
@@ -406,8 +441,10 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
       }
 
       // 4. Обычная карточка в списке или сетке.
+      // Если текста внутри нет (плитка-обложка), ограничиваемся подсказкой:
+      // родной тултип AniList покажет имя сам.
       const nameEl = el.querySelector<HTMLElement>('.name') ?? el
-      if (!safelySetText(nameEl, data.ru)) nameEl.textContent = data.ru
+      writeText(nameEl, data.ru)
       if (el.getAttribute('title')) el.setAttribute('title', data.ru)
       if (el.getAttribute('aria-label')) el.setAttribute('aria-label', data.ru)
       el.dataset.translated = '1'
@@ -490,13 +527,23 @@ function parseAniListHref(href: string): { kind: QueueKind; id: number } | null 
 /** Насколько ссылка похожа на обычную карточку, а не на обложку или меню. */
 function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
   if (link.dataset.translated === '1' || link.dataset.queued === '1') return false
+
+  // Свой UI переводить нельзя: там уже русский текст и своя разметка.
+  if (link.closest(`.${NO_TRANSLATE_CLASS}`)) return false
+  if (link.closest(SELF_UI_SELECTOR)) return false
+
   if (link.querySelector('img')) return false
   if (link.classList.contains('cover')) return false
   if (link.closest('.nav')) return false
+
+  // Плитки-обложки (избранное на профиле) текста в себе не держат: имя там
+  // показывает родной тултип AniList. Писать в такую ссылку нечего.
+  if (!hasOwnText(link) && !link.querySelector('.name')) return false
+
   if (kind === 'MED2') {
     if (link.classList.contains('relation-title')) return false
     if (link.closest('.relations')) return false
-    if (link.classList.contains('role')) return false
+    if (link.closest('.role')) return false
   }
   return true
 }

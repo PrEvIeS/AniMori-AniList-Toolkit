@@ -10,6 +10,7 @@ import { initMedia, registerMediaWidget } from './features/media'
 import { franchiseWidget } from './features/media/franchise'
 import { playerWidget } from './features/media/player'
 import { ratingsWidget } from './features/media/ratings'
+import { themesWidget } from './features/media/themes'
 import { openCompareModal } from './features/scanner'
 import { initTranslator } from './features/translator'
 import { Logger } from './utils/logger'
@@ -86,6 +87,7 @@ async function bootstrap(): Promise<void> {
   registerMediaWidget(playerWidget)
   registerMediaWidget(ratingsWidget)
   registerMediaWidget(franchiseWidget)
+  registerMediaWidget(themesWidget)
   initMedia()
 }
 

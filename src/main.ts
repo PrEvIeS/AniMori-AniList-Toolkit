@@ -15,14 +15,19 @@ import { playerWidget } from './features/media/player'
 import { ratingsWidget } from './features/media/ratings'
 import { themesWidget } from './features/media/themes'
 import { openCompareModal } from './features/scanner'
+import { initSearch } from './features/search'
 import { initTranslator } from './features/translator'
 import { ACTION_ORDER, initActionBar, registerActionButton } from './features/ui/actions'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
 
 /**
- * Порядок важен и взят из монолита (строки 4210-4230):
+ * Порядок важен и взят из init() монолита (строки 4210-4230, 4596-4613):
  * настройки → перехватчики ошибок → акцент → панель кнопок → БД → словарь →
- * переводчик → медиа-виджеты.
+ * переводчик → поиск → медиа-виджеты.
+ *
+ * Важно: флаги перевода гасят только загрузку удалённого словаря. Сам переводчик
+ * инициализируется всегда, потому что на его наблюдателе мутаций живут медиа-виджеты
+ * (плеер, рейтинги, франшиза), которые от настроек перевода не зависят.
  *
  * РИСК №1 из AUDITION.md: на Этапе 3 настройки станут асинхронными, поэтому всё,
  * что читает settings, идёт строго после await loadSettings().
@@ -54,23 +59,30 @@ async function bootstrap(): Promise<void> {
   })
   initActionBar()
 
+  await openDB()
+
   const needTranslator =
     settings.translateInterface ||
     settings.translateTitles ||
     settings.translateCharacters ||
     settings.translateStaff
-  if (!needTranslator) return
 
-  await openDB()
-
-  Logger('API', 'Загрузка словаря интерфейса...')
-  const remoteDict = await fetchInterfaceDictionary()
-  // setRemoteDict сам пересобирает итоговый словарь; при сбое загрузки
-  // пересобираем вручную, чтобы правки пользователя всё равно применились.
-  if (remoteDict) setRemoteDict(remoteDict)
-  else rebuildDictionary()
+  if (needTranslator) {
+    Logger('API', 'Загрузка словаря интерфейса...')
+    const remoteDict = await fetchInterfaceDictionary()
+    // setRemoteDict сам пересобирает итоговый словарь; при сбое загрузки
+    // пересобираем вручную, чтобы правки пользователя всё равно применились.
+    if (remoteDict) setRemoteDict(remoteDict)
+    else rebuildDictionary()
+  } else {
+    rebuildDictionary()
+  }
 
   initTranslator()
+
+  // Русский поиск и захват выделения: оба вешают слушатели на body и не требуют
+  // готовой разметки сайта, поэтому порядок относительно виджетов не важен.
+  initSearch()
 
   // Медиа-виджеты живут на наблюдателе переводчика, поэтому регистрируются после него.
   // Порядок регистрации задаёт порядок монтирования блоков в сайдбаре.

@@ -30,8 +30,14 @@ let amRetranslate: (() => void) | null = null
  */
 export let dictionary: Record<string, string> = Object.create(null)
 
-/** Нормализует ключ: схлопывает пробелы и триммит. */
-function normDictKey(v: string | null | undefined): string {
+/**
+ * Нормализует ключ: схлопывает пробелы и триммит.
+ *
+ * Экспортируется, потому что захват выделенного текста (features/search/dict-capture.ts)
+ * обязан нормализовать выделение точно так же: иначе запись ляжет в словарь с
+ * другим ключом и переводчик её не поймает.
+ */
+export function normDictKey(v: string | null | undefined): string {
   return String(v ?? '')
     .replace(/\s+/g, ' ')
     .trim()

@@ -129,6 +129,7 @@ function generatePersonCol(
     const node = page?.[listKey]?.[0]
     const alId = node?.id
 
+    // Нет пары на AniList — ведём на зеркало Shikimori, которое ответило на поиск.
     const href = alId ? `/${alPath}/${alId}` : `https://${item.__domain}${item.url ?? ''}`
     const imgUrl =
       alId && node?.image?.large

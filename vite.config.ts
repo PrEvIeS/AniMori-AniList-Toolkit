@@ -2,7 +2,8 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import monkey from 'vite-plugin-monkey'
 
-// Метаданные ниже перенесены 1:1 из шапки монолита animori.user.js (строки 1-25).
+// Метаданные ниже перенесены 1:1 из шапки монолита animori.user.js (строки 1-25),
+// кроме version: 2.0.0 — модульная кодовая база вместо монолита 1.9.1.
 // Не добавляй @match/@grant/@connect "на всякий случай": лишние права ломают ревью GreasyFork.
 export default defineConfig(({ mode }) => ({
   resolve: {
@@ -25,7 +26,7 @@ export default defineConfig(({ mode }) => ({
       userscript: {
         name: 'AniMori: AniList Toolkit',
         namespace: 'http://tampermonkey.net/',
-        version: '1.9.1',
+        version: '2.0.0',
         description:
           'Русский перевод, поиск, плеер, рейтинги Shiki и MAL, дерево хронологии, опенинги/эндинги, музыка, внешние ссылки, экспорт и сравнение списков Shikimori/AniList.',
         author: 'foulnike',

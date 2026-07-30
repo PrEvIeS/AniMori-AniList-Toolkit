@@ -2,7 +2,7 @@
 
 > Ветка: `desktop-dev`  
 > Состояние на: 30 июля 2026 года  
-> Базовая проверенная ревизия: `c5fb032`  
+> Базовая проверенная ревизия: `814485c`  
 > Версия: `1.9.1`
 
 ## Назначение
@@ -239,7 +239,7 @@ Code review показал, что чистый `tsc` не гарантиров�
 
 ## 13. Медиа-страница
 
-Медиа-виджеты монолита (строки 3061-3733) переносятся тремя частями, чтобы каждый push оставался проверяемым:
+Медиа-виджеты монолита (строки 3061-3733) перенесены тремя частями, чтобы каждый push оставался проверяемым:
 
 1. каркас и подписка на изменения DOM;
 2. плеер Kodik;
@@ -321,161 +321,4 @@ Code review показал, что чистый `tsc` не гарантиров�
 2. Переключатель сервисов собирается как DOM-узлы вместо `innerHTML` с интерполяцией; SVG-иконки остались константами модуля.
 3. Значение `am_music_service` из хранилища проверяется по списку допустимых сервисов: мусорное значение больше не приводит к пустой ссылке, а откатывается на VK.
 4. Как и во франшизе, синхронный `mount()` дополнен замком и кэшем готового блока: сеть опрашивается один раз на тайтл.
-5. Поведение монолита с пустым результатом сохранено намеренно: блок остаётся в DOM скрытым, а не удаляется. Иначе восстановление виджетов считало бы блок потерянным и запрашивало темы по кругу.
-6. Обработчики кнопок повешены через `addEventListener` вместо `onclick`; кнопка копирования гасит переход по ссылке, внутри которой находится.
-
-## 14. Финальная проверка
-
-После `e2cc891`:
-
-```text
-npm run typecheck — 0 ошибок
-npm run build — успешно
-Vite: 10 modules transformed
-dist/animori.meta.js: 1.07 kB
-dist/animori.user.js: 99.16 kB (gzip 24.29 kB)
-```
-
-После `8cd3b9f`, проверено на машине разработчика:
-
-```text
-npm run typecheck — 0 ошибок
-npm run build — успешно
-Vite: 19 modules transformed
-dist/animori.meta.js: 1.07 kB
-dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
-npm run format — все файлы unchanged
-```
-
-Рост 10 → 19 модулей и 99.16 → 144.91 kB подтверждает реальное включение translator в bundle.
-
-После `6efaf4f`, проверено на машине разработчика:
-
-```text
-npm run typecheck — 0 ошибок
-npm run build — успешно
-Vite: 19 modules transformed
-dist/animori.user.js: 144.91 kB (gzip 37.14 kB)
-```
-
-Неизменный размер ожидаем: каркас медиа-модуля ещё не подключён к точке входа.
-
-После `9efefe5`, проверено на машине разработчика:
-
-```text
-npm run typecheck — 0 ошибок
-npm run build — успешно
-Vite: 22 modules transformed
-dist/animori.meta.js: 1.07 kB
-dist/animori.user.js: 162.08 kB (gzip 41.88 kB)
-git status — working tree clean
-```
-
-Рост 19 → 22 модулей и 144.91 → 162.08 kB подтверждает, что медиа-модуль и плеер реально попали в bundle.
-
-После `75bbf2a`, проверено на машине разработчика:
-
-```text
-npm run typecheck — 0 ошибок
-npm run build — успешно
-Vite: 23 modules transformed
-dist/animori.meta.js: 1.07 kB
-dist/animori.user.js: 167.80 kB (gzip 43.33 kB)
-git status — working tree clean
-```
-
-Рост 22 → 23 модулей и 162.08 → 167.80 kB подтверждает включение виджета рейтингов.
-
-После `c5fb032`, проверено на машине разработчика:
-
-```text
-npm run typecheck — 0 ошибок
-npm run build — успешно
-Vite: 24 modules transformed
-dist/animori.meta.js: 1.07 kB
-dist/animori.user.js: 176.41 kB (gzip 45.39 kB)
-git status — working tree clean
-```
-
-Рост 23 → 24 модулей и 167.80 → 176.41 kB подтверждает включение виджета франшизы.
-
-## 15. Инструментальные решения
-
-- Prettier: `semi: false`, `singleQuote: true`, `printWidth: 100`.
-- Монолит и крупные data files исключены из форматирования.
-- `npm audit fix --force` не применялся из-за риска неконтролируемого major upgrade.
-- Из-за отсутствия DNS в sandbox часть build-проверок выполнялась на машине разработчика.
-- Временная GitHub Actions automation аудита не запускалась от push интеграции и была полностью удалена вместе с payload.
-- Sandbox TypeScript новее репозиторного `^5.6.2` и не принимает `baseUrl`. Корневой `tsconfig.json` не правился; обход делался только в черновом каталоге.
-- Машина разработчика работает в Windows PowerShell: POSIX-флаги вида `ls -la` недоступны, в инструкциях используется `Get-ChildItem` или `dir`.
-- Файлы отправляются строго по одному и последовательно. Попытка отправить виджет тем и его регистрацию одновременно дала конфликт ревизий (HTTP 409): регистрация прошла, файл — нет, и ветка временно не собиралась. Файл дослан отдельным коммитом `9692841`.
-
-## 16. Состояние этапа 1
-
-### Завершено
-
-- [x] Vite/TypeScript/vite-plugin-monkey;
-- [x] userscript metadata;
-- [x] SCSS;
-- [x] constants/settings/accent;
-- [x] DOM utilities и logger core;
-- [x] IndexedDB и types;
-- [x] AniList/Shikimori/anime365/AnimeThemes API;
-- [x] title resolver;
-- [x] name matching и Shikimori people;
-- [x] dictionary и custom links;
-- [x] scanner;
-- [x] exporter;
-- [x] scanner/exporter wiring;
-- [x] hardening audit;
-- [x] `src/features/translator/`;
-- [x] translator wiring в `main.ts`;
-- [x] чистые typecheck/build с translator;
-- [x] `src/features/media/` часть 1: каркас, типы и подписка;
-- [x] `src/features/media/` часть 2: плеер Kodik;
-- [x] media wiring в `main.ts` и подтверждённый рост bundle;
-- [x] часть 3, виджет 1: рейтинги и гистограмма оценок;
-- [x] часть 3, виджет 2: хронология франшизы;
-- [x] часть 3, виджет 3: музыкальные темы OP/ED.
-
-### Осталось
-
-- [ ] часть 3, виджет 4: внешние ссылки;
-- [ ] `src/features/search/` и dictionary capture;
-- [ ] UI настроек, владеющий контейнером `#animori-actions`;
-- [ ] UI logger через `registerLogSink()`;
-- [ ] полноценный bootstrap: SPA lifecycle, URL polling, garbage collector;
-- [ ] удалить `GM_addStyle` grant после проверки runtime dependencies;
-- [ ] проверить `src/_extracted_style.css`;
-- [ ] удалить лишние `.gitkeep`, включая `src/features/translator/.gitkeep`;
-- [ ] удалить случайно закоммиченные `exporter-block.txt` и `scanner-current.txt` (коммит `71fb01e`) и добавить их в `.gitignore`;
-- [ ] исправить `THEMES_` против `THEMES2_` в `getDbStats`: статистика всегда показывает 0 тем;
-- [ ] browser smoke-tests scanner/exporter/translator/плеера/рейтингов/франшизы/тем.
-
-## 17. Обязательные риски
-
-Подробности: [`AUDITION.md`](./refactoring/AUDITION.md).
-
-1. Асинхронное Tauri storage: UI ждёт `await bridge.storage.getAll()`. Касается выбора музыкального сервиса: он читается синхронно через `GM_getValue`.
-2. Rust HTTP не получает cookies WebView автоматически. Касается франшизы: список берётся с Shikimori.
-3. React может уничтожать Vue widgets: нужен `unmount()` и remount. Точка восстановления для userscript-режима — `ensureMediaWidgets()` в `features/media/index.ts`.
-4. Vue roots исключаются из MutationObserver translator: константа `am-notr` теперь живёт в `translator/dom.ts` и должна использоваться всеми Vue-компонентами этапа 2.
-5. Linux WebKitGTK может требовать GStreamer H.264/AAC codecs. Касается плеера Kodik из `media/player.ts`.
-6. Desktop logger требует ring buffer и streaming в файл.
-
-## 18. Следующий шаг
-
-Виджет 4 части 3: `src/features/media/extlinks.ts` — внешние ссылки (строки 3459-3530 монолита).
-
-Включает:
-
-- блок «Где посмотреть» для аниме и «Где почитать» для манги;
-- ссылки на RuTracker, Yummy, AnimeGO и MangaLib с пользовательскими доменами из настроек;
-- пользовательские ссылки из `core/custom-links.ts`;
-- проверку тех же шаблонных URL, что были сломаны в рейтингах, франшизе и темах.
-
-После виджета — регистрация в `main.ts`, чистые typecheck/build на машине разработчика и отдельный атомарный commit. На этом часть 3 и перенос медиа-страницы закрываются.
-
----
-
-Журнал обновляется после каждого завершённого блока: коммиты, решения, риски, проверки и следующий шаг.
+5. Поведение 

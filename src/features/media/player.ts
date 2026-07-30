@@ -3,11 +3,17 @@
 // Отдельный виджет медиа-страницы: кнопка запуска, overlay с iframe, список озвучек
 // и сетка эпизодов. Регистрируется в main.ts через registerMediaWidget(), чтобы не
 // получить циклический импорт с ./index.
+//
+// Этап 2 п.2.5: кнопка запуска больше не создаётся здесь и не вставляется в панель
+// через prepend. Панель отрисовывает Vue (ActionPanel.vue), и посторонний узел внутри
+// её разметки был бы источником расхождений при перерисовке. Виджет только сообщает
+// состояние: showPlayerButton() / hidePlayerButton().
 
 import { anilistQuery } from '../../api/anilist'
 import { amApplyAccentToDom } from '../../core/accent'
 import { settings } from '../../core/settings'
 import { Logger } from '../../utils/logger'
+import { hidePlayerButton, showPlayerButton } from '../ui/action-panel-state'
 import type { MediaContext, MediaWidget } from './types'
 
 /** Публичный токен Kodik из монолита. */
@@ -50,24 +56,6 @@ let kodikSyncListener: ((event: MessageEvent) => void) | null = null
 function heartSVG(filled: boolean): string {
   const c = filled ? 'rgb(var(--color-pink, 243,139,168))' : 'rgb(var(--color-text-light))'
   return `<svg width="15" height="15" viewBox="0 0 24 24" fill="${filled ? c : 'none'}" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5 4.3 12.6a4.7 4.7 0 0 1 0-6.6 4.5 4.5 0 0 1 6.5 0l1.2 1.2 1.2-1.2a4.5 4.5 0 0 1 6.5 0 4.7 4.7 0 0 1 0 6.6z"/></svg>`
-}
-
-/**
- * Контейнер кнопок в левом нижнем углу.
- *
- * В монолите контейнер создавался вместе с UI настроек (строка 4213), который ещё
- * не вынесен. Чтобы кнопка плеера работала уже сейчас, при отсутствии контейнера
- * он создаётся здесь. Когда UI настроек будет вынесен, он переиспользует тот же узел.
- */
-function ensureActionsContainer(): HTMLElement {
-  let root = document.getElementById('animori-actions')
-  if (!root) {
-    root = document.createElement('div')
-    root.id = 'animori-actions'
-    root.classList.add('am-accent-scope')
-    document.body.appendChild(root)
-  }
-  return root
 }
 
 /** Номера эпизодов для одного результата Kodik. */
@@ -393,36 +381,19 @@ export const playerWidget: MediaWidget = {
   name: 'player',
   cleanupSelectors: ['#ru-player-overlay'],
   mount(ctx) {
-    const btn = document.getElementById('ru-player-btn')
-
     // Плеер только для аниме и только когда включён в настройках.
     if (!settings.enablePlayer || ctx.malData.type !== 'ANIME' || !ctx.malData.idMal) {
-      if (btn) btn.style.display = 'none'
+      hidePlayerButton()
       return
     }
 
-    const button =
-      btn instanceof HTMLButtonElement
-        ? btn
-        : (document.createElement('button') as HTMLButtonElement)
-
-    if (!btn) {
-      button.id = 'ru-player-btn'
-      button.className = 'am-premium-btn'
-      button.textContent = '▶ Плеер'
-      button.title = 'Смотреть онлайн'
-      ensureActionsContainer().prepend(button)
-    }
-
-    button.style.display = 'flex'
-
-    // Обработчик перевешивается только при смене тайтла: mount() вызывается часто.
-    if (button.dataset.amMediaId !== String(ctx.aniId)) {
-      button.dataset.amMediaId = String(ctx.aniId)
-      button.onclick = () => {
-        void openPlayer(ctx)
-      }
-    }
+    // mount() вызывается часто, но здесь это дешёвая переустановка обработчика:
+    // showPlayerButton пишет в shallowRef, который не участвует в шаблоне, поэтому
+    // перерисовки панели не происходит. Проверка dataset.amMediaId из этапа 1
+    // больше не нужна — она страховала от накопления слушателей на живом узле.
+    showPlayerButton(() => {
+      void openPlayer(ctx)
+    })
 
     ensureOverlay()
     amApplyAccentToDom()

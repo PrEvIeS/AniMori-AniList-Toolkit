@@ -22,6 +22,7 @@ import { SHIKI_DOMAINS } from '../../core/constants'
 import { dbGet, dbSet } from '../../core/db'
 import type { AniListMedia } from '../../core/types'
 import { registerMutationHook } from '../translator'
+import { hidePlayerButton } from '../ui/action-panel-state'
 import { Logger } from '../../utils/logger'
 import type { MediaAniListData, MediaContext, MediaShikiData, MediaWidget } from './types'
 
@@ -84,19 +85,6 @@ function cleanupWidgets(): void {
 }
 
 /**
- * Гасит кнопку плеера при уходе со страницы тайтла.
- *
- * Кнопка живёт в общей панели действий `#animori-actions`, а не в разметке виджета,
- * поэтому `cleanupSelectors` её не снимает: иначе кнопка осталась бы висеть на списках
- * и в профиле. Монолит решал это тем же хардкодом внутри пулинга URL (строка 4643);
- * здесь селектор упомянут в единственном месте, которое знает об уходе со страницы.
- */
-function hidePlayerButton(): void {
-  const btn = document.getElementById('ru-player-btn')
-  if (btn) btn.style.display = 'none'
-}
-
-/**
  * Вставляет или восстанавливает все виджеты.
  *
  * Безопасно вызывать сколько угодно раз: каждый виджет сам проверяет своё наличие.
@@ -146,6 +134,14 @@ async function loadMediaPage(): Promise<void> {
   const route = parseMediaPath()
 
   // Ушли со страницы тайтла — сбрасываем состояние, чтобы виджеты не всплыли позже.
+  //
+  // Кнопка плеера гасится отдельно от cleanupWidgets(): она живёт в общей панели
+  // #animori-actions, а не в разметке виджета, и в cleanupSelectors её нет: иначе кнопка
+  // осталась бы висеть на списках и в профиле. Монолит решал это тем же хардкодом
+  // внутри пулинга URL (строка 4643).
+  //
+  // Пункт 2.5: раньше здесь был поиск узла через getElementById и правка style.display.
+  // Теперь узлом владеет Vue, и ручная правка стиля была бы стёрта при перерисовке.
   if (!route) {
     if (currentMediaId !== null) {
       cleanupWidgets()

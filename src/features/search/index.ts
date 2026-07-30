@@ -28,6 +28,11 @@ const SEARCH_PLACEHOLDER = 'Поиск в AniList'
 const DEBOUNCE_MS = 600
 const PER_CATEGORY = 4
 
+/** Абсолютный адрес на зеркале Shikimori (для фоллбэков без пары на AniList). */
+function shikiUrl(domain: string, path: string): string {
+  return 'https://' + domain + path
+}
+
 interface ShikiSearchMedia {
   /** Равен MyAnimeList ID. */
   id: number
@@ -130,11 +135,11 @@ function generatePersonCol(
     const alId = node?.id
 
     // Нет пары на AniList — ведём на зеркало Shikimori, которое ответило на поиск.
-    const href = alId ? `/${alPath}/${alId}` : `https://${item.__domain}${item.url ?? ''}`
+    const href = alId ? `/${alPath}/${alId}` : shikiUrl(item.__domain, item.url ?? '')
     const imgUrl =
       alId && node?.image?.large
         ? node.image.large
-        : `https://${item.__domain}${item.image?.preview ?? ''}`
+        : shikiUrl(item.__domain, item.image?.preview ?? '')
     const cover = rawHTML(encodeURI(imgUrl).replace(/'/g, '%27'))
 
     colHtml += html`<div class="result">

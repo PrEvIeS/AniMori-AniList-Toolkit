@@ -4,11 +4,12 @@ import './style.scss'
 import { fetchInterfaceDictionary } from './api/dictionary'
 import { amSetAccent } from './core/accent'
 import { IS_ANILIST, IS_SHIKI } from './core/constants'
-import { openDB } from './core/db'
+import { openDB, runGarbageCollector } from './core/db'
 import { rebuildDictionary, setRemoteDict } from './core/dictionary'
+import { initLifecycle } from './core/lifecycle'
 import { loadSettings, settings } from './core/settings'
 import { initExporter } from './features/exporter'
-import { initMedia, registerMediaWidget } from './features/media'
+import { initMedia, refreshMediaPage, registerMediaWidget } from './features/media'
 import { extLinksWidget } from './features/media/extlinks'
 import { franchiseWidget } from './features/media/franchise'
 import { playerWidget } from './features/media/player'
@@ -23,9 +24,15 @@ import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
 
 /**
- * Порядок важен и взят из init() монолита (строки 4210-4230, 4596-4613):
+ * Задержка перед запуском сборщика мусора кэша (строка 4653 монолита).
+ * Смысл — не конкурировать с запросами и отрисовкой первой страницы.
+ */
+const GC_DELAY_MS = 15000
+
+/**
+ * Порядок важен и взят из init() монолита (строки 4210-4230, 4596-4655):
  * настройки → перехватчики ошибок → акцент → панель кнопок → БД → словарь →
- * переводчик → поиск → медиа-виджеты.
+ * переводчик → поиск → медиа-виджеты → SPA-обвязка → сборщик мусора.
  *
  * Важно: флаги перевода гасят только загрузку удалённого словаря. Сам переводчик
  * инициализируется всегда, потому что на его наблюдателе мутаций живут медиа-виджеты
@@ -98,6 +105,16 @@ async function bootstrap(): Promise<void> {
   registerMediaWidget(themesWidget)
   registerMediaWidget(extLinksWidget)
   initMedia()
+
+  // SPA-обвязка ставится после initMedia(): первый проход по странице делает сам
+  // медиа-модуль, а здесь подключаются только последующие смены адреса.
+  // Без этого вызова виджеты появлялись только там, где React успевал пересобрать
+  // разметку и срабатывал наблюдатель мутаций.
+  initLifecycle(refreshMediaPage)
+
+  // Фоновая чистка устаревшего кэша. В порте функция была реализована, но ниоткуда
+  // не вызывалась, из-за чего IndexedDB росла бесконечно.
+  window.setTimeout(() => void runGarbageCollector(), GC_DELAY_MS)
 }
 
 void bootstrap()

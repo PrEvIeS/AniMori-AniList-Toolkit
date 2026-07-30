@@ -6,9 +6,12 @@
 // Главное отличие от этапа 1: cmpRender() пересчитывал cmpDiff / cmpStats / cmpFavDiff /
 // cmpNameDiff целиком на каждый клик по ✕ в игнор-листе. Здесь цепочка разведена:
 //   snapshot -> diffA/diffM/stats/fav* (тяжёлые, пересчёт только после скана)
-//   diff* + ignore -> visibleSections (дешёвая фильтрация массивов)
+//   diff* + ignore -> секции (дешёвая фильтрация массивов)
 // Снапшот лежит в shallowRef: внутри Map на десятки тысяч записей, глубокая
 // реактивность тут только вредит.
+//
+// Подписи секций, состав блоков и формат правой колонки скопированы из cmpRenderDiff /
+// cmpRenderFavs / cmpRenderNameFavs ветки desktop-dev-1. Менять их нельзя: это канон.
 
 import { computed, ref, shallowRef } from 'vue'
 import type { CmpAniListEntry, CmpShikiEntry } from '../../core/types'
@@ -37,7 +40,7 @@ export interface DiffRow {
   /** malId без знака. Знак добавляется только при записи в игнор-лист. */
   id: number
   title: string
-  /** Правая колонка строки: либо статус, либо «Shiki → AniList». */
+  /** Правая колонка строки: либо статус, либо «S: x | A: y». */
   meta: string
 }
 
@@ -46,7 +49,7 @@ export interface DiffSection {
   label: string
   /** 1 для аниме, -1 для манги — знак идентификатора в игнор-листе. */
   sign: 1 | -1
-  /** Можно ли скрывать строки крестиком. В 1.9.1 — только секции «только где-то». */
+  /** В 1.9.1 крестик есть у всех строк cmpRenderDiff; у имён из избранного — нет. */
   ignorable: boolean
   rows: DiffRow[]
 }
@@ -57,7 +60,7 @@ export const isScannerOpen = ref(false)
 export const shikiLogin = ref('')
 export const alName = ref('')
 /** Подсказка в поле AniList: имя из Viewer{name}, запрашивается один раз на открытие. */
-export const alPlaceholder = ref('автоопределение')
+export const alPlaceholder = ref('Имя AniList (авто по токену)')
 export const deepCheck = ref(false)
 export const isScanning = ref(false)
 export const statusText = ref('')
@@ -102,7 +105,7 @@ function isIgnored(id: number, sign: 1 | -1): boolean {
   return ignore.value.has(signedId(id, sign))
 }
 
-/** Название для строки игнор-листа: ищется в четырёх картах снапшота по знаку. */
+/** Название для строки игнор-листа: ищется в картах списков и избранного по знаку. */
 function titleOf(signed: number): string {
   const s = snapshot.value
   const id = Math.abs(signed)
@@ -112,6 +115,12 @@ function titleOf(signed: number): string {
   for (const m of maps) {
     const hit = m.get(id)
     if (hit) return hit.title
+  }
+  const favMaps: Array<Map<number, string>> =
+    signed > 0 ? [s.shFav.anime, s.alFavA] : [s.shFav.manga, s.alFavM]
+  for (const m of favMaps) {
+    const hit = m.get(id)
+    if (hit) return hit
   }
   return 'MAL#' + id
 }
@@ -150,22 +159,22 @@ export const statusRows = computed(() =>
   CMP_STATUS_ORDER.map((key) => ({ key, label: cmpStatusLabel(key) })),
 )
 
-export const favAnime = computed(() => {
+const favAnime = computed(() => {
   const s = snapshot.value
   return s ? cmpFavDiff(s.shFav.anime, s.alFavA) : null
 })
 
-export const favManga = computed(() => {
+const favManga = computed(() => {
   const s = snapshot.value
   return s ? cmpFavDiff(s.shFav.manga, s.alFavM) : null
 })
 
-export const favCharacters = computed(() => {
+const favCharacters = computed(() => {
   const s = snapshot.value
   return s ? cmpNameDiff(s.shFav.characters, s.alFavChar) : null
 })
 
-export const favStaff = computed(() => {
+const favStaff = computed(() => {
   const s = snapshot.value
   return s ? cmpNameDiff(s.shFav.people, s.alFavStaff) : null
 })
@@ -173,127 +182,174 @@ export const favStaff = computed(() => {
 // ==== Секции расхождений ====
 
 /**
- * Пометка глубокой проверки. Если тайтла нет в каталоге второго сервиса, расхождение
- * неустранимо и строка помечается — ровно как в cmpRenderDiff.
+ * Сборка секций одного типа (аниме либо манга) — порядок и подписи как в cmpRenderDiff.
+ *
+ * При глубокой проверке списки «только где-то» разбиваются надвое по наличию в чужом
+ * каталоге: то, что есть — можно добавить, чего нет — расхождение неустранимо.
  */
-function catalogNote(id: number, side: 'shiki' | 'al'): string {
-  const cat = snapshot.value?.catalog
-  if (!cat) return ''
-  if (side === 'shiki') return cat.alHas.has(id) ? '' : ' · нет в каталоге AniList'
-  return cat.shikiHas.has(id) ? '' : ' · нет в каталоге Shikimori'
-}
-
 function buildSections(diff: CmpDiffResult, sign: 1 | -1, type: 'anime' | 'manga'): DiffSection[] {
-  const p = type === 'anime' ? 'аниме' : 'манга'
-  const pair = (rows: Array<{ id: number; title: string; shiki: unknown; al: unknown }>) =>
-    rows.map((r) => ({ id: r.id, title: r.title, meta: `${r.shiki} → ${r.al}` }))
-  return [
-    {
-      key: `${type}-only-shiki`,
-      label: `Только на Shikimori (${p})`,
-      sign,
-      ignorable: true,
-      rows: diff.onlyShiki.map((r) => ({
-        id: r.id,
-        title: r.title,
-        meta: r.info + catalogNote(r.id, 'shiki'),
-      })),
-    },
-    {
-      key: `${type}-only-shiki-rel`,
-      label: `Только на Shikimori — связанные тайтлы (${p})`,
-      sign,
-      ignorable: true,
-      rows: diff.onlyShikiRel.map((r) => ({ id: r.id, title: r.title, meta: r.info })),
-    },
-    {
-      key: `${type}-only-al`,
-      label: `Только на AniList (${p})`,
-      sign,
-      ignorable: true,
-      rows: diff.onlyAl.map((r) => ({
-        id: r.id,
-        title: r.title,
-        meta: r.info + catalogNote(r.id, 'al'),
-      })),
-    },
-    {
-      key: `${type}-only-al-rel`,
-      label: `Только на AniList — связанные тайтлы (${p})`,
-      sign,
-      ignorable: true,
-      rows: diff.onlyAlRel.map((r) => ({ id: r.id, title: r.title, meta: r.info })),
-    },
-    {
-      key: `${type}-status`,
-      label: `Разный статус (${p})`,
-      sign,
-      ignorable: false,
-      rows: pair(diff.status),
-    },
-    {
-      key: `${type}-score`,
-      label: `Разная оценка (${p})`,
-      sign,
-      ignorable: false,
-      rows: pair(diff.score),
-    },
-    {
-      key: `${type}-progress`,
-      label: `Разный прогресс (${p})`,
-      sign,
-      ignorable: false,
-      rows: pair(diff.progress),
-    },
-    {
-      key: `${type}-rewatch`,
-      label: `Разное число пересмотров (${p})`,
-      sign,
-      ignorable: false,
-      rows: pair(diff.rewatch),
-    },
-    {
-      key: `${type}-notes`,
-      label: `Заметки (${p})`,
-      sign,
-      ignorable: false,
-      rows: pair(diff.notes),
-    },
-  ]
+  const cat = snapshot.value?.catalog ?? null
+  const out: DiffSection[] = []
+  const info = (rows: Array<{ id: number; title: string; info: string }>): DiffRow[] =>
+    rows.map((r) => ({ id: r.id, title: r.title, meta: r.info }))
+  const pair = (
+    rows: Array<{ id: number; title: string; shiki: string | number; al: string | number }>,
+  ): DiffRow[] =>
+    rows.map((r) => ({ id: r.id, title: r.title, meta: `S: ${r.shiki} | A: ${r.al}` }))
+  const add = (key: string, label: string, rows: DiffRow[]): void => {
+    out.push({ key: `${type}-${key}`, label, sign, ignorable: true, rows })
+  }
+
+  if (cat) {
+    add(
+      'only-shiki-have',
+      'Только на Shikimori — ЕСТЬ в каталоге AniList (можно добавить)',
+      info(diff.onlyShiki.filter((x) => cat.alHas.has(x.id))),
+    )
+    add(
+      'only-shiki-missing',
+      'Только на Shikimori — НЕТ в каталоге AniList',
+      info(diff.onlyShiki.filter((x) => !cat.alHas.has(x.id))),
+    )
+    add(
+      'only-al-have',
+      'Только на AniList — ЕСТЬ в каталоге Shikimori (можно добавить)',
+      info(diff.onlyAl.filter((x) => cat.shikiHas.has(x.id))),
+    )
+    add(
+      'only-al-missing',
+      'Только на AniList — НЕТ в каталоге Shikimori',
+      info(diff.onlyAl.filter((x) => !cat.shikiHas.has(x.id))),
+    )
+  } else {
+    add('only-shiki', 'В списке только на Shikimori', info(diff.onlyShiki))
+    add('only-al', 'В списке только на AniList', info(diff.onlyAl))
+  }
+
+  add(
+    'related',
+    'Связано с уже отслеживаемым (деление на сезоны / сиквелы)',
+    info([...diff.onlyShikiRel, ...diff.onlyAlRel]),
+  )
+  add('status', 'Разный статус', pair(diff.status))
+  add('score', 'Разная оценка', pair(diff.score))
+  add('progress', 'Разный прогресс', pair(diff.progress))
+  add('rewatch', 'Разные пересмотры', pair(diff.rewatch))
+  add('notes', 'Разные заметки', pair(diff.notes))
+  return out
 }
 
-const allSections = computed<DiffSection[]>(() => {
-  const a = diffAnime.value
-  const m = diffManga.value
-  if (!a || !m) return []
-  return [...buildSections(a, 1, 'anime'), ...buildSections(m, -1, 'manga')]
-})
-
-/** Секции без игнорируемых строк и без пустых блоков. Зависит от ignore, но не от сети. */
-export const visibleSections = computed<DiffSection[]>(() =>
-  allSections.value
+/** Фильтрация игнора и выбрасывание пустых блоков — дешёвая часть цепочки. */
+function visible(sections: DiffSection[]): DiffSection[] {
+  return sections
     .map((s) =>
       s.ignorable ? { ...s, rows: s.rows.filter((r) => !isIgnored(r.id, s.sign)) } : s,
     )
-    .filter((s) => s.rows.length > 0),
+    .filter((s) => s.rows.length > 0)
+}
+
+export const animeSections = computed<DiffSection[]>(() => {
+  const d = diffAnime.value
+  return d ? visible(buildSections(d, 1, 'anime')) : []
+})
+
+export const mangaSections = computed<DiffSection[]>(() => {
+  const d = diffManga.value
+  return d ? visible(buildSections(d, -1, 'manga')) : []
+})
+
+export const animeDiffCount = computed(() =>
+  animeSections.value.reduce((acc, s) => acc + s.rows.length, 0),
 )
 
-export const totalDiffCount = computed(() =>
-  visibleSections.value.reduce((acc, s) => acc + s.rows.length, 0),
+export const mangaDiffCount = computed(() =>
+  mangaSections.value.reduce((acc, s) => acc + s.rows.length, 0),
 )
 
-export const favIsEqual = computed(() => {
+// ==== Избранное ====
+
+/** Счётчики для шапки блока избранного: «Аниме: N Shiki / M AniList · Манга: …». */
+export const favCounts = computed(() => {
   const a = favAnime.value
   const m = favManga.value
+  if (!a || !m) return null
+  return {
+    animeShiki: a.shikiCount,
+    animeAl: a.alCount,
+    mangaShiki: m.shikiCount,
+    mangaAl: m.alCount,
+  }
+})
+
+export const favSections = computed<DiffSection[]>(() => {
+  const a = favAnime.value
+  const m = favManga.value
+  if (!a || !m) return []
+  const rows = (arr: Array<{ id: number; title: string }>): DiffRow[] =>
+    arr.map((x) => ({ id: x.id, title: x.title, meta: '' }))
+  return visible([
+    {
+      key: 'fav-anime-shiki',
+      label: 'Избранное аниме: только в Shikimori',
+      sign: 1,
+      ignorable: true,
+      rows: rows(a.onlyShiki),
+    },
+    {
+      key: 'fav-anime-al',
+      label: 'Избранное аниме: только в AniList',
+      sign: 1,
+      ignorable: true,
+      rows: rows(a.onlyAl),
+    },
+    {
+      key: 'fav-manga-shiki',
+      label: 'Избранное манга: только в Shikimori',
+      sign: -1,
+      ignorable: true,
+      rows: rows(m.onlyShiki),
+    },
+    {
+      key: 'fav-manga-al',
+      label: 'Избранное манга: только в AniList',
+      sign: -1,
+      ignorable: true,
+      rows: rows(m.onlyAl),
+    },
+  ])
+})
+
+/** В 1.9.1 «Избранное совпадает» проверяет только аниме и мангу, без имён. */
+export const favIsEqual = computed(() => favCounts.value !== null && favSections.value.length === 0)
+
+/** Блоки персонажей и стаффа: матч по имени, без id и без игнора. */
+export const nameFavBlocks = computed(() => {
   const c = favCharacters.value
-  const st = favStaff.value
-  if (!a || !m || !c || !st) return false
-  return (
-    a.onlyShiki.length + a.onlyAl.length === 0 &&
-    m.onlyShiki.length + m.onlyAl.length === 0 &&
-    c.onlyShiki.length + c.onlyAl.length === 0 &&
-    st.onlyShiki.length + st.onlyAl.length === 0
-  )
+  const s = favStaff.value
+  if (!c || !s) return []
+  const build = (label: string, d: NonNullable<typeof c>) => ({
+    key: label,
+    label,
+    shikiCount: d.shikiCount,
+    alCount: d.alCount,
+    sections: [
+      {
+        key: `${label}-shiki`,
+        label: `${label}: только в Shikimori`,
+        sign: 1 as const,
+        ignorable: false,
+        rows: d.onlyShiki.map((x, i) => ({ id: i, title: x.title, meta: '' })),
+      },
+      {
+        key: `${label}-al`,
+        label: `${label}: только в AniList`,
+        sign: 1 as const,
+        ignorable: false,
+        rows: d.onlyAl.map((x, i) => ({ id: i, title: x.title, meta: '' })),
+      },
+    ].filter((sec) => sec.rows.length > 0),
+  })
+  return [build('Избранные персонажи', c), build('Избранный стафф', s)]
 })
 
 // ==== Действия ====
@@ -306,10 +362,10 @@ export async function openScanner(): Promise<void> {
   placeholderLoaded = true
   try {
     const name = await fetchViewerName()
-    if (name) alPlaceholder.value = name
+    if (name) alPlaceholder.value = name + ' (по токену)'
   } catch (e) {
-    // Подсказка необязательна: без токена просто остаётся «автоопределение».
-    Logger('WARN', 'Сканер сравнения: не удалось получить имя AniList для подсказки', e)
+    // Подсказка необязательна: без токена остаётся исходный плейсхолдер.
+    Logger('INFO', 'Сканер сравнения: имя AniList для подсказки недоступно (нет токена?)', e)
   }
 }
 

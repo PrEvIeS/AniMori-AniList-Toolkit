@@ -15,10 +15,10 @@ import { franchiseWidget } from './features/media/franchise'
 import { playerWidget } from './features/media/player'
 import { ratingsWidget } from './features/media/ratings'
 import { themesWidget } from './features/media/themes'
-import { openCompareModal } from './features/scanner'
+import { initScannerUI } from './features/scanner'
 import { initSearch } from './features/search'
 import { initTranslator } from './features/translator'
-import { ACTION_ORDER, initActionBar, registerActionButton } from './features/ui/actions'
+import { initActionBar } from './features/ui/actions'
 import { initLoggerUI } from './features/ui/logger-ui'
 import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
@@ -57,19 +57,15 @@ async function bootstrap(): Promise<void> {
   // игнорируется: виджеты красятся синим AniList независимо от выбора.
   amSetAccent(settings.accentPreset)
 
-  // Все три кнопки регистрируются до initActionBar(), а порядок в панели задаёт
-  // ACTION_ORDER, а не порядок вызовов: ⚙, </>, ⇄ — как в монолите.
+  // П.2.6: каждая фича сама регистрирует свою кнопку внутри init*UI(), поэтому
+  // точка входа больше не знает ни id кнопок, ни их обработчиков.
+  // Все три вызова идут до initActionBar(), а порядок пилюль задаёт ACTION_ORDER,
+  // а не очерёдность регистрации: ⚙, </>, ⇄ — как в монолите.
   // initLoggerUI() сам проверяет settings.enableLogger и при выключенном логгере
   // не добавляет ни кнопку, ни подписку на записи.
-  registerActionButton({
-    id: 'am-cmp-btn',
-    label: '⇄',
-    title: 'Сравнить списки Shikimori и AniList (AniMori)',
-    order: ACTION_ORDER.compare,
-    onClick: () => void openCompareModal(),
-  })
   initSettingsUI()
   initLoggerUI()
+  initScannerUI()
   initActionBar()
 
   await openDB()

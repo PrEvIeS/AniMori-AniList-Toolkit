@@ -1,91 +1,57 @@
-// Пункт 1.7 плана: плавающая панель кнопок AniMori (строки 4213-4224 монолита).
+// Пункт 2.5: от императивной панели осталась только точка запуска.
 //
-// Разметка повторяет монолит один в один: контейнер #animori-actions с классом
-// am-accent-scope в конце body, внутри — кнопки .am-premium-btn. Стили для обоих
-// селекторов уже перенесены в style.scss, поэтому инлайновый CSS здесь не нужен.
+// Разметка теперь в ActionPanel.vue, состояние — в action-panel-state.ts. Файл сохранён
+// ради пути импорта: main.ts берёт отсюда ACTION_ORDER, registerActionButton и
+// initActionBar, и менять bootstrap() в этом пункте не требуется.
 //
-// Кнопки регистрируются, а не вписываются жёстко: модалки настроек и логгера
-// приезжают следующими итерациями, и им достаточно вызвать registerActionButton().
-// Порядок задаётся числом, а не порядком вызова, иначе поздние итерации добавляли
-// бы свои кнопки справа и раскладка разошлась бы с монолитом.
-//
-// На Этапе 2 файл заменяется на ActionPanel.vue (п.2.5), а registerActionButton
-// станет emit'ом событий.
+// Реестр кнопок и реактивное состояние сознательно лежат в отдельном модуле:
+// иначе возник бы цикл actions.ts -> ActionPanel.vue -> actions.ts.
 
-import { Logger } from '../../utils/logger'
+import { mountApp, unmountApp } from '../../utils/vue-mounter'
+import ActionPanel from './ActionPanel.vue'
+
+export {
+  ACTION_ORDER,
+  hidePlayerButton,
+  registerActionButton,
+  showPlayerButton,
+  type ActionButton,
+} from './action-panel-state'
+
+/** Ключ в реестре vue-mounter'а. */
+export const ACTION_PANEL_APP_KEY = 'action-panel'
 
 const CONTAINER_ID = 'animori-actions'
 
-/** Порядок кнопок слева направо, как в монолите: ⚙, </>, ⇄. */
-export const ACTION_ORDER = {
-  settings: 10,
-  logger: 20,
-  compare: 30,
-} as const
-
-export interface ActionButton {
-  /** id узла: сохраняем идентификаторы монолита (am-set-btn, am-log-btn, am-cmp-btn). */
-  id: string
-  /** Подпись кнопки. Вставляется как текст, не как HTML. */
-  label: string
-  title: string
-  /** Меньше — левее. Значения из ACTION_ORDER. */
-  order: number
-  onClick: () => void
-}
-
-const buttons: ActionButton[] = []
-let container: HTMLElement | null = null
-
-function render(): void {
-  if (!container) return
-
-  container.textContent = ''
-  const ordered = [...buttons].sort((a, b) => a.order - b.order)
-
-  for (const button of ordered) {
-    const el = document.createElement('button')
-    el.id = button.id
-    el.type = 'button'
-    el.className = 'am-premium-btn'
-    // textContent, а не innerHTML: монолит писал '&lt;/&gt;' и получал '</>',
-    // здесь тот же результат без разбора HTML.
-    el.textContent = button.label
-    el.title = button.title
-    el.onclick = () => {
-      try {
-        button.onClick()
-      } catch (e) {
-        Logger('ERROR', `[UI] Ошибка обработчика кнопки ${button.id}`, e)
-      }
-    }
-    container.appendChild(el)
-  }
-}
+let isStarted = false
 
 /**
- * Добавляет кнопку в панель. Повторная регистрация того же id игнорируется.
- * Можно вызывать и до, и после initActionBar().
+ * Монтирует панель действий.
+ *
+ * Контейнер создаёт сам компонент, поэтому монтируемся в body, а не в #animori-actions:
+ * селектор .am-premium-btn + .am-premium-btn из style.scss работает только пока кнопки —
+ * прямые соседи внутри flex-контейнера.
  */
-export function registerActionButton(button: ActionButton): void {
-  if (buttons.some((b) => b.id === button.id)) return
-  buttons.push(button)
-  render()
+export function initActionBar(): void {
+  if (isStarted) return
+  isStarted = true
+
+  // На этапе 1 контейнер мог создать виджет плеера раньше панели. Сейчас такого пути
+  // нет, но узел может остаться от предыдущей версии скрипта после горячего
+  // обновления в Tampermonkey — тогда пилюль отрисовалась бы дважды.
+  document.getElementById(CONTAINER_ID)?.remove()
+
+  // watchContainer: false — наблюдатель на childList у body был бы пустой тратой:
+  // AniList дёргает детей body постоянно (модалки, тултипы), а панель за весь этап 1
+  // ни разу не пропала: она fixed и лежит вне дерева React.
+  mountApp(ACTION_PANEL_APP_KEY, ActionPanel, {
+    container: document.body,
+    watchContainer: false,
+  })
 }
 
-/** Создаёт контейнер панели и отрисовывает зарегистрированные кнопки. */
-export function initActionBar(): void {
-  if (container) return
-
-  const existing = document.getElementById(CONTAINER_ID)
-  if (existing) {
-    container = existing
-  } else {
-    container = document.createElement('div')
-    container.id = CONTAINER_ID
-    container.classList.add('am-accent-scope')
-    document.body.appendChild(container)
-  }
-
-  render()
+/** Снимает панель. Нужно для LifecycleManager из п.2.9. */
+export function destroyActionBar(): void {
+  unmountApp(ACTION_PANEL_APP_KEY)
+  isStarted = false
 }

@@ -331,6 +331,15 @@ export async function getAnilistIds(
   return map
 }
 
+/**
+ * Читает текущий список пользователя на AniList — основа для пропуска совпадающих записей.
+ *
+ * Запрос идёт С ТОКЕНОМ. В 1.9.1 третий аргумент не передавался, и анонимный
+ * MediaListCollection возвращал пустоту всякий раз, когда списки закрыты настройками
+ * приватности. Пустая карта означает, что все записи считаются новыми и весь список
+ * перезаливается заново по 700 мс на запись. Токен у нас есть — читаем свой список от
+ * своего имени.
+ */
 export async function getExistingAnilistList(
   alUserId: number,
   type: AniListMediaType,
@@ -356,12 +365,18 @@ export async function getExistingAnilistList(
         }>
       }>
     }
-  }>(query, { u: alUserId, t: type })
+  }>(query, { u: alUserId, t: type }, true)
   const lists = res?.data?.MediaListCollection?.lists || []
   lists.forEach((list) =>
     list.entries.forEach((m) => {
       map[m.mediaId] = m as AniListEntry
     }),
+  )
+  const known = Object.keys(map).length
+  Logger(
+    known > 0 ? 'INFO' : 'WARN',
+    `Текущий список AniList (${type}): получено ${known} записей` +
+      (known > 0 ? '' : ' — сравнивать не с чем, будет перенесён весь список'),
   )
   await new Promise((r) => setTimeout(r, 600))
   return map
@@ -392,7 +407,7 @@ export async function getExistingAnilistFavorites(
             }
           }
         }
-      }>(query, { u: alUserId, p: page })
+      }>(query, { u: alUserId, p: page }, true)
       const data = res?.data?.User?.favourites?.[type]
       if (!data) break
       data.nodes.forEach((n) => targetSet.add(n.id))
@@ -400,6 +415,7 @@ export async function getExistingAnilistFavorites(
       page++
       await new Promise((r) => setTimeout(r, 600))
     }
+    Logger('INFO', `Текущее избранное AniList (${type}): ${targetSet.size} шт.`)
   }
   await fetchFav('anime', existing.anime)
   await fetchFav('manga', existing.manga)
@@ -446,6 +462,11 @@ export async function syncShikiToAlList(
   )
   const exList = await getExistingAnilistList(alUser.id, alType, onProgress)
 
+  // Статистика прогона: без неё невозможно отличить «пропуск работает» от «сравнивать не с чем».
+  let skipped = 0
+  let updated = 0
+  let noId = 0
+
   let count = 0
   for (const item of valids) {
     count++
@@ -453,6 +474,7 @@ export async function syncShikiToAlList(
 
     const alId = idMap[item.target_id]
     if (!alId) {
+      noId++
       if (count % 50 === 0) await new Promise((r) => setTimeout(r, 10))
       continue
     }
@@ -502,6 +524,7 @@ export async function syncShikiToAlList(
       if (notes !== undefined) isSame = isSame && (ex.notes ? ex.notes.trim() : undefined) === notes
 
       if (isSame) {
+        skipped++
         if (count % 50 === 0) await new Promise((r) => setTimeout(r, 10))
         continue
       }
@@ -531,12 +554,19 @@ export async function syncShikiToAlList(
 
     try {
       await anilistQuery(mutation, variables, true)
+      updated++
     } catch (e) {
       syncFailures++
       Logger('ERROR', `syncShikiToAlList: сбой SaveMediaListEntry (mediaId=${alId}, ${type})`, e)
     }
     await new Promise((r) => setTimeout(r, 700))
   }
+
+  Logger(
+    'INFO',
+    `Перенос ${type} завершён: всего ${valids.length}, отправлено ${updated}, ` +
+      `пропущено без изменений ${skipped}, не найдено на AniList ${noId}`,
+  )
 }
 
 export async function syncShikiToAlFavorites(

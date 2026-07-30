@@ -5,6 +5,12 @@
   amk-* сохранены, поэтому style.scss не меняется. Контент выводится только через
   интерполяцию — ни одного innerHTML, в отличие от этапа 1.
 
+  ВНИМАНИЕ, грабли: в style.scss у селектора .amk-overlay стоит display: none. В монолите
+  оверлей показывался императивно — el.style.display = 'flex'. При переходе на v-if элемент
+  попадает в DOM, но остаётся невидимым, поэтому display:flex задан инлайном.
+  Сам селектор не правим: на нём живёт ещё #am-panel и экспортёр Shikimori,
+  а переезд amk-* в scoped-стили запланирован отдельно.
+
   Отличия поведения от 1.9.1 — два и оба согласованы: кнопка отмены во время скана
   и счётчик шагов рядом со строкой статуса.
 -->
@@ -124,6 +130,7 @@ function onOverlayClick(e: MouseEvent): void {
     v-if="isScannerOpen"
     id="am-cmp-overlay"
     class="amk-overlay"
+    style="display: flex"
     @click="onOverlayClick"
     @keydown.esc="closeScanner"
   >
@@ -175,7 +182,7 @@ function onOverlayClick(e: MouseEvent): void {
           >
             {{ isScanning ? 'Сканирую…' : 'Сравнить' }}
           </button>
-          <button v-if="isScanning" class="amk-btn" type="button" @click="cancelScan">
+          <button v-if="isScanning" class="amk-btn amk-btn-ghost" type="button" @click="cancelScan">
             Отменить
           </button>
         </div>

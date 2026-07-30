@@ -11,6 +11,8 @@
   Текстовые поля намеренно работают через :value + @change, а не v-model: монолит сохранял их
   по событию change (потеря фокуса), а не на каждое нажатие клавиши. Сохраняем это поведение,
   иначе домены и словарь писались бы в хранилище посимвольно.
+
+  Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
 <template>
   <div
@@ -631,6 +633,7 @@ import {
   refreshDict,
   reloadCustomLinks,
   removeCustomLink,
+  saveAlToken,
   selectAccent,
   setCustomLinkColor,
   shareDict,
@@ -730,8 +733,7 @@ function onDictCopy(): void {
 
 function onTokenChange(e: Event): void {
   alToken.value = inputValue(e).trim()
-  // AL_TOKEN живёт вне AniMoriSettings — пишем через хелпер состояния.
-  void import('./settings-state').then((m) => m.saveAlToken())
+  saveAlToken()
 }
 
 function onGenerateAuthLink(): void {

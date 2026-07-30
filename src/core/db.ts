@@ -210,12 +210,12 @@ export async function getDbStats(): Promise<DbStats | DbStatsError> {
         keys.forEach((key) => {
           if (typeof key !== 'string') return
           if (key.startsWith('MED2_') || key.startsWith('FULL_')) stats.media++
-          // TODO(этап 1): темы кэшируются под префиксом THEMES2_, а счётчик ищет
-          // THEMES_, поэтому stats.themes всегда 0. Поведение перенесено 1:1;
-          // исправлять отдельным коммитом, чтобы не смешивать с рефакторингом.
           else if (key.startsWith('CHR2_')) stats.characters++
           else if (key.startsWith('STF3_')) stats.staff++
-          else if (key.startsWith('THEMES_')) stats.themes++
+          // Исправление дефекта монолита: темы кэшируются под префиксом THEMES2_
+          // (см. api/animethemes.ts), а счётчик искал THEMES_, поэтому в инспекторе
+          // всегда показывалось 0 тем. Ошибка только в статистике: сам кэш работал.
+          else if (key.startsWith('THEMES2_')) stats.themes++
         })
       }
 

@@ -11,9 +11,20 @@
 // токен сохраняется ровно перед серией авторизованных запросов, и если бы запись
 // шла только в асинхронное хранилище, первый же запрос мог бы уйти без токена
 // и весь экспорт упал бы на первом шаге.
+//
+// Пункт 3.7: точка входа переехала на AniList и на обеих платформах одна и та же.
+// Отсюда два следствия в этом файле:
+//
+//   1. Логин Shikimori больше нельзя угадать по адресу страницы: адрес теперь всегда
+//      anilist.co. Вместо угадывания берётся запомненный логин, причём тот же самый,
+//      что у окна сравнения (ключ SHIKI_LOGIN). Заводить свой ключ было бы хуже: пользователь
+//      один, и вводить один и тот же ник в двух окнах бессмысленно. Запись идёт через
+//      scanner/compare.ts, а не напрямую в хранилище: там живёт кэш в памяти, и мимо него
+//      запись оставила бы сканеру старое значение до конца сессии.
+//
+//   2. Режим теперь всегда 'import' и больше не зависит от домена.
 
 import { computed, ref } from 'vue'
-import { IS_SHIKI } from '../../core/constants'
 import { Logger } from '../../utils/logger'
 import {
   fetchShikiHistoryDates,
@@ -28,22 +39,22 @@ import {
   type AniListUser,
   type HistoryDates,
 } from './sync-api'
+import { getSavedShikiLogin, loadScannerStorage, saveShikiLogin } from '../scanner/compare'
 import { anilistQuery, getStoredAlToken, setAlToken } from '../../api/anilist'
 
 /** Подпись кнопки в покое. В 1.9.1 было жёсткое 'Экспорт'. */
 export const IDLE_LABEL = 'Экспорт'
 
 /**
- * Режим работы модуля. По RM2 компонент один, а подписи зависят от среды:
- * на Shikimori это «экспорт», в десктопе на AniList — «импорт».
+ * Режим работы модуля. По RM2 компонент один, а подписи зависят от среды.
  *
- * Сейчас достижим только режим 'export': импортная ветка требует Bridge из п.3.6,
- * потому что без cookies Shikimori список читается только у публичного профиля (РИСК №2).
- * Каркас заведён заранее, чтобы на Этапе 3 менялся транспорт, а не разметка.
+ * После 3.7 среда одна: окно открывается только на AniList и тянет данные со стороны,
+ * то есть с точки зрения пользователя это импорт. Тип оставлен с двумя вариантами: он
+ * описывает направление переноса, а не домен, и пригодится, если появится обратная выгрузка.
  */
 export type SyncMode = 'export' | 'import'
 
-export const syncMode = computed<SyncMode>(() => (IS_SHIKI ? 'export' : 'import'))
+export const syncMode: SyncMode = 'import'
 
 /** Видимость модалки. В 1.9.1 оверлей создавался и удалялся через remove(). */
 export const isSyncOpen = ref(false)
@@ -53,6 +64,16 @@ export const isRunning = ref(false)
 
 /** Текущая подпись кнопки: она же индикатор прогресса. */
 export const buttonLabel = ref(IDLE_LABEL)
+
+/**
+ * То же самое для пилюли в панели действий: пусто в покое, текст во время работы.
+ *
+ * Пустая строка, а не IDLE_LABEL: в покое кнопка должна показывать иконку, а слово
+ * «Экспорт» растянуло бы пилюлю и сломало равнение с остальными кнопками.
+ */
+export const pillProgress = computed(() =>
+  buttonLabel.value === IDLE_LABEL ? '' : buttonLabel.value,
+)
 
 export const shikiUser = ref('')
 export const alToken = ref('')
@@ -71,15 +92,16 @@ const AL_HOST = 'https://' + 'anilist.co'
 export const AL_DEVELOPER_URL = AL_HOST + '/settings/developer'
 export const AL_REDIRECT_URL = AL_HOST + '/api/v2/oauth/pin'
 
-/** Логин из адреса страницы Shikimori, как в монолите. */
-function guessShikiUser(): string {
-  const urlPath = window.location.pathname.split('/')
-  const first = urlPath[1]
-  return urlPath.length > 1 && first && !['animes', 'mangas', 'forum'].includes(first) ? first : ''
-}
-
-export function openSyncModal(): void {
-  if (!shikiUser.value) shikiUser.value = guessShikiUser()
+/**
+ * Открывает окно переноса.
+ *
+ * Асинхронная: запомненный логин лежит в хранилище моста, а оно асинхронное. Сначала
+ * прогревается кэш сканера, потом подставляются поля. Поле, в которое пользователь
+ * уже что-то ввёл, не затирается.
+ */
+export async function openSyncModal(): Promise<void> {
+  await loadScannerStorage()
+  if (!shikiUser.value) shikiUser.value = getSavedShikiLogin()
   alToken.value = getStoredAlToken()
   isSyncOpen.value = true
 }
@@ -114,6 +136,10 @@ export async function runSync(): Promise<void> {
     alert('Выберите опции для экспорта!')
     return
   }
+
+  // Логин запоминается тем же ключом, что и в окне сравнения: на AniList его больше
+  // неоткуда взять, а требовать ввода при каждом открытии окна невежливо.
+  saveShikiLogin(user)
 
   setAlToken(token)
   // Токен не остаётся в поле после сохранения — поведение из 1.9.1.

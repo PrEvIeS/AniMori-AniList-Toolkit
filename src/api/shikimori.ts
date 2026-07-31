@@ -13,7 +13,15 @@
 // работала вплотную к потолку, ловила 429 и вставала на штрафные паузы по 5 секунд.
 // Раньше пауза ставилась ТОЛЬКО задним числом, после отказа. Теперь запросы проходят
 // через шлюз acquireSlot(), который разводит их во времени заранее.
+//
+// Пункт 3.5.2: транспорт переведён с GM_xmlhttpRequest на Bridge.http. Ограничитель
+// темпа, перебор зеркал и трактовка кодов ответа остались ЗДЕСЬ и НЕ уехали в мост:
+// мост знает только про HTTP и не обязан знать ни про лимиты Shikimori, ни про РКН.
+// Код вне 2xx мост исключением не считает, поэтому 429 и 404 разбираются явными
+// ветками до проверки на успех, иначе «подожди» и «ищи на другом зеркале» превратились
+// бы в обычный сбой.
 
+import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
 import { Logger } from '../utils/logger'
 
@@ -26,6 +34,8 @@ const MIN_INTERVAL_MS = 300
 const RATE_WINDOW_MS = 60000
 /** Держимся ниже потолка: 90 - это отказ, 60 - рабочий режим с запасом. */
 const MAX_PER_WINDOW = 60
+/** Таймаут одного зеркала: дольше ждать нет смысла, лучше уйти на следующее. */
+const MIRROR_TIMEOUT_MS = 5000
 
 /** Время последнего отправленного запроса. */
 let lastSentAt = 0
@@ -110,8 +120,6 @@ export interface ShikiResponse<T = unknown> {
   domain: string | null
 }
 
-type Attempt<T> = { data: T | null; domain: string; notFound?: boolean } | { rateLimited: true }
-
 /**
  * GET к Shikimori REST с перебором зеркал и повтором при 429.
  * @param path Путь вида `/api/animes/123`, без домена.
@@ -125,38 +133,32 @@ export async function fetchShiki<T = unknown>(path: string): Promise<ShikiRespon
       // Слот берём перед каждой реальной отправкой, включая перебор зеркал.
       await acquireSlot()
 
-      const res = await new Promise<Attempt<T>>((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: mirrorUrl(domain, path),
-          timeout: 5000,
-          onload: (r) => {
-            if (r.status === 200) resolve({ data: JSON.parse(r.responseText) as T, domain })
-            else if (r.status === 429) {
-              shikiRateLimitPause = Date.now() + 5000
-              resolve({ rateLimited: true })
-            } else if (r.status === 404) resolve({ data: null, domain, notFound: true })
-            else reject(new Error(`Shikimori HTTP ${r.status}`))
-          },
-          onerror: reject,
-          ontimeout: reject,
-        })
+      const r = await Bridge.http.request({
+        method: 'GET',
+        url: mirrorUrl(domain, path),
+        timeoutMs: MIRROR_TIMEOUT_MS,
       })
 
-      if ('rateLimited' in res) {
+      if (r.status === 429) {
+        shikiRateLimitPause = Date.now() + 5000
         Logger('ERROR', `Shikimori Rate Limit 429 (${domain})! Пауза.`)
         // Повтор пойдёт через шлюз и сам дождётся конца паузы.
         return fetchShiki<T>(path)
       }
 
       // 404: возможно удалён по РКН — пробуем следующее зеркало (напр. .rip).
-      if (res.notFound) {
-        lastNotFound = { data: null, domain: res.domain }
+      if (r.status === 404) {
+        lastNotFound = { data: null, domain }
         continue
       }
 
-      return res
+      if (r.status !== 200) {
+        throw new Error(`Shikimori HTTP ${r.status}`)
+      }
+
+      return { data: JSON.parse(r.text) as T, domain }
     } catch (e) {
+      // Сеть, таймаут (BridgeHttpError), неизвестный код или битый JSON — следующее зеркало.
       Logger('ERROR', `Ошибка запроса к зеркалу Shiki: ${domain}`, e)
     }
   }

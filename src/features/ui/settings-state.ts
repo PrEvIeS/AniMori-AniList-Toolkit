@@ -1,17 +1,23 @@
 // Пункт 2.2 плана: реактивное состояние панели настроек #am-panel.
 //
 // Разделение обязанностей: здесь состояние и запись в хранилище, разметка — в
-// SettingsModal.vue. Компонент не обращается к GM_setValue за настройками напрямую
-// (РИСК №1 из AUDITION.md): всё идёт через saveSetting() из core/settings.ts, поэтому
-// на Этапе 3 замена хранилища на async-мост затронет один модуль, а не восемь вкладок.
+// SettingsModal.vue. Компонент не обращается к хранилищу за настройками напрямую
+// (РИСК №1 из AUDITION.md): всё идёт через saveSetting() из core/settings.ts.
 //
-// Единственные прямые обращения к GM_* здесь — AL_TOKEN, am_custom_links и am_user_dict:
-// они не входят в AniMoriSettings и в монолите тоже писались напрямую (или через
-// core/custom-links и core/dictionary). Поведение перенесено 1:1.
+// Пункт 3.5.3: прямых обращений к GM_* здесь больше нет.
+//   • токен AniList читается и пишется через api/anilist.ts, где лежит его кэш.
+//     Своей копии токена панель не держит: иначе после сохранения нового токена
+//     запросы продолжили бы уходить со старым до перезагрузки страницы.
+//   • копирование словаря идёт через amCopy(): там уже есть и мост, и запасной
+//     браузерный путь, и запись в лог при отказе — дублировать эту логику нечего.
+//     Сигнатура осталась синхронной, чтобы не менять обработчики клика в компоненте.
+//   • свои ссылки и локальный словарь уже живут в core/custom-links и core/dictionary
+//     со своими кэшами — здесь их геттеры по-прежнему синхронные.
 
 import { computed, ref } from 'vue'
 import type { WritableComputedRef } from 'vue'
 
+import { getStoredAlToken, setAlToken } from '../../api/anilist'
 import { AM_ACCENTS, amSetAccent } from '../../core/accent'
 import { CL_COLORS, getCustomLinks, setCustomLinks } from '../../core/custom-links'
 import type { CustomLink } from '../../core/custom-links'
@@ -25,6 +31,7 @@ import {
 import { saveSetting, settings } from '../../core/settings'
 import type { AccentPreset, AniMoriSettings, TitleSource } from '../../core/settings'
 import { syncAdblock } from '../adblock'
+import { amCopy } from '../../utils/dom'
 import { Logger } from '../../utils/logger'
 
 // ==== Адреса: только конкатенацией, никогда шаблонной строкой ====
@@ -130,7 +137,7 @@ export const enableThemes = settingRef('enableThemes', 'set_themes')
  * что баннеры сайта режет DOM-модуль, а всплывающие окна плеера будет резать
  * оболочка Tauri на пункте 4.7 — это одна и та же кнопка «блокировать рекламу».
  * Поэтому запись идёт сразу в два ключа: set_hide_ads читает наш модуль,
- * set_block_popups прочитает десктопный мост.
+ * set_block_popups прочтёт десктопный мост.
  *
  * В отличие от остальных моделей, здесь есть немедленный потребитель, поэтому
  * после записи дёргаем syncAdblock(): включил — стиль и наблюдатель поднялись,
@@ -228,7 +235,7 @@ export interface DictEntry {
   value: string
 }
 
-/** Хранилище словаря синхронное и внешнее — пинаем computed вручную после записи. */
+/** Геттер словаря синхронный и внешний — пинаем computed вручную после записи. */
 const dictVersion = ref(0)
 
 export const dictSearch = ref('')
@@ -294,9 +301,16 @@ export function exportDict(): void {
   setTimeout(() => URL.revokeObjectURL(url), 2000)
 }
 
+/**
+ * Копирует весь локальный словарь в буфер обмена.
+ *
+ * amCopy() сам выбирает путь (мост, затем браузерный API) и пишет в лог при
+ * отказе. Возвращаемое значение говорит лишь о том, что копирование удалось
+ * запустить — так было и до переезда на мост.
+ */
 export function copyDictToClipboard(): boolean {
   try {
-    GM_setClipboard(JSON.stringify(getUserDict(), null, 2))
+    amCopy(JSON.stringify(getUserDict(), null, 2))
     return true
   } catch (e) {
     Logger('WARN', 'Не удалось скопировать словарь в буфер', e)
@@ -402,20 +416,21 @@ export function shareDict(): void {
 
 // ==== Авторизация AniList ====
 //
-// AL_TOKEN не входит в AniMoriSettings, поэтому читается и пишется напрямую —
-// как в монолите. Чтение отложено в loadAuthState(), чтобы не дёргать GM_getValue
-// на импорте модуля (РИСК №1: на Этапе 3 чтение станет асинхронным).
+// AL_TOKEN не входит в AniMoriSettings и живёт в api/anilist.ts вместе со своим кэшем.
+// Здесь только поле ввода. Показываем именно сохранённый токен (getStoredAlToken),
+// а не тот, что getAlToken() может подсмотреть в Vuex сайта: иначе в поле молча
+// появлялся бы чужой сессионный токен, который пользователь туда не вводил.
 
 export const alToken = ref('')
 export const alClientId = ref('')
 export const alAuthLink = ref('')
 
 export function loadAuthState(): void {
-  alToken.value = GM_getValue<string>('AL_TOKEN', '')
+  alToken.value = getStoredAlToken()
 }
 
 export function saveAlToken(): void {
-  GM_setValue('AL_TOKEN', alToken.value.trim())
+  setAlToken(alToken.value.trim())
 }
 
 /** Собирает ссылку авторизации. Возвращает false, если Client ID пуст. */

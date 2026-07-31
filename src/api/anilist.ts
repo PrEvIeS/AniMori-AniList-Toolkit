@@ -17,14 +17,13 @@
 //      считает отказы попытками и после трёх бросает элементы без перевода.
 //
 //   3) credentials: 'omit' — обязательно, и это не оптимизация, а условие работоспособности.
-//      Дефолт моста — 'include', то есть запрос с страницы anilist.co уходит на
+//      Дефолт моста — 'include', то есть запрос со страницы anilist.co уходит на
 //      graphql.anilist.co со всеми куками домена. У залогиненного пользователя они
 //      разрастаются настолько, что nginx отвечает «400 Request Header Or Cookie Too
 //      Large» ещё до GraphQL, и падают все запросы подряд — перевод имён, рейтинги,
 //      франшиза. Куки здесь бесполезны: AniList авторизует GraphQL только заголовком
-//      Authorization: Bearer, сессия сайта ему не нужна. В монолите проблемы не было
-//      лишь потому, что там вызов шёл напрямую и вопрос куков не вставал явно.
-//      В Tauri 'omit' тоже корректен: там куков AniList нет в принципе.
+//      Authorization: Bearer, сессия сайта ему не нужна. В Tauri 'omit' тоже корректен:
+//      там куков AniList нет в принципе.
 //
 // Пункт 3.5.3: токен AL_TOKEN переехал с GM_getValue на Bridge.storage.
 // Хранилище моста асинхронное, а getAlToken() зовут из мест, где ждать нельзя
@@ -209,6 +208,11 @@ export async function anilistQuery<T = unknown>(
     throw new Error('AniList: некорректный ответ сервера')
   }
 
+  if (payload.errors) {
+    const message = JSON.stringify(payload.errors)
+    Logger('ERROR', 'AniList GraphQL Error', payload.errors)
+    throw new Error(`AniList GraphQL Error: ${message}`)
+  }
+
   return payload
-}
 }

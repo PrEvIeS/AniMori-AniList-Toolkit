@@ -118,19 +118,67 @@ export async function dbSet(store: CacheStoreName, data: CacheRecord): Promise<v
   }
 }
 
-/** Очищает все сторы кэша. Вызывается из настроек по кнопке. */
+/**
+ * Очищает все сторы кэша. Вызывается из настроек по кнопке.
+ *
+ * Правка пункта 4.5. Раньше промис разрешался только по tx.oncomplete, а отказ
+ * и прерывание транзакции не обрабатывались вообще. В таком случае ожидание висело
+ * вечно: вызывающий код не продолжался, кнопка не давала отклика, и в журнале
+ * тоже не оставалось ничего — ровно та самая картина «очистка кэша работает
+ * через раз». Транзакцию легко потерять на ровном месте: параллельный записью
+ * сканер, фоновый сборщик мусора или перезагрузка страницы в тот же момент.
+ *
+ * Теперь промис разрешается ВСЕГДА и ровно один раз, а неудача попадает в журнал.
+ * Исключение наружу не бросается намеренно: вызывающая сторона всё равно продолжает
+ * сценарием «очистить и перезагрузиться», а перезагрузка полезна и при частичной
+ * очистке.
+ */
 export async function clearCache(): Promise<void> {
   Logger('INFO', 'Запущен ручной сброс кэша IndexedDB')
   const db = await openDB()
-  if (!db) return
+  if (!db) {
+    Logger('ERROR', 'Сброс кэша не выполнен: база недоступна')
+    return
+  }
 
-  const tx = db.transaction(['shikiCache', 'malCache', 'franchiseCache'], 'readwrite')
-  tx.objectStore('shikiCache').clear()
-  tx.objectStore('malCache').clear()
-  tx.objectStore('franchiseCache').clear()
+  return new Promise<void>((resolve) => {
+    // Страж однократного завершения: повторный resolve безвреден, но двойная
+    // запись в журнал сбивала бы с толку при разборе жалоб: onerror всплывает до onabort.
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
 
-  return new Promise((resolve) => {
-    tx.oncomplete = () => resolve()
+    let tx: IDBTransaction
+    try {
+      tx = db.transaction(['shikiCache', 'malCache', 'franchiseCache'], 'readwrite')
+      tx.objectStore('shikiCache').clear()
+      tx.objectStore('malCache').clear()
+      tx.objectStore('franchiseCache').clear()
+    } catch (e) {
+      // Открытие транзакции бросает синхронно, например при закрытом соединении
+      // после миграции в другой вкладке.
+      Logger('ERROR', 'Сброс кэша: не удалось открыть транзакцию', e)
+      finish()
+      return
+    }
+
+    tx.oncomplete = () => {
+      Logger('DB', 'Сброс кэша IndexedDB завершён')
+      finish()
+    }
+
+    tx.onerror = () => {
+      Logger('ERROR', 'Сброс кэша: транзакция завершилась ошибкой', tx.error)
+      finish()
+    }
+
+    tx.onabort = () => {
+      Logger('ERROR', 'Сброс кэша: транзакция прервана', tx.error)
+      finish()
+    }
   })
 }
 

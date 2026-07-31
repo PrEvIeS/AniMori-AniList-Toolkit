@@ -58,7 +58,19 @@ export interface ActionButton {
   onClick: () => void
 }
 
-const registry = ref<ActionButton[]>([])
+/**
+ * Реестр зарегистрированных кнопок.
+ *
+ * shallowRef, а не ref: обычный ref делает содержимое глубоко реактивным и попутно
+ * разворачивает вложенные ref в их значения (UnwrapRef). Для полей progress и visible
+ * это губительно сразу с двух сторон: типы перестают совпадать с ActionButton, а связь
+ * с исходным ref теряется — панель запомнила бы значение на момент регистрации и
+ * никогда не узнала о ходе переноса.
+ *
+ * Цена решения: мутации массива на месте (push) не замечаются, поэтому
+ * registerActionButton обязан заменять сам массив.
+ */
+const registry = shallowRef<ActionButton[]>([])
 
 /**
  * Кнопки в порядке отрисовки.
@@ -71,7 +83,7 @@ const registry = ref<ActionButton[]>([])
  * узлов обязано быть фактическим, а не логическим.
  */
 export const actionButtons = computed<ActionButton[]>(() =>
-  [...registry.value]
+  registry.value
     .filter((b) => (b.visible ? b.visible.value : true))
     .sort((a, b) => a.order - b.order),
 )
@@ -79,10 +91,13 @@ export const actionButtons = computed<ActionButton[]>(() =>
 /**
  * Добавляет кнопку в панель. Повторная регистрация того же id игнорируется.
  * Можно вызывать и до, и после initActionBar(): панель реактивна.
+ *
+ * Массив заменяется целиком, а не дополняется push: у shallowRef отслеживается только
+ * присваивание .value.
  */
 export function registerActionButton(button: ActionButton): void {
   if (registry.value.some((b) => b.id === button.id)) return
-  registry.value.push(button)
+  registry.value = [...registry.value, button]
 }
 
 export const PLAYER_BUTTON_ID = 'ru-player-btn'

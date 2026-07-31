@@ -30,14 +30,19 @@ const ANIMORI_CSS: &str = include_str!("../../dist/animori.tauri.css");
 //
 // Скрипт инициализации выполняется до создания DOM, поэтому document.head может
 // ещё отсутствовать — тогда вставляем по DOMContentLoaded.
+//
+// Обратные слеши в конце строк — это продолжение строкового литерала Rust:
+// они съедают перевод строки и отступ, чтобы в JS ушла одна строка. Удвоенный
+// слеш здесь был бы ошибкой: в код попал бы литеральный бакслеш и WebView
+// споткнулся бы на SyntaxError вместо вставки стилей.
 fn css_injection_script() -> String {
     let css = serde_json::to_string(ANIMORI_CSS).expect("CSS bundle is not serializable");
 
     format!(
-        "(function(){{var css={css};var add=function(){{\\
-         if(document.getElementById('animori-style'))return;\\
-         var s=document.createElement('style');s.id='animori-style';s.textContent=css;\\
-         (document.head||document.documentElement).appendChild(s);}};\\
+        "(function(){{var css={css};var add=function(){{\
+         if(document.getElementById('animori-style'))return;\
+         var s=document.createElement('style');s.id='animori-style';s.textContent=css;\
+         (document.head||document.documentElement).appendChild(s);}};\
          if(document.head){{add();}}else{{document.addEventListener('DOMContentLoaded',add);}}}})();"
     )
 }
@@ -119,10 +124,12 @@ pub fn run() {
                 )?;
             }
 
-            // Порядок скриптов важен: стили регистрируются раньше бандла, иначе первые
-            // смонтированные Vue-приложения успеют мелькнуть без оформления.
+            // Копия дескриптора приложения для замыкания on_navigation: сам app взят
+            // по ссылке и в замыкание с 'static его не отдать.
             let handle = app.handle().clone();
 
+            // Порядок скриптов важен: стили регистрируются раньше бандла, иначе первые
+            // смонтированные Vue-приложения успеют мелькнуть без оформления.
             WebviewWindowBuilder::new(
                 app.handle(),
                 "main",

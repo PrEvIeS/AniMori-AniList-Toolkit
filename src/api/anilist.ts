@@ -3,14 +3,39 @@
 // alRateLimitPause был глобальной переменной IIFE — теперь это приватное состояние
 // модуля. Пауза общая на все запросы AniList, что и требуется: лимит серверный.
 //
-// Этап 3: GM_xmlhttpRequest здесь заменится на bridge.http.request(). Форма ответа
-// (status / responseText / responseHeaders) уже совпадает с планируемым HttpResponse.
+// Пункт 3.5.2: транспорт переведён с GM_xmlhttpRequest на Bridge.http.
+// Два места, где переход не чисто механический:
+//
+//   1) retry-after раньше выдёргивался регуляркой из сырой строки всех заголовков.
+//      Мост отдаёт заголовки разобранным объектом с ключами в нижнем регистре,
+//      поэтому читаем headers['retry-after'] напрямую. Значение по умолчанию (5с)
+//      и добавка +500мс сохранены.
+//
+//   2) Код вне 2xx мост исключением не считает, поэтому 429 и прочие ошибки
+//      разбираются явными ветками. 429 НИКОГДА не должен стать ошибкой для
+//      вызывающего кода: это просьба подождать, а не отказ. Очередь перевода
+//      считает отказы попытками и после трёх бросает элементы без перевода.
+//
+// Сессионное хранилище токена (GM_getValue в getAlToken) сознательно оставлено
+// как есть: хранилище переезжает на мост отдельным пунктом 3.5.3, где сразу будет
+// решён вопрос асинхронного чтения во всех потребителях токена.
 
+import { Bridge, type HttpResponse } from '@/bridge'
 import { IS_ANILIST } from '../core/constants'
 import { Logger } from '../utils/logger'
 
+/** Адрес GraphQL-точки AniList. */
+const GRAPHQL_URL = 'https://graphql.anilist.co'
+
+/** Пауза по умолчанию, если сервер не прислал retry-after. */
+const DEFAULT_RETRY_MS = 5000
+
 /** Unix-время, до которого запросы к AniList приостановлены после 429. */
 let alRateLimitPause = 0
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 /**
  * Активна ли сейчас пауза по лимиту AniList.
@@ -50,6 +75,13 @@ export function getAlToken(): string | null {
   return null
 }
 
+/** Сколько ждать после 429: заголовок retry-after в секундах либо дефолт. */
+function readRetryAfter(headers: Record<string, string>): number {
+  const raw = headers['retry-after']
+  const seconds = raw ? parseInt(raw, 10) : NaN
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : DEFAULT_RETRY_MS
+}
+
 /**
  * GraphQL-запрос к AniList с паузой после 429 и автоматическим повтором.
  * @param useAuth Добавлять ли заголовок Authorization (см. getAlToken()).
@@ -60,9 +92,7 @@ export async function anilistQuery<T = unknown>(
   useAuth = false,
 ): Promise<GraphQLResponse<T>> {
   if (Date.now() < alRateLimitPause) {
-    await new Promise((r) =>
-      setTimeout(r, alRateLimitPause - Date.now() + Math.floor(Math.random() * 500)),
-    )
+    await sleep(alRateLimitPause - Date.now() + Math.floor(Math.random() * 500))
   }
 
   const headers: Record<string, string> = {
@@ -82,43 +112,52 @@ export async function anilistQuery<T = unknown>(
 
   const startTime = performance.now()
 
-  return new Promise((resolve, reject) => {
-    GM_xmlhttpRequest({
+  let res: HttpResponse
+  try {
+    res = await Bridge.http.request({
       method: 'POST',
-      url: 'https://graphql.anilist.co',
+      url: GRAPHQL_URL,
       headers,
-      data: JSON.stringify({ query, variables }),
-      onload: (res) => {
-        if (res.status === 200) {
-          const timeTaken = Math.round(performance.now() - startTime)
-          Logger('API', `[DONE] GraphQL запрос (AniList) выполнен за ${timeTaken}ms`)
-          const payload = JSON.parse(res.responseText) as GraphQLResponse<T>
-          if (payload.errors) {
-            const message = JSON.stringify(payload.errors)
-            Logger('ERROR', 'AniList GraphQL Error', payload.errors)
-            reject(new Error(`AniList GraphQL Error: ${message}`))
-            return
-          }
-          resolve(payload)
-        } else if (res.status === 429) {
-          const match = res.responseHeaders?.match(/retry-after:\s*(\d+)/i)
-          const waitTime = match?.[1] ? parseInt(match[1]) * 1000 : 5000
-          alRateLimitPause = Date.now() + waitTime + 500
-          Logger('ERROR', `AniList Rate Limit 429! Ожидание ${waitTime}ms`, res)
-          // Повтор после паузы (429)
-          setTimeout(
-            () => resolve(anilistQuery<T>(query, variables, useAuth)),
-            waitTime + 500 + Math.floor(Math.random() * 500),
-          )
-        } else {
-          Logger('ERROR', `AniList API Error HTTP ${res.status}`, res.responseText)
-          reject(new Error(`Error ${res.status}`))
-        }
-      },
-      onerror: (e) => {
-        Logger('ERROR', 'AniList Network Error', e)
-        reject(new Error('AniList Network Error'))
-      },
+      body: JSON.stringify({ query, variables }),
     })
-  })
+  } catch (e) {
+    // Только транспортный сбой, таймаут или отмена — бывший onerror.
+    Logger('ERROR', 'AniList Network Error', e)
+    throw new Error('AniList Network Error')
+  }
+
+  if (res.status === 429) {
+    const waitTime = readRetryAfter(res.headers)
+    alRateLimitPause = Date.now() + waitTime + 500
+    Logger('ERROR', `AniList Rate Limit 429! Ожидание ${waitTime}ms`, res)
+    // Повтор после паузы (429)
+    await sleep(waitTime + 500 + Math.floor(Math.random() * 500))
+    return anilistQuery<T>(query, variables, useAuth)
+  }
+
+  if (res.status !== 200) {
+    Logger('ERROR', `AniList API Error HTTP ${res.status}`, res.text)
+    throw new Error(`Error ${res.status}`)
+  }
+
+  const timeTaken = Math.round(performance.now() - startTime)
+  Logger('API', `[DONE] GraphQL запрос (AniList) выполнен за ${timeTaken}ms`)
+
+  // Раньше битый JSON падал внутри коллбэка onload и обещание не завершалось
+  // никогда: вызывающий код вис в ожидании. Теперь это обычная ошибка.
+  let payload: GraphQLResponse<T>
+  try {
+    payload = JSON.parse(res.text) as GraphQLResponse<T>
+  } catch (e) {
+    Logger('ERROR', 'AniList: не удалось разобрать ответ', e)
+    throw new Error('AniList: некорректный ответ сервера')
+  }
+
+  if (payload.errors) {
+    const message = JSON.stringify(payload.errors)
+    Logger('ERROR', 'AniList GraphQL Error', payload.errors)
+    throw new Error(`AniList GraphQL Error: ${message}`)
+  }
+
+  return payload
 }

@@ -4,8 +4,9 @@ import './style.scss'
 import { fetchInterfaceDictionary } from './api/dictionary'
 import { amSetAccent } from './core/accent'
 import { IS_ANILIST, IS_SHIKI } from './core/constants'
+import { loadCustomLinks } from './core/custom-links'
 import { openDB, runGarbageCollector } from './core/db'
-import { rebuildDictionary, setRemoteDict } from './core/dictionary'
+import { loadUserDict, rebuildDictionary, setRemoteDict } from './core/dictionary'
 import { initLifecycle, registerRouteTask, registerShutdownTask } from './core/lifecycle'
 import { loadSettings, settings } from './core/settings'
 import { destroyAdblock, initAdblock } from './features/adblock'
@@ -91,6 +92,13 @@ async function bootstrap(): Promise<void> {
     return
   }
   if (!IS_ANILIST) return
+
+  // Итерация 3.5.3: свои ссылки и правки словаря переехали в асинхронное хранилище,
+  // но читаются синхронно во время отрисовки. Поэтому кэши наполняются здесь — до
+  // первого построения виджетов и до rebuildDictionary(). Иначе на первой же странице
+  // пропали бы пользовательские ссылки в блоке «Где посмотреть» и личные переводы.
+  // Оба чтения независимы, поэтому идут параллельно и не тянут старт.
+  await Promise.all([loadCustomLinks(), loadUserDict()])
 
   // П.2.10: адблок идёт ПЕРВЫМ среди всего, что касается страницы: его стиль должен
   // оказаться в документе раньше первой отрисовки баннера, иначе реклама успеет мигнуть

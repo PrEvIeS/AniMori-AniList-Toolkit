@@ -6,14 +6,21 @@
 // Единственная правка контракта — вместо `btn?: HTMLButtonElement` функции принимают
 // `onProgress?: ProgressFn`. Раньше сетевой слой писал текст прямо в кнопку, то есть знал
 // про DOM. Теперь он сообщает строку статуса наружу, а кто её показывает — кнопка, модалка
-// или лог — его не касается. Это та же граница, что у сканера (`compare.ts`), и она нужна
-// для п.3.6, где эти функции уедут под Bridge.
+// или лог — его не касается. Это та же граница, что у сканера (`compare.ts`).
 //
-// РИСК №2 из AUDITION.md: запросы к Shikimori идут с `window.location.origin` и опираются
-// на сессию браузера. В Tauri этого не будет, поэтому профиль должен быть публичным —
-// предупреждение об этом выводит SyncModal.
+// Пункт 3.6: модуль стал платформенно независимым. Раньше четыре функции ходили голым
+// fetch по `window.location.origin`, то есть работали только на странице Shikimori. В оболочке
+// origin свой, и такой адрес вел бы в никуда. Теперь адрес и транспорт выбирает
+// `api/shikimori-user.ts`, а здесь осталась только логика переноса: пагинация, разбор
+// истории, сравнение записей и мутации AniList.
+//
+// РИСК №2 из AUDITION.md: в браузере списки читаются по сессионной куке и закрытый
+// профиль тоже выгружается, в десктопе запрос анонимен и профиль обязан быть открыт
+// (пункт 2.7, предупреждение в SyncModal). Отказ доступа разбирается явной веткой, а текст
+// ошибки берётся из hiddenProfileMessage(): причины на двух платформах разные.
 
 import { anilistQuery } from '../../api/anilist'
+import { hiddenProfileMessage, shikiUserGet } from '../../api/shikimori-user'
 import { Logger } from '../../utils/logger'
 
 export type ShikiStatus =
@@ -170,13 +177,25 @@ export function makeFuzzyDate(d?: string | Date): FuzzyDate | undefined {
   return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() }
 }
 
-export async function fetchShikiUserId(username: string): Promise<number> {
-  const res = await fetch(`${window.location.origin}/api/users/${encodeURIComponent(username)}`)
-  if (!res.ok) throw new Error('Пользователь Shikimori не найден.')
-  const data = (await res.json()) as { id: number }
-  return data.id
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+export async function fetchShikiUserId(username: string): Promise<number> {
+  const res = await shikiUserGet<{ id: number }>(`/api/users/${encodeURIComponent(username)}`)
+  if (res.status === 401 || res.status === 403) throw new Error(hiddenProfileMessage())
+  if (!res.ok || !res.data) throw new Error('Пользователь Shikimori не найден.')
+  return res.data.id
+}
+
+/**
+ * Постраничная выгрузка списка пользователя.
+ *
+ * Пункт 3.6: добавлена обработка 429. Раньше любой код, кроме 404 и 403, просто
+ * обрывал цикл, и просьба подождать выглядела как конец списка: список переносился
+ * обрезанным и без единого сообщения. Страница повторяется до трёх раз, пауза та же,
+ * что в разборе истории.
+ */
 export async function fetchShikimoriListV2(
   userId: number,
   type: MediaType,
@@ -187,15 +206,29 @@ export async function fetchShikimoriListV2(
   const targetType = type === 'anime' ? 'Anime' : 'Manga'
   Logger('INFO', `Скачивание списка ${type} с Shikimori v2...`)
 
+  let rateLimitRetries = 0
+
   while (true) {
-    const url = `${window.location.origin}/api/v2/user_rates?user_id=${userId}&target_type=${targetType}&limit=1000&page=${page}`
-    const res = await fetch(url)
+    const path = `/api/v2/user_rates?user_id=${userId}&target_type=${targetType}&limit=1000&page=${page}`
+    const res = await shikiUserGet<ShikiUserRate[]>(path)
+
     if (!res.ok) {
       if (res.status === 404) break
-      if (res.status === 403) throw new Error('Профиль скрыт.')
+      if (res.status === 401 || res.status === 403) throw new Error(hiddenProfileMessage())
+      if (res.status === 429) {
+        if (rateLimitRetries >= 3) {
+          Logger('ERROR', `Список ${type}: Shikimori держит лимит, страница ${page} не получена`)
+          break
+        }
+        rateLimitRetries++
+        await sleep(2000)
+        continue
+      }
       break
     }
-    const data = (await res.json()) as ShikiUserRate[]
+
+    rateLimitRetries = 0
+    const data = res.data
     if (!data || data.length === 0) break
 
     let added = 0
@@ -208,7 +241,7 @@ export async function fetchShikimoriListV2(
     }
     if (added === 0) break
     page++
-    await new Promise((r) => setTimeout(r, 500))
+    await sleep(500)
   }
   return all
 }
@@ -222,22 +255,23 @@ export async function fetchShikiHistoryDates(
   while (true) {
     onProgress?.(`Анализ таймингов (стр. ${page})...`)
     try {
-      const res = await fetch(
-        `${window.location.origin}/api/users/${userId}/history?limit=100&page=${page}`,
-      )
+      const res = await shikiUserGet<
+        Array<{
+          target?: { id: number }
+          target_type?: string
+          created_at: string
+          description?: string
+        }>
+      >(`/api/users/${userId}/history?limit=100&page=${page}`)
+
       if (!res.ok) {
         if (res.status === 429) {
-          await new Promise((r) => setTimeout(r, 2000))
+          await sleep(2000)
           continue
         }
         break
       }
-      const data = (await res.json()) as Array<{
-        target?: { id: number }
-        target_type?: string
-        created_at: string
-        description?: string
-      }>
+      const data = res.data
       if (!data || data.length === 0) break
 
       data.forEach((item) => {
@@ -272,7 +306,7 @@ export async function fetchShikiHistoryDates(
 
       if (data.length < 100) break
       page++
-      await new Promise((r) => setTimeout(r, 350))
+      await sleep(350)
     } catch (e) {
       Logger('ERROR', `fetchShikiHistoryDates: сбой на странице ${page}, обработка прервана`, e)
       break
@@ -301,8 +335,8 @@ export async function fetchShikimoriFavorites(
   ]
   for (const ep of endpoints) {
     try {
-      const res = await fetch(window.location.origin + ep)
-      if (res.ok) return (await res.json()) as ShikiFavorites
+      const res = await shikiUserGet<ShikiFavorites>(ep)
+      if (res.ok && res.data) return res.data
     } catch (e) {
       Logger('WARN', `fetchShikimoriFavorites: сбой запроса ${ep}`, e)
     }
@@ -326,7 +360,7 @@ export async function getAnilistIds(
     if (res?.data?.Page?.media) {
       res.data.Page.media.forEach((m) => (map[m.idMal] = m.id))
     }
-    await new Promise((r) => setTimeout(r, 700))
+    await sleep(700)
   }
   return map
 }
@@ -378,7 +412,7 @@ export async function getExistingAnilistList(
     `Текущий список AniList (${type}): получено ${known} записей` +
       (known > 0 ? '' : ' — сравнивать не с чем, будет перенесён весь список'),
   )
-  await new Promise((r) => setTimeout(r, 600))
+  await sleep(600)
   return map
 }
 
@@ -413,7 +447,7 @@ export async function getExistingAnilistFavorites(
       data.nodes.forEach((n) => targetSet.add(n.id))
       hasNextPage = data.pageInfo.hasNextPage
       page++
-      await new Promise((r) => setTimeout(r, 600))
+      await sleep(600)
     }
     Logger('INFO', `Текущее избранное AniList (${type}): ${targetSet.size} шт.`)
   }
@@ -475,7 +509,7 @@ export async function syncShikiToAlList(
     const alId = idMap[item.target_id]
     if (!alId) {
       noId++
-      if (count % 50 === 0) await new Promise((r) => setTimeout(r, 10))
+      if (count % 50 === 0) await sleep(10)
       continue
     }
 
@@ -525,7 +559,7 @@ export async function syncShikiToAlList(
 
       if (isSame) {
         skipped++
-        if (count % 50 === 0) await new Promise((r) => setTimeout(r, 10))
+        if (count % 50 === 0) await sleep(10)
         continue
       }
     }
@@ -559,7 +593,7 @@ export async function syncShikiToAlList(
       syncFailures++
       Logger('ERROR', `syncShikiToAlList: сбой SaveMediaListEntry (mediaId=${alId}, ${type})`, e)
     }
-    await new Promise((r) => setTimeout(r, 700))
+    await sleep(700)
   }
 
   Logger(
@@ -604,7 +638,7 @@ export async function syncShikiToAlFavorites(
         onProgress?.(`Shiki ➜ AL (Fav ${alType}): ${processedCount}/${arr.length}`)
         const alId = idMap[item.id]
         if (!alId || exSet.has(alId)) {
-          if (processedCount % 50 === 0) await new Promise((r) => setTimeout(r, 10))
+          if (processedCount % 50 === 0) await sleep(10)
           continue
         }
         try {
@@ -613,7 +647,7 @@ export async function syncShikiToAlFavorites(
           syncFailures++
           Logger('ERROR', `syncShikiToAlFavorites: сбой ToggleFavourite (id=${alId}, ${alType})`, e)
         }
-        await new Promise((r) => setTimeout(r, 700))
+        await sleep(700)
       }
     } else {
       for (const item of arr) {
@@ -622,7 +656,7 @@ export async function syncShikiToAlFavorites(
         if (alType !== 'CHARACTER' && alType !== 'STAFF') continue
         const alId = await getAnilistIdByName(item.name, alType)
         if (!alId || exSet.has(alId)) {
-          await new Promise((r) => setTimeout(r, 600))
+          await sleep(600)
           continue
         }
         try {
@@ -635,7 +669,7 @@ export async function syncShikiToAlFavorites(
             e,
           )
         }
-        await new Promise((r) => setTimeout(r, 700))
+        await sleep(700)
       }
     }
   }

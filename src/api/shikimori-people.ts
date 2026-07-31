@@ -13,16 +13,36 @@
 // Пункт 3.5.2: транспорт переведён с GM_xmlhttpRequest на Bridge.http. Изменена
 // ровно одна функция — локальная обёртка request(); вся стратегия поиска, пороги
 // совпадения, гард тёзок и кэш ролей остались нетронутыми.
+//
+// Пункт 3.8 — главное исправление этого файла.
+//
+// При переходе на мост здесь появился второй, неучтённый канал в тот же домен:
+// шлюз темпа жил внутри shikimori.ts и обслуживал только fetchShiki(), а request()
+// ниже шёл напрямую. На одну персону — до пяти запросов (три поиска, GraphQL,
+// детали), при пачке в десять штук — до пятидесяти обращений мимо счётчика,
+// без минимального интервала и без уважения к штрафной паузе после 429. Именно
+// поэтому перевод визуально ускорился, а счётчик окна при этом не заполнялся.
+//
+// Теперь request() берёт слот у того же shikiLimiter, что и fetchShiki: один бюджет
+// на весь источник, включая оба зеркала и оба канала.
+//
+// Там же выровнены уровни логов. Раньше было наоборот: битый JSON одного из трёх
+// поисков кричал ERROR, хотя остальные два ещё могли найти персону, а полный
+// транспортный сбой глотался молча через `catch { return { status: 0 } }`.
 
 import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
 import { Logger } from '../utils/logger'
 import { scoreNameMatch } from '../utils/name-match'
 import type { NameCandidate, NameTarget } from '../utils/name-match'
+import { shikiLimiter } from './rate-limit'
 import { fetchShiki } from './shikimori'
 
 /** Коллекция Shikimori: имя совпадает у REST-пути и у поля GraphQL. */
 export type PersonEndpoint = 'characters' | 'people'
+
+/** Штрафная пауза, когда 429 пришёл именно на поиске персон. */
+const PERSON_RATE_PAUSE_MS = 6000
 
 export interface ShikiPerson {
   id: number
@@ -50,14 +70,13 @@ interface RawResponse {
 }
 
 /**
- * Обёртка над Bridge.http, которая никогда не режектит.
- * В монолите было onerror: () => resolve({status: 0}) — неполный объект ответа,
- * который не проходит типизацию. Поведение то же: status 0 = сетевой сбой.
- *
+ * Обёртка над Bridge.http, которая никогда не реджектит.
  * Форма результата (status + responseText) сохранена намеренно: на неё завязаны
- * все три шага поиска ниже, и менять её в одной итерации с транспортом — лишний риск.
- * Коды ответа мост исключением не считает, поэтому 404 и 429 приходят сюда обычным
- * путём и разбираются вызывающим кодом, как и раньше.
+ * все три шага поиска ниже. status 0 = транспортный сбой.
+ *
+ * Пункт 3.8: слот у общего ограничителя, куки не шлём, транспортный сбой больше
+ * не пропадает из лога, а 429 сразу тормозит весь источник, а не только текущую
+ * ветку поиска: соседние запросы пачки уже стоят в очереди шлюза.
  */
 async function request(opts: {
   method: 'GET' | 'POST'
@@ -66,16 +85,28 @@ async function request(opts: {
   data?: string
 }): Promise<RawResponse> {
   try {
+    await shikiLimiter.acquireSlot()
+
     const r = await Bridge.http.request({
       method: opts.method,
       url: opts.url,
       headers: opts.headers,
       body: opts.data,
+      credentials: 'omit',
     })
+
+    if (r.status === 429) {
+      shikiLimiter.pause(PERSON_RATE_PAUSE_MS)
+      Logger('WARN', `Shikimori 429 на поиске персоны: пауза ${PERSON_RATE_PAUSE_MS}мс`, {
+        url: opts.url,
+      })
+    }
+
     return { status: r.status, responseText: r.text }
-  } catch {
-    // Транспортный сбой (BridgeHttpError). Молча отдаём status 0 — так было и в монолите:
-    // поиск персон не должен ронять перевод страницы из-за одного упавшего зеркала.
+  } catch (e) {
+    // Транспортный сбой (BridgeHttpError). Поиск персон не должен ронять перевод
+    // страницы, поэтому отдаём status 0 — но теперь хотя бы с записью в журнал.
+    Logger('WARN', `Shikimori: запрос поиска персоны не ушёл: ${opts.url}`, e)
     return { status: 0, responseText: '' }
   }
 }
@@ -164,6 +195,9 @@ export async function fetchShikiPersonREST(
 
   Logger('API', `Поиск персоны на Shiki: ${cleanStr}`)
 
+  /** Считаем транспортные сбои: от них зависит уровень итогового сообщения. */
+  let transportFailures = 0
+
   for (const domain of SHIKI_DOMAINS) {
     try {
       let item: PersonCandidate | null = null
@@ -190,6 +224,7 @@ export async function fetchShikiPersonREST(
           rateLimited = true
           break
         }
+        if (r.status === 0) transportFailures++
         if (r.status === 200) {
           try {
             const list = JSON.parse(r.responseText) as PersonCandidate[]
@@ -201,7 +236,8 @@ export async function fetchShikiPersonREST(
               }
             }
           } catch (e) {
-            Logger('ERROR', 'Ошибка парсинга персоны Shiki', e)
+            // Один из трёх поисков отдал мусор — остальные ещё могут сработать.
+            Logger('WARN', `Shikimori: неразборчивый ответ поиска персоны (${domain})`, e)
           }
         }
         if (itemScore >= 100) break // точный кандзи, дальше искать нечего
@@ -221,6 +257,7 @@ export async function fetchShikiPersonREST(
           data: JSON.stringify({ query: gqlQuery, variables: { search: cleanStr } }),
         })
         if (r.status === 429) return { status: 429, data: null }
+        if (r.status === 0) transportFailures++
         if (r.status === 200) {
           try {
             const res = JSON.parse(r.responseText) as {
@@ -233,7 +270,7 @@ export async function fetchShikiPersonREST(
               itemScore = m.score
             }
           } catch (e) {
-            Logger('ERROR', 'Ошибка парсинга GraphQL Shiki', e)
+            Logger('WARN', `Shikimori: неразборчивый ответ GraphQL поиска (${domain})`, e)
           }
         }
       }
@@ -245,13 +282,14 @@ export async function fetchShikiPersonREST(
           url: mirrorUrl(domain, `/api/${endpointStr}/${item.id}`),
         })
         if (rDetails.status === 429) return { status: 429, data: null }
+        if (rDetails.status === 0) transportFailures++
 
         let detailsRes: PersonDetails | null = null
         if (rDetails.status === 200) {
           try {
             detailsRes = JSON.parse(rDetails.responseText) as PersonDetails
           } catch (e) {
-            Logger('ERROR', 'Ошибка парсинга деталей персоны Shiki', e)
+            Logger('WARN', `Shikimori: неразборчивые детали персоны (${domain})`, e)
           }
         }
 
@@ -260,7 +298,7 @@ export async function fetchShikiPersonREST(
           const candMal = collectCandidateMalIds(detailsRes)
           if (candMal.length && !candMal.some((id) => targetMalIds.includes(id))) {
             Logger(
-              'API',
+              'WARN',
               `Отклонён вероятный тёзка: ${cleanStr} (нет общих тайтлов, score=${itemScore})`,
             )
             return { status: 404, data: null }
@@ -292,11 +330,22 @@ export async function fetchShikiPersonREST(
         }
       }
     } catch (e) {
-      Logger('ERROR', `Сбой fetchShikiPersonREST для "${cleanStr}" (${domain})`, e)
+      transportFailures++
+      Logger('WARN', `Сбой поиска персоны "${cleanStr}" на зеркале ${domain}`, e)
     }
   }
 
-  Logger('API', `Персона не найдена: ${cleanStr}`)
+  // Разводим два разных исхода, которые раньше выглядели одинаково:
+  //   - источник ответил, но такой персоны у него нет — штатно, WARN;
+  //   - до источника вообще не достучались — это уже ошибка.
+  if (transportFailures > 0) {
+    Logger('ERROR', `Поиск персоны сорвался на всех зеркалах: ${cleanStr}`, {
+      transportFailures,
+    })
+    return { status: 0, data: null }
+  }
+
+  Logger('WARN', `Персона не найдена на Shikimori: ${cleanStr}`)
   return { status: 404, data: null }
 }
 
@@ -341,7 +390,7 @@ function loadRoles(kind: string, id: number): Promise<ShikiRoleEntry[] | null> {
     .catch((e: unknown) => {
       // Сбой не кэшируем: зеркало могло лечь временно.
       rolesCache.delete(key)
-      Logger('ERROR', `Не удалось загрузить роли: ${key}`, e)
+      Logger('WARN', `Не удалось загрузить роли: ${key}`, e)
       return null
     })
 

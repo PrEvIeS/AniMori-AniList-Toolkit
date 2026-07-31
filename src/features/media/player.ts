@@ -8,7 +8,12 @@
 // через prepend. Панель отрисовывает Vue (ActionPanel.vue), и посторонний узел внутри
 // её разметки был бы источником расхождений при перерисовке. Виджет только сообщает
 // состояние: showPlayerButton() / hidePlayerButton().
+//
+// Итерация 3.5.3: запрос к Kodik ушёл с GM_xmlhttpRequest на Bridge.http, а список
+// любимых озвучек — на Bridge.storage с кэшем в памяти. Кэш обязателен: сердечко
+// рядом с озвучкой перерисовывает список синхронно, и ждать там нечего.
 
+import { Bridge } from '@/bridge'
 import { anilistQuery } from '../../api/anilist'
 import { amApplyAccentToDom } from '../../core/accent'
 import { settings } from '../../core/settings'
@@ -52,6 +57,34 @@ const OVERLAY_HTML = `<div id="ru-player-shell"><div id="ru-stage-col"><div id="
 
 /** Слушатель сообщений от iframe Kodik. В монолите жил в `window.__amKodikSync`. */
 let kodikSyncListener: ((event: MessageEvent) => void) | null = null
+
+// Любимые озвучки: память — источник правды внутри сессии, хранилище догоняет фоном.
+let favCache: string[] = []
+let favLoaded = false
+
+async function loadFavTranslations(): Promise<void> {
+  if (favLoaded) return
+  favLoaded = true
+  try {
+    const raw = await Bridge.storage.get<unknown>(FAV_STORAGE_KEY, [])
+    favCache = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
+  } catch (e) {
+    Logger('WARN', '[Player] Не удалось прочитать любимые озвучки', e)
+    favCache = []
+  }
+}
+
+function getFavTranslations(): string[] {
+  return [...favCache]
+}
+
+function setFavTranslations(list: string[]): void {
+  favCache = [...list]
+  favLoaded = true
+  void Bridge.storage.set(FAV_STORAGE_KEY, favCache).catch((e: unknown) => {
+    Logger('ERROR', '[Player] Не удалось сохранить любимые озвучки', e)
+  })
+}
 
 function heartSVG(filled: boolean): string {
   const c = filled ? 'rgb(var(--color-pink, 243,139,168))' : 'rgb(var(--color-text-light))'
@@ -209,171 +242,183 @@ async function openPlayer(ctx: MediaContext): Promise<void> {
     if (epChip) epChip.style.display = 'none'
   }
 
-  const { progress, completed } = await loadProgress(ctx.aniId)
+  // Прогресс и любимые озвучки нужны до первой отрисовки списка, поэтому берём их
+  // одним заходом: иначе плеер мог бы стартовать на первой попавшейся озвучке
+  // вместо любимой.
+  const [{ progress, completed }] = await Promise.all([
+    loadProgress(ctx.aniId),
+    loadFavTranslations(),
+  ])
 
-  GM_xmlhttpRequest({
-    method: 'GET',
-    url:
-      'https://kodik-api.com/search?token=' + KODIK_TOKEN + '&shikimori_id=' + String(malId ?? ''),
-    onload: (res) => {
-      let translations: Translation[] = []
+  let payload: KodikSearchResponse
+  try {
+    const res = await Bridge.http.request({
+      method: 'GET',
+      url:
+        'https://kodik-api.com/search?token=' + KODIK_TOKEN + '&shikimori_id=' + String(malId ?? ''),
+      credentials: 'omit',
+    })
+    if (!res.ok) {
+      Logger('ERROR', '[Player] Kodik API ответил ошибкой', { status: res.status })
+      fallbackPlayer('Ошибка API')
+      return
+    }
+    payload = JSON.parse(res.text) as KodikSearchResponse
+  } catch (e) {
+    // Сюда попадают и сетевые сбои, и битый JSON. В обоих случаях показываем
+    // резервный плеер, а не оставляем пользователя с надписью «Подключение к базе...».
+    Logger('ERROR', '[Player] Kodik API: запрос не удался', e)
+    fallbackPlayer('Сетевая ошибка')
+    return
+  }
+
+  const translations = parseTranslations(payload)
+  if (translations.length === 0) {
+    fallbackPlayer()
+    return
+  }
+
+  let favs = getFavTranslations()
+  const preferred = favs.map((f) => translations.find((t) => t.title === f)).find(Boolean)
+  let activeTranslation: Translation = preferred ?? (translations[0] as Translation)
+  let activeEpisode = activeTranslation.episodes[0] ?? 1
+  let loadedTranslation: Translation | null = null
+
+  const setTitle = (): void => {
+    setOverlayTitle(`${defaultTitle} — ${activeTranslation.title}`)
+    if (!epChip) return
+    if (activeTranslation.isSerial) {
+      epChip.style.display = ''
+      epChip.textContent = `Серия ${activeEpisode}`
+    } else {
+      epChip.style.display = 'none'
+    }
+  }
+
+  // seamless=true — смена серии через API без перезагрузки iframe:
+  // видео и полноэкранный режим остаются целы.
+  const updatePlayer = (seamless = false): void => {
+    const canSeamless =
+      seamless &&
+      activeTranslation.isSerial &&
+      loadedTranslation === activeTranslation &&
+      iframe.contentWindow !== null
+
+    if (canSeamless) {
       try {
-        translations = parseTranslations(JSON.parse(res.responseText) as KodikSearchResponse)
+        iframe.contentWindow?.postMessage(
+          {
+            key: 'kodik_player_api',
+            value: { method: 'change_episode', episode: activeEpisode },
+          },
+          '*',
+        )
       } catch (e) {
-        Logger('ERROR', '[Player] Kodik API: сбой разбора ответа search', e)
-        fallbackPlayer('Ошибка API')
-        return
+        Logger('ERROR', '[Player] Kodik API change_episode', e)
       }
+    } else {
+      iframe.src = activeTranslation.isSerial
+        ? activeTranslation.link + '&episode=' + String(activeEpisode)
+        : activeTranslation.link
+      loadedTranslation = activeTranslation
+    }
+    setTitle()
+  }
 
-      if (translations.length === 0) {
-        fallbackPlayer()
-        return
-      }
+  const renderEpisodes = (): void => {
+    ePanel.innerHTML = ''
+    if (!activeTranslation.isSerial || activeTranslation.episodes.length <= 1) {
+      ePanel.style.display = 'none'
+      if (epLabel) epLabel.style.display = 'none'
+      return
+    }
 
-      let favs = GM_getValue<string[]>(FAV_STORAGE_KEY, [])
-      const preferred = favs.map((f) => translations.find((t) => t.title === f)).find(Boolean)
-      let activeTranslation: Translation = preferred ?? (translations[0] as Translation)
-      let activeEpisode = activeTranslation.episodes[0] ?? 1
-      let loadedTranslation: Translation | null = null
+    ePanel.style.display = 'grid'
+    if (epLabel) epLabel.style.display = ''
 
-      const setTitle = (): void => {
-        setOverlayTitle(`${defaultTitle} — ${activeTranslation.title}`)
-        if (!epChip) return
-        if (activeTranslation.isSerial) {
-          epChip.style.display = ''
-          epChip.textContent = `Серия ${activeEpisode}`
-        } else {
-          epChip.style.display = 'none'
-        }
-      }
-
-      // seamless=true — смена серии через API без перезагрузки iframe:
-      // видео и полноэкранный режим остаются целы.
-      const updatePlayer = (seamless = false): void => {
-        const canSeamless =
-          seamless &&
-          activeTranslation.isSerial &&
-          loadedTranslation === activeTranslation &&
-          iframe.contentWindow !== null
-
-        if (canSeamless) {
-          try {
-            iframe.contentWindow?.postMessage(
-              {
-                key: 'kodik_player_api',
-                value: { method: 'change_episode', episode: activeEpisode },
-              },
-              '*',
-            )
-          } catch (e) {
-            Logger('ERROR', '[Player] Kodik API change_episode', e)
-          }
-        } else {
-          iframe.src = activeTranslation.isSerial
-            ? activeTranslation.link + '&episode=' + String(activeEpisode)
-            : activeTranslation.link
-          loadedTranslation = activeTranslation
-        }
-        setTitle()
-      }
-
-      const renderEpisodes = (): void => {
-        ePanel.innerHTML = ''
-        if (!activeTranslation.isSerial || activeTranslation.episodes.length <= 1) {
-          ePanel.style.display = 'none'
-          if (epLabel) epLabel.style.display = 'none'
-          return
-        }
-
-        ePanel.style.display = 'grid'
-        if (epLabel) epLabel.style.display = ''
-
-        for (const ep of activeTranslation.episodes) {
-          const btnEp = document.createElement('div')
-          btnEp.className = 'ep-btn'
-          if (completed || ep <= progress) btnEp.classList.add('watched')
-          if (ep === activeEpisode) btnEp.classList.add('active')
-          btnEp.textContent = String(ep)
-          btnEp.addEventListener('click', () => {
-            activeEpisode = ep
-            renderEpisodes()
-            updatePlayer(true)
-          })
-          ePanel.appendChild(btnEp)
-        }
-      }
-
-      const renderTranslations = (): void => {
-        tPanel.innerHTML = ''
-
-        for (const tr of translations) {
-          const isFav = favs.includes(tr.title)
-          const btnTr = document.createElement('div')
-          btnTr.className = 'tr-btn'
-          if (tr.title === activeTranslation.title) btnTr.classList.add('active')
-          if (isFav) btnTr.classList.add('favorite')
-
-          const nameSpan = document.createElement('span')
-          nameSpan.className = 'tr-name'
-          nameSpan.textContent = tr.title
-
-          const heartSpan = document.createElement('span')
-          heartSpan.className = 'tr-heart'
-          heartSpan.innerHTML = heartSVG(isFav)
-
-          btnTr.addEventListener('click', (e) => {
-            const target = e.target
-            if (target instanceof Element && target.closest('.tr-heart')) return
-            activeTranslation = tr
-            if (!tr.episodes.includes(activeEpisode)) {
-              activeEpisode = tr.episodes[tr.episodes.length - 1] ?? 1
-            }
-            renderTranslations()
-            renderEpisodes()
-            updatePlayer()
-          })
-
-          heartSpan.addEventListener('click', (e) => {
-            e.stopPropagation()
-            const current = GM_getValue<string[]>(FAV_STORAGE_KEY, [])
-            favs = current.includes(tr.title)
-              ? current.filter((f) => f !== tr.title)
-              : [tr.title, ...current]
-            GM_setValue(FAV_STORAGE_KEY, favs)
-            renderTranslations()
-          })
-
-          btnTr.append(nameSpan, heartSpan)
-          tPanel.appendChild(btnTr)
-        }
-      }
-
-      tPanel.style.display = 'flex'
-      renderTranslations()
-      renderEpisodes()
-      updatePlayer()
-
-      // Плеер сообщает текущую серию (автопереход или смена изнутри) —
-      // подсвечиваем в панели. Слушатель всегда один.
-      if (kodikSyncListener) window.removeEventListener('message', kodikSyncListener)
-      kodikSyncListener = (event: MessageEvent) => {
-        const data = event.data as
-          | { key?: string; value?: { episode?: number | string } }
-          | null
-          | undefined
-        if (!data || data.key !== 'kodik_player_current_episode' || !data.value) return
-
-        const ep = Number(data.value.episode)
-        if (!ep || ep === activeEpisode || !activeTranslation.episodes.includes(ep)) return
-
+    for (const ep of activeTranslation.episodes) {
+      const btnEp = document.createElement('div')
+      btnEp.className = 'ep-btn'
+      if (completed || ep <= progress) btnEp.classList.add('watched')
+      if (ep === activeEpisode) btnEp.classList.add('active')
+      btnEp.textContent = String(ep)
+      btnEp.addEventListener('click', () => {
         activeEpisode = ep
         renderEpisodes()
-        setTitle()
-      }
-      window.addEventListener('message', kodikSyncListener)
-    },
-    onerror: () => fallbackPlayer('Сетевая ошибка'),
-  })
+        updatePlayer(true)
+      })
+      ePanel.appendChild(btnEp)
+    }
+  }
+
+  const renderTranslations = (): void => {
+    tPanel.innerHTML = ''
+
+    for (const tr of translations) {
+      const isFav = favs.includes(tr.title)
+      const btnTr = document.createElement('div')
+      btnTr.className = 'tr-btn'
+      if (tr.title === activeTranslation.title) btnTr.classList.add('active')
+      if (isFav) btnTr.classList.add('favorite')
+
+      const nameSpan = document.createElement('span')
+      nameSpan.className = 'tr-name'
+      nameSpan.textContent = tr.title
+
+      const heartSpan = document.createElement('span')
+      heartSpan.className = 'tr-heart'
+      heartSpan.innerHTML = heartSVG(isFav)
+
+      btnTr.addEventListener('click', (e) => {
+        const target = e.target
+        if (target instanceof Element && target.closest('.tr-heart')) return
+        activeTranslation = tr
+        if (!tr.episodes.includes(activeEpisode)) {
+          activeEpisode = tr.episodes[tr.episodes.length - 1] ?? 1
+        }
+        renderTranslations()
+        renderEpisodes()
+        updatePlayer()
+      })
+
+      heartSpan.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const current = getFavTranslations()
+        favs = current.includes(tr.title)
+          ? current.filter((f) => f !== tr.title)
+          : [tr.title, ...current]
+        setFavTranslations(favs)
+        renderTranslations()
+      })
+
+      btnTr.append(nameSpan, heartSpan)
+      tPanel.appendChild(btnTr)
+    }
+  }
+
+  tPanel.style.display = 'flex'
+  renderTranslations()
+  renderEpisodes()
+  updatePlayer()
+
+  // Плеер сообщает текущую серию (автопереход или смена изнутри) —
+  // подсвечиваем в панели. Слушатель всегда один.
+  if (kodikSyncListener) window.removeEventListener('message', kodikSyncListener)
+  kodikSyncListener = (event: MessageEvent) => {
+    const data = event.data as
+      | { key?: string; value?: { episode?: number | string } }
+      | null
+      | undefined
+    if (!data || data.key !== 'kodik_player_current_episode' || !data.value) return
+
+    const ep = Number(data.value.episode)
+    if (!ep || ep === activeEpisode || !activeTranslation.episodes.includes(ep)) return
+
+    activeEpisode = ep
+    renderEpisodes()
+    setTitle()
+  }
+  window.addEventListener('message', kodikSyncListener)
 }
 
 /** Виджет плеера. Регистрируется в main.ts через registerMediaWidget(). */

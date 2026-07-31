@@ -11,8 +11,15 @@
 // РИСК №3 (React против Vue). AniList — React-SPA и без предупреждений сносит чужие
 // узлы при перерисовке. Если контейнер вырезали, экземпляр приложения остаётся жив и
 // держит подписки — это zombie-компонент и утечка. Поэтому всё смонтированное
-// регистрируется здесь, а не в пункте 2.9: риск актуален с первого mount(), а не с конца этапа.
-// В пункте 2.9 останется только привязка к SPA-навигации через core/lifecycle.
+// регистрируется здесь, а не в пункте 2.9: риск актуален с первого mount().
+//
+// Пункт 2.9 добавил три вещи:
+//   1) деление на постоянные и постраничные приложения (pageScoped). Глухой unmountAll()
+//      на каждом переходе был бы ошибкой: панель действий и модалки монтируются один раз
+//      в body при старте, и после сноса их никто не вернёт — кнопки просто исчезнут
+//      после первого же перехода. Сносим только то, что встроено в разметку страницы;
+//   2) защиту от дублей: перед вставкой убирается брошенный корень с тем же id;
+//   3) sweepPhantomRoots() — уборка корней, которых нет в реестре.
 //
 // Этап 3. Компоненты не должны знать о GM_*. Здесь нет ни одного обращения к хранилищу
 // или сети сознательно: модуль переезжает в Tauri без правок.
@@ -44,6 +51,15 @@ export interface MountOptions {
    * Для модалок в body не нужно, для инъекций в React-дерево — обязательно.
    */
   watchContainer?: boolean
+  /**
+   * Пункт 2.9. Приложение привязано к конкретной странице и должно сниматься
+   * при смене роута (unmountPageScoped).
+   *
+   * По умолчанию false — приложение считается постоянным и живёт всю сессию.
+   * Так работают панель действий и все модалки: их видимостью управляет v-if внутри
+   * компонента, а не монтирование.
+   */
+  pageScoped?: boolean
 }
 
 interface MountedEntry {
@@ -65,6 +81,21 @@ function createRoot(key: string, options: MountOptions): HTMLElement {
   root.classList.add(NO_TRANSLATE_CLASS, VUE_ROOT_CLASS)
   for (const cls of options.rootClasses ?? []) root.classList.add(cls)
   return root
+}
+
+/**
+ * Убирает брошенный корень с таким же id, если он висит в документе.
+ *
+ * Такое бывает после аварийного снятия: экземпляр уже не в реестре, а узел в DOM
+ * остался. Без этой проверки на странице копились бы два одинаковых id — именно так
+ * появляются двойные кнопки после серии быстрых переходов.
+ */
+function removeOrphanRoot(key: string): void {
+  const orphan = document.getElementById(ROOT_ID_PREFIX + key)
+  if (!orphan) return
+  if (registry.has(key)) return
+  Logger('WARN', `vue-mounter: убираю брошенный корень «${key}»`)
+  orphan.remove()
 }
 
 /**
@@ -92,6 +123,9 @@ export function mountApp(
     Logger('ERROR', `mountApp: нет контейнера для «${key}»`)
     return null
   }
+
+  // П.2.9: сначала убираем возможный фантом с тем же id, потом вставляем свежий.
+  removeOrphanRoot(key)
 
   const root = createRoot(key, options)
 
@@ -182,7 +216,51 @@ export function unmountApp(key: string): void {
 }
 
 /**
- * Снимает всё. Вызывается из LifecycleManager при смене роута (пункт 2.9).
+ * Пункт 2.9: снимает только постраничные приложения (pageScoped: true).
+ *
+ * Именно это вызывается при смене роута, а не unmountAll(): панель действий и модалки
+ * обязаны пережить переход, иначе кнопки исчезнут и больше не вернутся.
+ *
+ * @returns сколько приложений снято.
+ */
+export function unmountPageScoped(): number {
+  let count = 0
+  for (const [key, entry] of Array.from(registry.entries())) {
+    if (!entry.options.pageScoped) continue
+    unmountApp(key)
+    count++
+  }
+  return count
+}
+
+/**
+ * Пункт 2.9: убирает корни с классом am-vue-root, которых нет в реестре.
+ *
+ * Это и есть те самые фантомные виджеты: узел в DOM есть, живого приложения за ним нет,
+ * события не работают. Появляются, когда React переносит кусок разметки вместе с нашим
+ * корнем вместо того, чтобы его удалить: наблюдатель watchRoot такой случай не ловит,
+ * потому что узел формально остался в документе.
+ *
+ * @returns сколько узлов убрано.
+ */
+export function sweepPhantomRoots(): number {
+  const live = new Set<HTMLElement>()
+  for (const entry of registry.values()) live.add(entry.root)
+
+  let removed = 0
+  document.querySelectorAll<HTMLElement>(`.${VUE_ROOT_CLASS}`).forEach((node) => {
+    if (live.has(node)) return
+    node.remove()
+    removed++
+  })
+
+  if (removed > 0) Logger('INFO', `vue-mounter: убрано фантомных корней: ${removed}`)
+  return removed
+}
+
+/**
+ * Снимает всё. Вызывается только при полном разборе скрипта (shutdownLifecycle),
+ * а не при смене роута — для роута есть unmountPageScoped().
  * Порядок не важен: приложения между собой не связаны.
  */
 export function unmountAll(): void {

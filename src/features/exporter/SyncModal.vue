@@ -10,6 +10,12 @@
 // открывается только на AniList, где работают те же --color-*, что у настроек и сравнения.
 // Оформление отдано классам .amk-*, и окно автоматически следует теме сайта и акценту.
 //
+// Там же сменён id корня: был `shiki-export-overlay`, стал `am-sync-overlay`. В style.scss
+// остался блок «Улучшения экспортера Shikimori», который бил по старому id с !important
+// (белый фон окна, чёрный заголовок, чёрный текст кнопки) — на тёмной теме AniList окно из-за
+// него было нечитаемым. Под новым id эти правила не применяются; сам мёртвый блок вычищается
+// из style.scss отдельно. Старый id больше нигде в src/ не использовался.
+//
 // Отличия от монолита, все осознанные:
 //  1. Предупреждение о публичности профиля — требование RM2 п.2.7. Текст зависит от платформы:
 //     в браузере запросы уходят с куками сессии и скрытый профиль читается, в десктопе — нет.
@@ -48,6 +54,9 @@ const anonymous = isAnonymousShikiAccess()
 
 const FIELD_STYLE = 'flex:1;width:auto;'
 
+const CODE_STYLE =
+  'background:rgba(var(--color-text-light),0.14);padding:1px 5px;border-radius:4px;'
+
 const AUTH_LINK_STYLE =
   'color:rgb(var(--color-blue));text-decoration:none;font-weight:700;display:inline-block;padding:6px 12px;border:1px solid rgb(var(--color-blue));border-radius:6px;'
 </script>
@@ -55,7 +64,7 @@ const AUTH_LINK_STYLE =
 <template>
   <div
     v-if="isSyncOpen"
-    id="shiki-export-overlay"
+    id="am-sync-overlay"
     class="amk-overlay"
     style="display: flex"
     @click.self="closeSyncModal"
@@ -159,12 +168,10 @@ const AUTH_LINK_STYLE =
               :href="AL_DEVELOPER_URL"
               target="_blank"
               rel="noopener"
-              style="color: #3dbbee; text-decoration: none"
+              style="color: rgb(var(--color-blue)); text-decoration: none"
               >здесь</a
             >, redirect URL:
-            <code style="background: rgba(0, 0, 0, 0.1); padding: 1px 5px; border-radius: 4px">{{
-              AL_REDIRECT_URL
-            }}</code>
+            <code :style="CODE_STYLE">{{ AL_REDIRECT_URL }}</code>
           </div>
           <div style="display: flex; gap: 8px">
             <input

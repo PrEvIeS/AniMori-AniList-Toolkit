@@ -6,10 +6,13 @@
 //
 // Реестр кнопок и реактивное состояние сознательно лежат в отдельном модуле:
 // иначе возник бы цикл actions.ts -> ActionPanel.vue -> actions.ts.
+//
+// Пункт 4.5 убрал отсюда вызов initReloadControls(). Кнопка обновления переехала
+// в блок навигации (features/ui/nav.ts и NavPanel.vue), и панель действий снова
+// содержит ровно то, что есть на обеих платформах: функции самого AniMori.
 
 import { mountApp, unmountApp } from '../../utils/vue-mounter'
 import ActionPanel from './ActionPanel.vue'
-import { initReloadControls } from './reload'
 
 export {
   ACTION_ORDER,
@@ -41,13 +44,6 @@ export function initActionBar(): void {
   // нет, но узел может остаться от предыдущей версии скрипта после горячего
   // обновления в Tampermonkey — тогда пилюль отрисовалась бы дважды.
   document.getElementById(CONTAINER_ID)?.remove()
-
-  // Пункт 4.3: кнопка «Обновить» и горячие клавиши десктопной оболочки.
-  //
-  // Зарегистрированы здесь, а не в bootstrap(): это принадлежность именно панели,
-  // и точка входа не должна знать про ещё одну кнопку. Сама функция молча выходит
-  // в браузерной сборке, поэтому ветвления по платформе здесь нет.
-  initReloadControls()
 
   // watchContainer: false — наблюдатель на childList у body был бы пустая трата:
   // AniList дёргает детей body постоянно (модалки, тултипы), а панель за весь этап 1

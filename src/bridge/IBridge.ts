@@ -1,0 +1,136 @@
+// Пункт 3.1 плана: контракт платформы.
+//
+// Файл описывает, ЧТО умеет среда выполнения, но не КАК. Реализации живут в
+// MonkeyBridge.ts (3.2) и TauriBridge.ts (3.3), выбор между ними — в index.ts (3.4).
+// Исполняемого кода здесь ровно один класс ошибки: обе реализации обязаны бросать
+// одно и то же, иначе вызывающий код придётся писать под каждую платформу отдельно.
+//
+// Три подсистемы по RM3: storage, http, clipboard. Сверх этого сюда ничего не идёт.
+// GM_addStyle в контракт НЕ входит осознанно: прямых вызовов в src/ нет, единственный
+// потребитель — vite-plugin-monkey, встраивающий CSS на этапе сборки. Это забота
+// сборщика, а не рантайма, и в десктопной сборке стили попадут в бандл своим путём.
+
+// ==== storage ====
+
+/**
+ * Персистентное хранилище ключ-значение.
+ *
+ * РИСК №1 из AUDITION.md: GM_getValue синхронен, а @tauri-apps/plugin-store — нет.
+ * Приводим к общему знаменателю по худшему случаю: контракт асинхронный ВСЕГДА,
+ * включая браузер, где под капотом ответ готов сразу. Иначе на Этапе 4 пришлось бы
+ * переписывать всех потребителей второй раз.
+ *
+ * Единственный потребитель в ядре — core/settings.ts. Остальной код читает уже
+ * загруженный объект `settings` синхронно и об асинхронности не знает.
+ */
+export interface IStorage {
+  /** Читает значение, подставляя `defaultValue`, если ключа нет. */
+  get<T>(key: string, defaultValue: T): Promise<T>
+  /** Читает значение без значения по умолчанию: `undefined`, если ключа нет. */
+  get<T = unknown>(key: string): Promise<T | undefined>
+  /** Записывает значение. Должно переживать перезапуск приложения. */
+  set(key: string, value: unknown): Promise<void>
+}
+
+// ==== http ====
+
+export type HttpMethod = 'GET' | 'POST' | 'HEAD' | 'PUT' | 'DELETE' | 'PATCH'
+
+export interface HttpRequestOptions {
+  /** По умолчанию 'GET'. */
+  method?: HttpMethod
+  /** Абсолютный адрес. Относительные пути контрактом не поддерживаются: в Tauri нет origin. */
+  url: string
+  headers?: Record<string, string>
+  /** Тело запроса. Сериализацию выполняет вызывающий код. */
+  body?: string
+  /** Таймаут в миллисекундах. Без него запрос ждёт столько, сколько позволит платформа. */
+  timeoutMs?: number
+  /**
+   * Отправлять ли куки текущей сессии.
+   *
+   * 'omit' по умолчанию — анонимный запрос. 'include' нужен пункту 3.6: списки
+   * пользователя на Shikimori доступны только по сессионной куке.
+   *
+   * РИСК №2 из AUDITION.md: в Tauri запрос уходит из Rust и куки WebView не видит,
+   * поэтому 'include' там выполнить честно нельзя. Реализация обязана не молчать —
+   * см. комментарий к IHttp.request.
+   */
+  credentials?: 'omit' | 'include'
+}
+
+export interface HttpResponse {
+  /** HTTP-код ответа. */
+  status: number
+  statusText: string
+  /** true для 200-299. Ровно то же, что у fetch. */
+  ok: boolean
+  /**
+   * Заголовки ответа. Ключи ПРИВЕДЕНЫ К НИЖНЕМУ РЕГИСТРУ обеими реализациями:
+   * GM_xmlhttpRequest отдаёт сырую строку, Tauri — объект Headers, и без нормализации
+   * чтение вроде headers['retry-after'] вело бы себя по-разному на разных платформах.
+   */
+  headers: Record<string, string>
+  /** Тело ответа текстом. Разбор JSON — на стороне вызывающего кода. */
+  text: string
+  /** Итоговый адрес после редиректов. */
+  url: string
+}
+
+/** Причина транспортного сбоя. Код ответа сюда не относится — он приходит в HttpResponse. */
+export type HttpErrorKind = 'network' | 'timeout' | 'abort'
+
+/** Единый тип ошибки транспорта для всех платформ. */
+export class BridgeHttpError extends Error {
+  readonly kind: HttpErrorKind
+  readonly url: string
+
+  constructor(kind: HttpErrorKind, url: string, message?: string) {
+    super(message ?? `Bridge HTTP ${kind} error: ${url}`)
+    this.name = 'BridgeHttpError'
+    this.kind = kind
+    this.url = url
+  }
+}
+
+export interface IHttp {
+  /**
+   * Выполняет запрос.
+   *
+   * ВАЖНО: метод НЕ бросает исключение на код ответа вне диапазона 2xx. Ответ с любым
+   * статусом возвращается как обычный HttpResponse. Это не упущение, а требование
+   * существующего кода: fetchShiki трактует 404 как «пробуй следующее зеркало»,
+   * fetchAnime365ByMal отличает soft-block 403/502/503/520-524 от «нет данных»,
+   * а 429 всюду означает паузу, а не отказ. Если превратить статусы в исключения,
+   * вся эта логика перестанет различать случаи.
+   *
+   * Отклонение промиса — только транспортный сбой, таймаут или отмена, всегда
+   * экземпляром BridgeHttpError.
+   *
+   * Если платформа не может выполнить credentials: 'include' (случай Tauri из
+   * РИСКА №2), реализация обязана выполнить запрос анонимно и записать предупреждение
+   * в логгер. Молча подменять режим нельзя: вызывающий код получит 401 и должен иметь
+   * возможность понять причину по журналу.
+   */
+  request(options: HttpRequestOptions): Promise<HttpResponse>
+}
+
+// ==== clipboard ====
+
+export interface IClipboard {
+  /** Кладёт текст в буфер обмена. */
+  writeText(text: string): Promise<void>
+}
+
+// ==== корневой контракт ====
+
+export interface IBridge {
+  /**
+   * Идентификатор среды. Дублирует __ANIMORI_PLATFORM__, но доступен как обычное
+   * значение — удобно для журнала и диагностики, где константа сборки нечитаема.
+   */
+  readonly platform: 'userscript' | 'tauri'
+  readonly storage: IStorage
+  readonly http: IHttp
+  readonly clipboard: IClipboard
+}

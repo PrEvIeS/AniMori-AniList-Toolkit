@@ -3,12 +3,10 @@
 // Модуль НЕ должен попадать в бандл юзерскрипта: импорты @tauri-apps/* в браузере
 // неработоспособны. Отсечение обеспечено пунктом 3.4: resolve.alias в vite.config.ts
 // разводит '@bridge-impl' по mode сборки, и при mode !== 'tauri' этот файл вообще не
-// попадает в граф модулей — это надёжнее tree-shaking'а по ветвлению, потому что
-// new LazyStore(...) ниже — верхнеуровневый побочный эффект, который Rollup вправе сохранить.
-//
-// Сама оболочка, Cargo.toml и разрешения capabilities — это Этап 4. Здесь только
-// клиентская часть; до запуска десктопной сборки код нигде не исполняется.
+// попадает в граф модулей — это надёжнее tree-shaking'а по ветвлению, потому
+// что new LazyStore(...) ниже — верхнеуровневый побочный эффект, который Rollup вправе сохранить.
 
+import { invoke } from '@tauri-apps/api/core'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { LazyStore } from '@tauri-apps/plugin-store'
@@ -20,6 +18,7 @@ import {
   type IBridge,
   type IClipboard,
   type IHttp,
+  type IShell,
   type IStorage,
 } from './IBridge'
 
@@ -27,7 +26,7 @@ import {
 
 // LazyStore выбран вместо load(): он не требует await при создании и читает файл при первом
 // обращении. Альтернатива потребовала бы верхнеуровневого await либо ручной инициализации
-// из main.ts, а это разные точки входа для двух платформ — ровно то, чего этап избегает.
+// из main.ts, а это разные точки входа для двух платформ — ровно того, чего этап избегает.
 //
 // autoSave пишет файл с небольшой задержкой после set(), что ближе всего к поведению
 // GM_setValue и избавляет потребителей от знания про save().
@@ -126,6 +125,25 @@ const tauriClipboard: IClipboard = {
   },
 }
 
+// ==== shell ====
+
+/**
+ * Пункт 4.3: перезагрузка страницы в десктопной сборке.
+ *
+ * location.reload() в окне, открытом на внешнем URL, не даёт ничего, а в JS-API Tauri
+ * метода перезагрузки нет совсем — он есть только у окна на стороне Rust
+ * (WebviewWindow::reload). Поэтому зовём свою команду из src-tauri/src/lib.rs.
+ *
+ * Команда собственная, а не плагинная, поэтому отдельного разрешения в capabilities
+ * ей не требуется; доступ к IPC из контекста anilist.co открывает блок remote.urls
+ * (пункт 4.4) — без него не работали бы и хранилище с сетью.
+ */
+const tauriShell: IShell = {
+  async reload(): Promise<void> {
+    await invoke('animori_reload')
+  },
+}
+
 // ==== сборка ====
 
 export const tauriBridge: IBridge = {
@@ -133,6 +151,7 @@ export const tauriBridge: IBridge = {
   storage: tauriStorage,
   http: tauriHttp,
   clipboard: tauriClipboard,
+  shell: tauriShell,
 }
 
 // Пункт 3.4: общее для обеих реализаций имя экспорта — см. хвост MonkeyBridge.ts.

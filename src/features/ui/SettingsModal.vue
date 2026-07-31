@@ -21,6 +21,11 @@
   Логика деления: во «Модулях» живёт то, что добавляет блоки на страницу тайтла (плеер, рейтинги,
   франшиза, темы), а адблок ничего не добавляет и работает на всём сайте — ему место рядом с логгером.
 
+  Пункт 3.7.2: там же, во «Прочем», появилась карточка «Панель действий» с видимостью кнопок
+  переноса и сравнения. Отдельная карточка, а не строки в общей: логгер и адблок включают
+  и выключают сами функции, а здесь речь только о том, что показано в пилюле: сами модули
+  остаются рабочими.
+
   Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
 <template>
@@ -499,6 +504,31 @@
                 </label>
               </div>
             </div>
+
+            <div class="amk-card">
+              <div class="amk-card-title">Панель действий</div>
+              <div class="amk-row-hint" style="padding: 2px 2px 8px; line-height: 1.5">
+                Какие кнопки показывать в плавающей панели AniMori. Сами функции остаются рабочими.
+              </div>
+              <div class="amk-row">
+                <span class="amk-row-label"
+                  ><b>Кнопка переноса</b><span class="amk-row-hint">перенос списков Shikimori → AniList</span></span
+                >
+                <label class="amk-switch">
+                  <input type="checkbox" id="set_btn_sync" v-model="showSyncButton" />
+                  <span class="amk-track"></span><span class="amk-thumb"></span>
+                </label>
+              </div>
+              <div class="amk-row">
+                <span class="amk-row-label"
+                  ><b>Кнопка сравнения</b><span class="amk-row-hint">сверка списков двух сайтов</span></span
+                >
+                <label class="amk-switch">
+                  <input type="checkbox" id="set_btn_compare" v-model="showCompareButton" />
+                  <span class="amk-track"></span><span class="amk-thumb"></span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <!-- ==== Поддержать ==== -->
@@ -654,6 +684,8 @@ import {
   selectAccent,
   setCustomLinkColor,
   shareDict,
+  showCompareButton,
+  showSyncButton,
   syncTitleSources,
   titleFallback,
   titlePrimary,

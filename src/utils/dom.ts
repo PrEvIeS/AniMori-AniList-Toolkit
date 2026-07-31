@@ -4,6 +4,7 @@
 // Аккуратно с html``: все интерполяции экранируются. Доверенный HTML надо явно
 // оборачивать в rawHTML(); шаблонная строка без тега html не экранирует ничего.
 
+import { Bridge } from '@/bridge'
 import { Logger } from './logger'
 
 export function escapeHTML(str: unknown): string {
@@ -78,8 +79,17 @@ export function applyMarquee(el: HTMLElement | null): void {
 /**
  * Копирование в буфер с фидбэком на кнопке.
  *
- * Этап 3: GM_setClipboard уедет за bridge.clipboard.writeText()
- * (в Tauri — @tauri-apps/plugin-clipboard-manager, только асинхронный).
+ * Пункт 3.5.3: GM_setClipboard уехал за Bridge.clipboard.writeText().
+ * В userscript мост внутри вызывает тот же GM_setClipboard, в Tauri — плагин
+ * буфера обмена; оба асинхронные.
+ *
+ * Сигнатура осталась синхронной: все вызовы идут из обработчиков клика, им нечего
+ * делать с обещанием. Галочка «скопировано» теперь зажигается по факту успеха,
+ * а не сразу после вызова — разница незаметна глазу, но при отказе буфера
+ * пользователь больше не увидит ложное подтверждение.
+ *
+ * Запасной путь через navigator.clipboard сохранён: если мост отказал, шанс
+ * скопировать штатным браузерным API всё равно остаётся.
  */
 export function amCopy(text: string, btn?: HTMLElement | null): void {
   const done = (): void => {
@@ -88,24 +98,18 @@ export function amCopy(text: string, btn?: HTMLElement | null): void {
     setTimeout(() => btn.classList.remove('am-copied'), 1200)
   }
 
-  try {
-    if (typeof GM_setClipboard === 'function') {
-      GM_setClipboard(text, 'text')
-      done()
+  const fallback = (e: unknown): void => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard
+        .writeText(text)
+        .then(done)
+        .catch((err: unknown) => Logger('WARN', 'Не удалось скопировать в буфер', err))
       return
     }
-  } catch {
-    /* провалимся на navigator.clipboard */
+    Logger('WARN', 'Буфер обмена недоступен', e)
   }
 
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard
-      .writeText(text)
-      .then(done)
-      .catch((e: unknown) => Logger('WARN', 'Не удалось скопировать в буфер', e))
-  } else {
-    Logger('WARN', 'Буфер обмена недоступен')
-  }
+  void Bridge.clipboard.writeText(text).then(done).catch(fallback)
 }
 
 /** Русские плюральные формы: forms = ['эпизод', 'эпизода', 'эпизодов']. */

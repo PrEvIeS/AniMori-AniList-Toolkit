@@ -12,6 +12,11 @@
 // рядом с настройками и сравнением списков. Отдельной плавающей кнопки (SyncButton.vue)
 // и подбора переменных темы Shikimori (sync-theme.ts) больше нет.
 //
+// Пункт 3.7.2: пилюлю можно убрать тумблером во вкладке «Прочее». Скрывается только
+// кнопка: окно остаётся смонтированным, и toggleSyncModal() по-прежнему работает, если его
+// позовёт другой модуль. Гасить сам модуль по настройке видимости кнопки было бы ошибкой:
+// тумблер про внешний вид панели, а не про отключение переноса.
+//
 // Приложение теперь одно — только окно. Ленивого монтирования нет намеренно: показ
 // управляется флагом isSyncOpen, а внутри стоит v-if — до первого открытия в DOM попадает
 // только пустой корень.
@@ -19,6 +24,7 @@
 import { Logger } from '../../utils/logger'
 import { mountApp, unmountApp } from '../../utils/vue-mounter'
 import { ACTION_ORDER, registerActionButton } from '../ui/action-panel-state'
+import { showSyncButton } from '../ui/settings-state'
 import SyncModal from './SyncModal.vue'
 import { closeSyncModal, isSyncOpen, openSyncModal, pillProgress } from './sync-state'
 
@@ -41,7 +47,8 @@ let mounted = false
  * watchContainer: false — корнем служит document.body, пересобирать его некому (риск №3).
  *
  * Прогресс отдаётся панели ссылкой на pillProgress, а не значением: кнопка регистрируется
- * один раз при старте, а текст меняется десятки раз за перенос.
+ * один раз при старте, а текст меняется десятки раз за перенос. Ровно по той же причине
+ * ссылкой передаётся и видимость (п.3.7.2).
  */
 export function initExporter(): void {
   if (mounted) return
@@ -54,6 +61,7 @@ export function initExporter(): void {
     order: ACTION_ORDER.sync,
     icon: SYNC_ICON,
     progress: pillProgress,
+    visible: showSyncButton,
     onClick: () => toggleSyncModal(),
   })
   mounted = true

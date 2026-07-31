@@ -1,10 +1,19 @@
 // Пункт 1.3 плана: пользовательские настройки (строки 68-93 монолита).
 //
-// РИСК №1 из AUDITION.md: сейчас значения читаются синхронно через GM_getValue прямо
-// при импорте модуля. На этапе 3 (TauriBridge, plugin-store) чтение станет асинхронным,
-// поэтому инициализация вынесена в loadSettings() — bootstrap() обязан дождаться её
-// ДО запуска MutationObserver и рендера UI. Импортирующие модули должны читать
-// `settings.x` в момент использования, а не копировать значения в свои константы.
+// Пункт 3.5: хранилище больше не GM_*, а Bridge.storage. Этим закрыт РИСК №1
+// из AUDITION.md: чтение стало асинхронным ровно в одном модуле, а не во всех
+// потребителях настроек.
+//
+// Главное правило для всех остальных модулей не изменилось: читать `settings.x`
+// в момент использования, а не копировать значения в свои константы и тем более
+// не читать их на верхнем уровне модуля. До `await loadSettings()` в `settings`
+// лежат дефолты, а не сохранённые значения: bootstrap() ждёт загрузку ДО запуска
+// наблюдателя мутаций и рендера UI.
+//
+// Логгер здесь недоступен: `utils/logger` сам читает этот модуль, и импорт дал бы цикл.
+// Диагностика сбоев хранилища идёт в `console`, как и внутри самого моста.
+
+import { Bridge } from '@/bridge'
 
 export type TitleSource = 'shikimori' | 'anime365' | 'off' | 'none'
 export type AccentPreset = 'site' | 'sakura' | 'mono' | 'catppuccin'
@@ -62,58 +71,168 @@ export interface AniMoriSettings {
   translateTitles: boolean
 }
 
-function readSettings(): AniMoriSettings {
+/**
+ * Значения по умолчанию — те же, что раньше стояли вторым аргументом GM_getValue.
+ *
+ * Вынесены в отдельную константу, потому что теперь нужны дважды: как стартовое
+ * состояние `settings` до завершения loadSettings() и как дефолты самого чтения.
+ */
+const DEFAULT_SETTINGS: AniMoriSettings = {
+  translateInterface: true,
+  titlePrimary: 'shikimori',
+  titleFallback: 'none',
+  translateCharacters: true,
+  translateStaff: true,
+  enablePlayer: true,
+  enableRatings: true,
+  enableFranchise: true,
+  enableThemes: true,
+  enableExtLinks: true,
+  enableLinkRutracker: true,
+  enableLinkYummy: true,
+  enableLinkAnimego: true,
+  enableLinkMangalib: true,
+  yummyDomain: 'yummyanime.tv',
+  animegoDomain: 'animego.org',
+  mangalibDomain: 'mangalib.me',
+  enableLogger: true,
+  accentPreset: 'site',
+  blockPlayerPopups: false,
+  hideAds: true,
+  translateTitles: true,
+}
+
+async function readSettings(): Promise<AniMoriSettings> {
+  const storage = Bridge.storage
+
+  // Все ключи читаются одним залпом. В браузере разницы нет — GM_getValue отвечает
+  // сразу, — а в Tauri последовательный await превратился бы в два десятка
+  // последовательных вызовов через IPC на старте приложения.
+  const [
+    translateInterface,
+    storedTitlePrimary,
+    legacyTitles,
+    titleFallback,
+    translateCharacters,
+    translateStaff,
+    enablePlayer,
+    enableRatings,
+    enableFranchise,
+    enableThemes,
+    enableExtLinks,
+    enableLinkRutracker,
+    enableLinkYummy,
+    enableLinkAnimego,
+    enableLinkMangalib,
+    yummyDomain,
+    animegoDomain,
+    mangalibDomain,
+    enableLogger,
+    accentPreset,
+    blockPlayerPopups,
+    hideAds,
+  ] = await Promise.all([
+    storage.get('set_interface', DEFAULT_SETTINGS.translateInterface),
+    storage.get<TitleSource>('set_title_primary'),
+    storage.get('set_titles', true),
+    storage.get<TitleSource>('set_title_fallback', DEFAULT_SETTINGS.titleFallback),
+    storage.get('set_chars', DEFAULT_SETTINGS.translateCharacters),
+    storage.get('set_staff', DEFAULT_SETTINGS.translateStaff),
+    storage.get('set_player', DEFAULT_SETTINGS.enablePlayer),
+    storage.get('set_ratings', DEFAULT_SETTINGS.enableRatings),
+    storage.get('set_franchise', DEFAULT_SETTINGS.enableFranchise),
+    storage.get('set_themes', DEFAULT_SETTINGS.enableThemes),
+    storage.get('set_extlinks', DEFAULT_SETTINGS.enableExtLinks),
+    storage.get('set_link_rutracker', DEFAULT_SETTINGS.enableLinkRutracker),
+    storage.get('set_link_yummy', DEFAULT_SETTINGS.enableLinkYummy),
+    storage.get('set_link_animego', DEFAULT_SETTINGS.enableLinkAnimego),
+    storage.get('set_link_mangalib', DEFAULT_SETTINGS.enableLinkMangalib),
+    storage.get('set_yummy_domain', DEFAULT_SETTINGS.yummyDomain),
+    storage.get('set_animego_domain', DEFAULT_SETTINGS.animegoDomain),
+    storage.get('set_mangalib_domain', DEFAULT_SETTINGS.mangalibDomain),
+    storage.get('set_logger', DEFAULT_SETTINGS.enableLogger),
+    storage.get<AccentPreset>('am_accent', DEFAULT_SETTINGS.accentPreset),
+    storage.get('set_block_popups', DEFAULT_SETTINGS.blockPlayerPopups),
+    storage.get('set_hide_ads', DEFAULT_SETTINGS.hideAds),
+  ])
+
   // Обратная совместимость: старый ключ set_titles -> новый set_title_primary.
-  const titlePrimary = GM_getValue<TitleSource>(
-    'set_title_primary',
-    GM_getValue('set_titles', true) ? 'shikimori' : 'off',
-  )
+  // Раньше старый ключ стоял вторым аргументом вложенного GM_getValue; теперь
+  // читаются оба, и старый применяется только при отсутствии нового — поведение
+  // то же самое, ценой одного лишнего чтения.
+  const titlePrimary = storedTitlePrimary ?? (legacyTitles ? 'shikimori' : 'off')
 
   return {
-    translateInterface: GM_getValue('set_interface', true),
+    translateInterface,
     titlePrimary,
-    titleFallback: GM_getValue<TitleSource>('set_title_fallback', 'none'),
-    translateCharacters: GM_getValue('set_chars', true),
-    translateStaff: GM_getValue('set_staff', true),
-    enablePlayer: GM_getValue('set_player', true),
-    enableRatings: GM_getValue('set_ratings', true),
-    enableFranchise: GM_getValue('set_franchise', true),
-    enableThemes: GM_getValue('set_themes', true),
-    enableExtLinks: GM_getValue('set_extlinks', true),
-    enableLinkRutracker: GM_getValue('set_link_rutracker', true),
-    enableLinkYummy: GM_getValue('set_link_yummy', true),
-    enableLinkAnimego: GM_getValue('set_link_animego', true),
-    enableLinkMangalib: GM_getValue('set_link_mangalib', true),
-    yummyDomain: GM_getValue('set_yummy_domain', 'yummyanime.tv'),
-    animegoDomain: GM_getValue('set_animego_domain', 'animego.org'),
-    mangalibDomain: GM_getValue('set_mangalib_domain', 'mangalib.me'),
-    enableLogger: GM_getValue('set_logger', true),
-    accentPreset: GM_getValue<AccentPreset>('am_accent', 'site'),
-    blockPlayerPopups: GM_getValue('set_block_popups', false),
-    hideAds: GM_getValue('set_hide_ads', true),
+    titleFallback,
+    translateCharacters,
+    translateStaff,
+    enablePlayer,
+    enableRatings,
+    enableFranchise,
+    enableThemes,
+    enableExtLinks,
+    enableLinkRutracker,
+    enableLinkYummy,
+    enableLinkAnimego,
+    enableLinkMangalib,
+    yummyDomain,
+    animegoDomain,
+    mangalibDomain,
+    enableLogger,
+    accentPreset,
+    blockPlayerPopups,
+    hideAds,
     translateTitles: titlePrimary !== 'off',
   }
 }
 
 /**
  * Единственный экземпляр настроек. Мутируется на месте, ссылка не меняется —
- * на этапе 2 этот объект станет `reactive()` для v-model в SettingsModal.vue.
+ * на этом держатся все потребители и реактивные модели панели настроек.
+ *
+ * До завершения loadSettings() здесь дефолты. Читать настройки на верхнем уровне
+ * своего модуля нельзя: импорты выполняются до bootstrap(), и такой код увидит
+ * значение по умолчанию вместо сохранённого.
  */
-export const settings: AniMoriSettings = readSettings()
+export const settings: AniMoriSettings = { ...DEFAULT_SETTINGS }
 
 /** Перечитать настройки из хранилища (вызывается из bootstrap()). */
 export async function loadSettings(): Promise<AniMoriSettings> {
-  Object.assign(settings, readSettings())
+  try {
+    Object.assign(settings, await readSettings())
+  } catch (e) {
+    // Хранилище недоступно — работаем на дефолтах. Падать целиком хуже:
+    // без настроек скрипт всё ещё полезен, без bootstrap() — уже нет.
+    console.error('[AniMori] Не удалось прочитать настройки, используются значения по умолчанию', e)
+  }
   return settings
 }
 
-/** Записать одну настройку и сразу обновить производные значения. */
-export function saveSetting<K extends keyof AniMoriSettings>(
+/**
+ * Записать одну настройку и сразу обновить производные значения.
+ *
+ * Память обновляется ДО записи в хранилище: интерфейс обязан отреагировать на клик
+ * мгновенно, как и раньше с синхронным GM_setValue. Сбой записи не откатывает
+ * значение в памяти: пользователь продолжает работать в выбранном режиме до конца
+ * сессии, просто выбор не переживёт перезагрузку.
+ *
+ * Функция стала асинхронной, но сознательно НЕ отклоняется: вызывают её из setter’ов
+ * реактивных моделей, где дождаться результата негде, а непойманный reject всплыл бы
+ * глобальным unhandledrejection.
+ */
+export async function saveSetting<K extends keyof AniMoriSettings>(
   key: K,
   storageKey: string,
   value: AniMoriSettings[K],
-): void {
+): Promise<void> {
   settings[key] = value
-  GM_setValue(storageKey, value)
   settings.translateTitles = settings.titlePrimary !== 'off'
+
+  try {
+    await Bridge.storage.set(storageKey, value)
+  } catch (e) {
+    console.error('[AniMori] Не удалось сохранить настройку ' + storageKey, e)
+  }
 }

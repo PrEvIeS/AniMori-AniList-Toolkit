@@ -3,6 +3,13 @@
 // Особенность: данные франшизы требуют двух сетевых запросов, а контракт MediaWidget.mount()
 // синхронный и вызывается на каждое изменение страницы. Поэтому готовый блок
 // кэшируется в модуле и при пересборке разметки React вставляется заново без сети.
+//
+// БАГ (итерация 10): кэшировался только УСПЕШНЫЙ исход. Если у тайтла франшизы нет
+// (один узел) или запрос упал, builtBox оставался null, замок loadingAniId снимался в finally,
+// и следующая же мутация DOM запускала запрос снова — десятки обращений к Shikimori
+// на одной странице. Кэша у fetchShiki нет, каждый вызов — реальная сеть.
+// Решение: settledAniId — отметка «сетевая работа по этому тайтлу уже сделана», каков бы
+// ни был исход. Соседний виджет тем решает то же самое скрытым блоком в DOM.
 
 import { anilistQuery } from '../../api/anilist'
 import { fetchShiki } from '../../api/shikimori'
@@ -76,6 +83,12 @@ let builtBox: HTMLElement | null = null
 
 /** Замок: для какого тайтла сейчас идёт загрузка. */
 let loadingAniId: number | null = null
+
+/**
+ * Для какого тайтла сетевая часть уже отработана — независимо от того, появился ли блок.
+ * Без этого тайтлы без франшизы бомбардировали API на каждую мутацию страницы.
+ */
+let settledAniId: number | null = null
 
 function isStatus(value: string | null | undefined): value is ListStatus {
   return (
@@ -287,7 +300,11 @@ async function buildFranchise(ctx: MediaContext): Promise<void> {
     const res = await fetchShiki<FranchiseResponse>(
       '/api/' + ctx.endpoint + '/' + String(malId) + '/franchise',
     )
+    // Пользователь ушёл — НЕ помечаем тайтл отработанным: при возврате блок нужен.
     if (!isStillOnPage(aniId)) return
+
+    // С этой точки сетевая часть считается выполненной для этого тайтла.
+    settledAniId = aniId
 
     const nodes = res.data?.nodes ?? []
     // Один узел — это сам тайтл, хронологию рисовать нечего.
@@ -323,6 +340,9 @@ async function buildFranchise(ctx: MediaContext): Promise<void> {
     builtBox = box
     placeBox(box, ctx)
   } catch (e) {
+    // Сбой тоже считается отработанным исходом: иначе при недоступных зеркалах
+    // виджет уйдёт в бесконечный цикл повторов. Повторная попытка — после смены тайтла.
+    if (isStillOnPage(aniId)) settledAniId = aniId
     Logger('ERROR', '[Franchise] Не удалось построить хронологию франшизы', e)
   } finally {
     if (loadingAniId === aniId) loadingAniId = null
@@ -334,10 +354,13 @@ function mount(ctx: MediaContext): void {
   if (!ctx.shikiData) return
   if (!ctx.malData.idMal) return
 
-  // Сменился тайтл — старый блок больше не нужен.
+  // Сменился тайтл — старый блок и все отметки больше не нужны.
   if (builtAniId !== null && builtAniId !== ctx.aniId) {
     builtAniId = null
     builtBox = null
+  }
+  if (settledAniId !== null && settledAniId !== ctx.aniId) {
+    settledAniId = null
   }
 
   // Блок уже собран: возвращаем его на место без повторных запросов.
@@ -345,6 +368,10 @@ function mount(ctx: MediaContext): void {
     placeBox(builtBox, ctx)
     return
   }
+
+  // Сеть по этому тайтлу уже ходила и блока не вышло (нет франшизы либо сбой) —
+  // молча выходим, иначе каждая мутация DOM будет стоить запроса к Shikimori.
+  if (settledAniId === ctx.aniId) return
 
   if (loadingAniId === ctx.aniId) return
   loadingAniId = ctx.aniId

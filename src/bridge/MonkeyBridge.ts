@@ -167,6 +167,20 @@ const monkeyShell: IShell = {
     window.open(url, '_blank', 'noopener')
     return Promise.resolve()
   },
+
+  back(): Promise<void> {
+    // Пункт 4.5. В браузере шаги по истории уже есть у тулбара, и блок навигации
+    // там не монтируется, поэтому вызвать это может разве что будущий код.
+    // Реализация всё равно честная: контракт не должен иметь заглушек, иначе
+    // одна из платформ начнёт вести себя иначе тихо и непредсказуемо.
+    history.back()
+    return Promise.resolve()
+  },
+
+  forward(): Promise<void> {
+    history.forward()
+    return Promise.resolve()
+  },
 }
 
 // ==== сборка ====

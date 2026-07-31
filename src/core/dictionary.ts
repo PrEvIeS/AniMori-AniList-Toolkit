@@ -3,12 +3,16 @@
 // Двухуровневая схема: удалённая база (DICT_URL с GitHub) + правки пользователя.
 // Итоговый словарь = Object.assign(remoteDict, getUserDict()).
 //
-// РИСК №1 из AUDITION.md: getUserDict/setUserDict синхронные, потому что GM_getValue
-// синхронный. На Этапе 3 это заменится на async bridge.storage.get. Пока — 1:1.
+// Итерация 3.5.3: GM_getValue/GM_setValue заменены на Bridge.storage. Хранилище
+// асинхронное, а переводчик читает словарь синхронно на каждом проходе по DOM,
+// поэтому правки держим в памяти: loadUserDict() один раз наполняет кэш при старте,
+// getUserDict() отдаёт копию кэша, setUserDict() сначала обновляет память и только
+// потом пишет в хранилище. Тот же приём, что и в core/settings.ts.
 //
 // amRetranslate — коллбэк из initTranslator (features/translator/), вызывается при
 // изменении словаря, чтобы перевести страницу заново. Устанавливается через сеттер.
 
+import { Bridge } from '@/bridge'
 import { Logger } from '../utils/logger'
 
 /**
@@ -22,6 +26,11 @@ let remoteDict: Record<string, string> = Object.create(null)
  * Устанавливается через registerRetranslateCallback().
  */
 let amRetranslate: (() => void) | null = null
+
+const STORAGE_KEY = 'am_user_dict'
+
+/** Кэш правок в памяти: getUserDict() обязан оставаться синхронным. */
+let userDictCache: Record<string, string> = {}
 
 /**
  * Итоговый словарь (база + правки юзера). Глобальная переменная dictionary из IIFE
@@ -43,27 +52,45 @@ export function normDictKey(v: string | null | undefined): string {
     .trim()
 }
 
-/** Читает правки пользователя из GM_getValue. */
-export function getUserDict(): Record<string, string> {
+/** Разбирает значение из хранилища: там может лежать и строка, и готовый объект. */
+function parseDict(raw: unknown): Record<string, string> {
+  const obj = raw && typeof raw === 'object' ? raw : JSON.parse((raw as string) || '{}')
+  return obj && typeof obj === 'object' && !Array.isArray(obj)
+    ? (obj as Record<string, string>)
+    : {}
+}
+
+/**
+ * Наполняет кэш правок из хранилища. Вызывается один раз из bootstrap() до
+ * rebuildDictionary(), иначе первый проход переводчика прошёл бы без правок юзера.
+ */
+export async function loadUserDict(): Promise<void> {
   try {
-    const raw = GM_getValue('am_user_dict', '{}')
-    const obj = raw && typeof raw === 'object' ? raw : JSON.parse((raw as string) || '{}')
-    return obj && typeof obj === 'object' && !Array.isArray(obj)
-      ? (obj as Record<string, string>)
-      : {}
+    const raw = await Bridge.storage.get<unknown>(STORAGE_KEY, '{}')
+    userDictCache = parseDict(raw)
   } catch (e) {
     Logger('ERROR', 'Ошибка чтения am_user_dict', e)
-    return {}
+    userDictCache = {}
   }
 }
 
-/** Сохраняет правки пользователя в GM_setValue. */
+/**
+ * Отдаёт копию правок. Копия, а не сам объект: раньше каждый вызов возвращал свежий
+ * результат JSON.parse, и правки в нём не влияли на сохранённые данные до setUserDict().
+ */
+export function getUserDict(): Record<string, string> {
+  return { ...userDictCache }
+}
+
+/**
+ * Сохраняет правки: сначала память, затем хранилище. Никогда не бросает исключение,
+ * иначе добавление слова из выделения падало бы на ошибке записи.
+ */
 export function setUserDict(obj: Record<string, string>): void {
-  try {
-    GM_setValue('am_user_dict', JSON.stringify(obj))
-  } catch (e) {
+  userDictCache = obj && typeof obj === 'object' ? { ...obj } : {}
+  void Bridge.storage.set(STORAGE_KEY, JSON.stringify(userDictCache)).catch((e) => {
     Logger('ERROR', 'Ошибка записи am_user_dict', e)
-  }
+  })
 }
 
 /** Пересобирает итоговый словарь: база + правки юзера. */

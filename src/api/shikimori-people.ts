@@ -339,7 +339,7 @@ function loadRoles(kind: string, id: number): Promise<ShikiRoleEntry[] | null> {
 /**
  * Резолвит персонажа/автора через роли в общих тайтлах, когда поиск по имени не сработал.
  * Кандидаты уже ограничены составом тайтла, поэтому порог мягче (55), но слабые
- * совпадения по подстроке (30) вс个 равно отсекаются.
+ * совпадения по подстроке (30) всё равно отсекаются.
  */
 export async function resolveShikiPersonByMedia(
   personData: AniListPersonRef,

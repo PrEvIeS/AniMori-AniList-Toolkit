@@ -11,6 +11,10 @@
 
   Кнопка плеера — часть этой же панели (в монолите и на этапе 1 её вставлял player.ts
   через prepend). Она идёт первой: в раскладке монолита плеер слева.
+
+  Этап 3 п.3.7: у кнопки появилось три варианта содержимого вместо одного: строка
+  прогресса (если операция идёт), иконка (если задана) или текстовая подпись.
+  Порядок именно такой: пока идёт перенос, пользователю важнее видеть его ход, чем значок.
 -->
 
 <script setup lang="ts">
@@ -38,6 +42,11 @@ function runAction(button: ActionButton): void {
   }
 }
 
+/** Текущая строка прогресса кнопки либо пусто, если операция не идёт. */
+function progressOf(button: ActionButton): string {
+  return button.progress ? button.progress.value : ''
+}
+
 function runPlayer(): void {
   const handler = playerHandler.value
   if (!handler) return
@@ -63,8 +72,9 @@ function runPlayer(): void {
     </button>
 
     <!--
-      Интерполяция, а не v-html: монолит писал в разметку '&lt;/&gt;' и получал '</>',
-      здесь тот же результат без разбора HTML.
+      Интерполяция, а не v-html для подписи: монолит писал в разметку '&lt;/&gt;' и получал '</>',
+      здесь тот же результат без разбора HTML. v-html остаётся только для собственных
+      SVG-констант — точно так же, как устроены иконки вкладок в SettingsModal.vue.
     -->
     <button
       v-for="button in actionButtons"
@@ -75,7 +85,21 @@ function runPlayer(): void {
       :title="button.title"
       @click="runAction(button)"
     >
-      {{ button.label }}
+      <template v-if="progressOf(button)">{{ progressOf(button) }}</template>
+      <svg
+        v-else-if="button.icon"
+        viewBox="0 0 24 24"
+        width="15"
+        height="15"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        style="vertical-align: -2px"
+        v-html="button.icon"
+      ></svg>
+      <template v-else>{{ button.label }}</template>
     </button>
   </div>
 </template>

@@ -22,6 +22,7 @@
 //   2. прогресс шагами (step/total) вместо одной текстовой строки.
 // Сама сверка (cmpDiff, cmpStats, cmpFavDiff, cmpNameDiff) не изменена ни на строку.
 
+import { Bridge } from '@/bridge'
 import { anilistQuery } from '../../api/anilist'
 import { fetchShiki } from '../../api/shikimori'
 import type { CmpAniListEntry, CmpShikiEntry, ShikiStatus } from '../../core/types'
@@ -60,7 +61,7 @@ const CMP_SPLIT_RELATIONS = ['PREQUEL', 'SEQUEL', 'PARENT', 'SIDE_STORY', 'ALTER
 /** Пауза между страницами и чанками: троттлинг публичных API, значение из монолита. */
 const RATE_PAUSE_MS = 700
 
-/** Ключи хранилища. Не входят в AniMoriSettings, поэтому пишутся напрямую, как в 1.9.1. */
+/** Ключи хранилища. Не входят в AniMoriSettings, поэтому читаются и пишутся отдельно. */
 const IGNORE_KEY = 'CMP_IGNORE'
 const LOGIN_KEY = 'SHIKI_LOGIN'
 
@@ -95,31 +96,73 @@ async function pause(token: CancelToken, ms: number = RATE_PAUSE_MS): Promise<vo
   throwIfCancelled(token)
 }
 
-// ==== Игнор-лист ====
+// ==== Игнор-лист и запомненный логин ====
 //
 // Формат хранилища перенесён 1:1, включая знак: аниме лежит как +malId, манга как
 // -malId. Менять нельзя — у пользователей уже накоплены игноры в этом виде.
+//
+// Итерация 3.5.3: хранилище стало асинхронным, а cmpGetIgnore() и getSavedShikiLogin()
+// вызываются из открытия модалки и обязаны отдать значение немедленно. Поэтому оба
+// значения держатся в памяти, а loadScannerStorage() наполняет кэш один раз перед
+// первым показом окна. Запись идёт «сначала в память, потом в хранилище»: крестик в
+// игнор-листе убирает строку сразу, не дожидаясь диска.
 
-export function cmpGetIgnore(): Set<number> {
+let ignoreCache = new Set<number>()
+let shikiLoginCache = ''
+let storageLoaded = false
+
+function parseIgnore(raw: unknown): Set<number> {
+  if (typeof raw !== 'string' || !raw) return new Set()
+  const parsed: unknown = JSON.parse(raw)
+  if (!Array.isArray(parsed)) return new Set()
+  return new Set(parsed.filter((x): x is number => typeof x === 'number'))
+}
+
+/**
+ * Читает игнор-лист и последний логин Shikimori в память.
+ *
+ * Вызывается при открытии сканера, а не на старте страницы: окно сравнения открывают
+ * редко, и незачем ради него задерживать загрузку сайта. Повторные вызовы бесплатны.
+ * При сбое чтения работаем с пустым игнором — это значит «показать все расхождения»,
+ * то есть в худшем случае пользователь увидит лишние строки, а не потеряет данные.
+ */
+export async function loadScannerStorage(): Promise<void> {
+  if (storageLoaded) return
+  storageLoaded = true
   try {
-    const raw = GM_getValue(IGNORE_KEY, '[]')
-    return new Set(JSON.parse(raw as string) as number[])
+    const [rawIgnore, rawLogin] = await Promise.all([
+      Bridge.storage.get<unknown>(IGNORE_KEY, '[]'),
+      Bridge.storage.get<unknown>(LOGIN_KEY, ''),
+    ])
+    ignoreCache = parseIgnore(rawIgnore)
+    shikiLoginCache = typeof rawLogin === 'string' ? rawLogin : ''
   } catch (e) {
     Logger('WARN', 'Сканер сравнения: повреждён игнор-лист CMP_IGNORE, сброшен в пустой', e)
-    return new Set()
+    ignoreCache = new Set()
+    shikiLoginCache = ''
   }
 }
 
+export function cmpGetIgnore(): Set<number> {
+  return new Set(ignoreCache)
+}
+
 export function cmpSaveIgnore(set: Set<number>): void {
-  GM_setValue(IGNORE_KEY, JSON.stringify([...set]))
+  ignoreCache = new Set(set)
+  void Bridge.storage.set(IGNORE_KEY, JSON.stringify([...set])).catch((e: unknown) => {
+    Logger('ERROR', 'Сканер сравнения: не удалось сохранить игнор-лист', e)
+  })
 }
 
 export function getSavedShikiLogin(): string {
-  return GM_getValue(LOGIN_KEY, '') as string
+  return shikiLoginCache
 }
 
 export function saveShikiLogin(login: string): void {
-  GM_setValue(LOGIN_KEY, login)
+  shikiLoginCache = login
+  void Bridge.storage.set(LOGIN_KEY, login).catch((e: unknown) => {
+    Logger('ERROR', 'Сканер сравнения: не удалось сохранить логин Shikimori', e)
+  })
 }
 
 // ==== Форматтеры ====

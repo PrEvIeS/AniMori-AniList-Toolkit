@@ -24,6 +24,7 @@ import { initTranslator } from './features/translator'
 import { initActionBar } from './features/ui/actions'
 import { initLinks } from './features/ui/links'
 import { initLoggerUI } from './features/ui/logger-ui'
+import { initNavPanel } from './features/ui/nav'
 import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
 import { sweepPhantomRoots, unmountAll, unmountPageScoped } from './utils/vue-mounter'
@@ -143,6 +144,12 @@ async function bootstrap(): Promise<void> {
   initScannerUI()
   initExporter()
   initActionBar()
+
+  // Пункт 4.5: блок навигации — замена тулбара в десктопной сборке: назад,
+  // вперёд, обновить, плюс F5 / Ctrl+R / Alt+стрелки. Стоит после панели действий
+  // и никак с ней не связан: это отдельное Vue-приложение в body. Функция сама
+  // проверяет платформу и в браузере не делает ничего.
+  initNavPanel()
 
   await openDB()
 

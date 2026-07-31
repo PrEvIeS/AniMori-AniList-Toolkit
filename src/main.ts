@@ -2,6 +2,7 @@
 
 import './style.scss'
 import { fetchInterfaceDictionary } from './api/dictionary'
+import { loadAlToken } from './api/anilist'
 import { amSetAccent } from './core/accent'
 import { IS_ANILIST, IS_SHIKI } from './core/constants'
 import { loadCustomLinks } from './core/custom-links'
@@ -86,6 +87,13 @@ async function bootstrap(): Promise<void> {
 
   // Читает settings.enableLogger, поэтому только после loadSettings().
   installGlobalErrorHandlers()
+
+  // Итерация 3.5.3: токен AniList теперь лежит в асинхронном хранилище, а берётся
+  // синхронно при сборке заголовков запроса. Читаем его до ветвления по сайтам:
+  // на Shikimori токен нужен экспорту, на AniList — сравнению списков и панели
+  // настроек. Без этого первый авторизованный запрос ушёл бы анонимным, а в поле
+  // токена пользователь увидел бы пустоту вместо сохранённого значения.
+  await loadAlToken()
 
   if (IS_SHIKI) {
     initExporter()

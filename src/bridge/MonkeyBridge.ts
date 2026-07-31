@@ -156,6 +156,17 @@ const monkeyShell: IShell = {
     location.reload()
     return Promise.resolve()
   },
+
+  openExternal(url: string): Promise<void> {
+    // Пункт 4.5. В браузере никакого участия оболочки не требуется: новая вкладка —
+    // штатное поведение. GM_openInTab намеренно НЕ используется: он потребовал бы
+    // нового @grant в шапке юзерскрипта, а шапку мы не расширяем без нужды.
+    //
+    // noopener обязателен: иначе открытая страница получит ссылку на window.opener
+    // и сможет переписать адрес нашего окна.
+    window.open(url, '_blank', 'noopener')
+    return Promise.resolve()
+  },
 }
 
 // ==== сборка ====

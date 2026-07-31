@@ -180,6 +180,20 @@ export function normalizeDomain(value: string): string {
 
 export const enableLogger = settingRef('enableLogger', 'set_logger')
 
+/**
+ * Пункт 3.7.2: видимость кнопок переноса и сравнения в панели действий.
+ *
+ * Обычные settingRef, но у них есть второй потребитель кроме окна настроек: ссылка
+ * на эти модели уходит в поле visible при регистрации кнопки (features/scanner
+ * и features/exporter). Передаётся именно ссылка, а не значение: кнопки регистрируются
+ * один раз на старте, а тумблер должен срабатывать сразу, без перезагрузки.
+ *
+ * Поэтому же зависимость односторонняя: модели живут здесь, а фичи их читают.
+ * Обратного импорта (settings-state → scanner/exporter) быть не должно — это цикл.
+ */
+export const showSyncButton = settingRef('showSyncButton', 'set_btn_sync')
+export const showCompareButton = settingRef('showCompareButton', 'set_btn_compare')
+
 // ==== Вкладка «Оформление» ====
 
 export const accentPreset = settingRef('accentPreset', 'am_accent')

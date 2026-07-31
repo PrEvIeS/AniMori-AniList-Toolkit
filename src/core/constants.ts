@@ -14,8 +14,9 @@ export const SHIKI_DOMAINS: readonly string[] = ['shikimori.io', 'shikimori.rip'
 
 /** anime365 (smotret-anime) — фоллбэк для тайтлов/описаний. */
 export const ANIME365_DOMAINS: readonly string[] = ['smotret-anime.online', 'anime365.ru']
-/** мс между запросами (только на cache-miss) */
-export const ANIME365_THROTTLE = 180
+// Пункт 3.8: ANIME365_THROTTLE удалён. Персональный интервал у каждого источника
+// означал разную скорость в одной цепочке резолва названий. Темп теперь единый
+// и задаётся в src/api/rate-limit.ts (API_MIN_INTERVAL_MS / API_WINDOW_MS / API_MAX_PER_WINDOW).
 /** подряд-сбоев -> отключение источника на сессию */
 export const ANIME365_FAIL_LIMIT = 5
 

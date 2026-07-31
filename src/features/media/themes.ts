@@ -1,5 +1,6 @@
 // Этап 1 п.1.10 (часть 3/3): виджет музыкальных тем OP/ED (строки 3340-3456 монолита).
 
+import { Bridge } from '@/bridge'
 import { fetchMalThemes, type MalThemes, type ThemeItem } from '../../api/animethemes'
 import { amApplyAccentToDom } from '../../core/accent'
 import { settings } from '../../core/settings'
@@ -38,14 +39,41 @@ let builtAniId: number | null = null
 let builtBox: HTMLElement | null = null
 let loadingAniId: number | null = null
 
+// Итерация 3.5.3: выбранный музыкальный сервис переехал в асинхронное хранилище,
+// а нужен он в момент сборки разметки, где ждать нельзя. Держим его в памяти и читаем
+// один раз — в buildThemes(), который и так асинхронный. Если чтение не удалось, остаётся
+// VK Музыка — значение по умолчанию из 1.9.1.
+let serviceCache: MusicService = 'vk'
+let serviceLoaded = false
+
 function isStillOnPage(aniId: number): boolean {
   const match = /\/(?:anime|manga)\/(\d+)/.exec(window.location.pathname)
   return match ? Number(match[1]) === aniId : false
 }
 
+async function loadService(): Promise<void> {
+  if (serviceLoaded) return
+  serviceLoaded = true
+  try {
+    const raw = await Bridge.storage.get<unknown>(SERVICE_KEY, 'vk')
+    const value = String(raw)
+    if (SERVICES.includes(value as MusicService)) serviceCache = value as MusicService
+  } catch (e) {
+    Logger('WARN', '[Themes] Не удалось прочитать выбранный музыкальный сервис', e)
+  }
+}
+
 function readService(): MusicService {
-  const raw = String(GM_getValue(SERVICE_KEY, 'vk'))
-  return SERVICES.includes(raw as MusicService) ? (raw as MusicService) : 'vk'
+  return serviceCache
+}
+
+/** Запись «сначала в память»: ссылки перестраиваются сразу, диск догоняет фоном. */
+function saveService(service: MusicService): void {
+  serviceCache = service
+  serviceLoaded = true
+  void Bridge.storage.set(SERVICE_KEY, service).catch((e: unknown) => {
+    Logger('ERROR', '[Themes] Не удалось сохранить выбранный музыкальный сервис', e)
+  })
 }
 
 function musicUrl(service: MusicService, query: string): string {
@@ -172,7 +200,7 @@ function fillBox(box: HTMLElement, themes: MalThemes): void {
 
   const toggle = createServiceToggle(service, (picked) => {
     service = picked
-    GM_setValue(SERVICE_KEY, picked)
+    saveService(picked)
     list.querySelectorAll('.am-theme-track').forEach((node) => {
       const link = node as HTMLAnchorElement
       link.href = musicUrl(picked, link.dataset.query ?? '')
@@ -197,7 +225,9 @@ async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<voi
   builtAniId = ctx.aniId
   builtBox = box
 
-  const themes = await fetchMalThemes(ctx.malData.idMal)
+  // Чтение выбранного сервиса идёт параллельно с запросом тем: оно короче сетевого
+  // ответа и ничего не задерживает, но к моменту сборки ссылок значение уже в памяти.
+  const [themes] = await Promise.all([fetchMalThemes(ctx.malData.idMal), loadService()])
   if (!isStillOnPage(ctx.aniId)) return
   // Тем нет — блок остаётся скрытым, а не удаляется: иначе виджет запросит их снова.
   if (!themes || (themes.openings.length === 0 && themes.endings.length === 0)) return

@@ -1,0 +1,239 @@
+<!--
+  Пункт 4.5: браузерная навигация в окне, у которого нет тулбара.
+
+  Кнопка обновления появилась на пункте 4.3 в панели действий — там, где живут кнопки
+  самого AniMori (настройки, журнал, сверка, перенос). Это было неправильное место:
+  перезагрузка — не функция расширения, а функция оболочки, и искать её пользователь
+  будет там, где она стоит в браузере: рядом со стрелками назад и вперёд, в шапке.
+
+  Почему плавающий блок, а не встраивание в шапку AniList: шапка — чужое React-дерево
+  (РИСК №3 из AUDITION.md). Встроенный туда узел живёт до первой перерисовки, а самой
+  шапки на части страниц просто нет (она прячется на страницах тайтлов при скролле).
+  Поэтому блок монтируется в body и висит поверх — так же, как панель действий.
+
+  Свёрнутое состояние — одна узкая плашка: три кнопки постоянно перекрывали бы угол
+  интерфейса сайта. Раскрывается по наведению — это выбор пользователя. Клик по язычку
+  закрепляет блок раскрытым: без этого при быстром движении мыши к стрелке блок
+  успевал бы свернуться, и по стрелке пришлось бы охотиться.
+
+  Стили лежат в самом компоненте, а не в style.scss, осознанно: это единственный элемент
+  интерфейса, которого в браузерной сборке нет совсем, и его оформление не должно
+  гулять по общему файлу стилей. Селекторы префиксованы am-nav-, так что с разметкой
+  сайта они не пересекаются.
+-->
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import { Bridge } from '@/bridge'
+import { Logger } from '../../utils/logger'
+import { reloadPage } from './reload'
+
+/** Блок раскрыт: либо мышь над ним, либо его закрепили кликом. */
+const hovered = ref(false)
+const pinned = ref(false)
+
+function onEnter(): void {
+  hovered.value = true
+}
+
+function onLeave(): void {
+  hovered.value = false
+}
+
+function togglePinned(): void {
+  pinned.value = !pinned.value
+}
+
+/**
+ * Шаг по истории. Историю нельзя спросить — браузер не говорит, есть ли куда идти,
+ * поэтому кнопки никогда не блокируются. В крайней точке нажатие просто ничего
+ * не даёт — ровно как погасшая стрелка в тулбаре.
+ */
+function goBack(): void {
+  void Bridge.shell.back().catch((e) => {
+    Logger('ERROR', 'Не удалось вернуться назад', e)
+  })
+}
+
+function goForward(): void {
+  void Bridge.shell.forward().catch((e) => {
+    Logger('ERROR', 'Не удалось перейти вперёд', e)
+  })
+}
+
+/** Перезагрузка живёт в reload.ts с пункта 4.3 и уже пишет ошибки в журнал сама. */
+function onReload(): void {
+  void reloadPage()
+}
+</script>
+
+<template>
+  <div
+    id="animori-nav"
+    class="am-accent-scope am-nav"
+    :class="{ 'am-nav-open': hovered || pinned, 'am-nav-pinned': pinned }"
+    @mouseenter="onEnter"
+    @mouseleave="onLeave"
+    @focusin="onEnter"
+    @focusout="onLeave"
+  >
+    <button
+      type="button"
+      class="am-nav-handle"
+      :title="pinned ? 'Открепить панель навигации' : 'Закрепить панель навигации'"
+      aria-label="Навигация"
+      @click="togglePinned"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="14 8 10 12 14 16" />
+      </svg>
+    </button>
+
+    <div class="am-nav-items">
+      <button type="button" class="am-nav-btn" title="Назад (Alt+←)" @click="goBack">
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <line x1="19" y1="12" x2="5" y2="12" />
+          <polyline points="12 19 5 12 12 5" />
+        </svg>
+      </button>
+
+      <button type="button" class="am-nav-btn" title="Вперёд (Alt+→)" @click="goForward">
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <line x1="5" y1="12" x2="19" y2="12" />
+          <polyline points="12 5 19 12 12 19" />
+        </svg>
+      </button>
+
+      <button type="button" class="am-nav-btn" title="Обновить страницу (F5)" @click="onReload">
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <polyline points="21 3 21 9 15 9" />
+        </svg>
+      </button>
+    </div>
+  </div>
+</template>
+
+<style>
+/*
+  Позиция: левый верхний угол — там же, где стрелки в любом браузере.
+  z-index ниже модалок AniMori, но выше шапки сайта.
+*/
+.am-nav {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(18, 20, 26, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px);
+  color: #e7e9ef;
+  opacity: 0.55;
+  transition:
+    opacity 0.16s ease,
+    background 0.16s ease;
+}
+
+.am-nav.am-nav-open {
+  opacity: 1;
+  background: rgba(18, 20, 26, 0.9);
+}
+
+.am-nav-handle,
+.am-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.am-nav-handle:hover,
+.am-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.am-nav-handle svg {
+  transition: transform 0.18s ease;
+}
+
+.am-nav.am-nav-pinned .am-nav-handle svg {
+  transform: rotate(180deg);
+}
+
+/*
+  Свёрнутое состояние сжимается по ширине, а не скрывается через display:none:
+  переход должен быть анимированным, а скрытые кнопки всё равно не должны
+  ловить клики — за это отвечает pointer-events.
+*/
+.am-nav-items {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    max-width 0.2s ease,
+    opacity 0.16s ease;
+}
+
+.am-nav.am-nav-open .am-nav-items {
+  max-width: 96px;
+  opacity: 1;
+  pointer-events: auto;
+}
+</style>

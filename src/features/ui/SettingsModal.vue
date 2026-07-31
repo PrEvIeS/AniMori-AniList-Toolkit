@@ -12,6 +12,10 @@
   по событию change (потеря фокуса), а не на каждое нажатие клавиши. Сохраняем это поведение,
   иначе домены и словарь писались бы в хранилище посимвольно.
 
+  Пункт 2.8: во вкладке «Модули» появилась карточка «Десктоп» — единственный блок настроек,
+  которого не было в 1.9.1. Он намеренно отделён от остальных модулей: переключатель пишет ключ,
+  но потребитель появится только на 4.7 в on_new_window Tauri.
+
   Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
 <template>
@@ -260,6 +264,26 @@
                   <input type="checkbox" id="set_themes" v-model="enableThemes" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
+              </div>
+            </div>
+
+            <div class="amk-card">
+              <div class="amk-card-title">Десктоп</div>
+              <div class="amk-row">
+                <span class="amk-row-label"
+                  ><b>Блокировать попапы плеера</b
+                  ><span class="amk-row-hint">рекламные окна Kodik · только в десктопной версии</span></span
+                >
+                <label class="amk-switch">
+                  <input type="checkbox" id="set_block_popups" v-model="blockPlayerPopups" />
+                  <span class="amk-track"></span><span class="amk-thumb"></span>
+                </label>
+              </div>
+              <div class="amk-row-hint" style="padding: 8px 2px 2px; line-height: 1.5">
+                В браузере переключатель ничего не делает: скрипт не может вмешаться в чужой iframe плеера.
+                Настройка вступит в силу в десктопном приложении — там новые окна перехватываются на уровне
+                оболочки. Реклама, которая уводит текущую страницу редиректом, и оверлеи внутри самого видео
+                этим не блокируются.
               </div>
             </div>
           </div>
@@ -600,6 +624,7 @@ import {
   alClientId,
   alToken,
   animegoDomain,
+  blockPlayerPopups,
   closeSettings,
   commitDictEntry,
   copyDictToClipboard,

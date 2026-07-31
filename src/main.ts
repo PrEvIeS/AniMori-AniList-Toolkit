@@ -8,6 +8,7 @@ import { openDB, runGarbageCollector } from './core/db'
 import { rebuildDictionary, setRemoteDict } from './core/dictionary'
 import { initLifecycle } from './core/lifecycle'
 import { loadSettings, settings } from './core/settings'
+import { initAdblock } from './features/adblock'
 import { initExporter } from './features/exporter'
 import { initMedia, refreshMediaPage, registerMediaWidget } from './features/media'
 import { extLinksWidget } from './features/media/extlinks'
@@ -52,6 +53,12 @@ async function bootstrap(): Promise<void> {
     return
   }
   if (!IS_ANILIST) return
+
+  // П.2.10: адблок идёт ПЕРВЫМ среди всего, что касается страницы: его стиль должен
+  // оказаться в документе раньше первой отрисовки баннера, иначе реклама успеет мигнуть
+  // и вёрстка дёрнется. Функция сама проверяет settings.hideAds и при выключенной
+  // настройке не делает ничего.
+  initAdblock()
 
   // Без этого вызова amAccentTriple остаётся null и сохранённый пресет
   // игнорируется: виджеты красятся синим AniList независимо от выбора.

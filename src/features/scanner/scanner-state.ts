@@ -29,6 +29,7 @@ import {
   createCancelToken,
   fetchViewerName,
   getSavedShikiLogin,
+  loadScannerStorage,
   runCompareScan,
 } from './compare'
 import type { CancelToken, CmpDiffResult, CmpScanSnapshot } from './compare'
@@ -355,6 +356,11 @@ export const nameFavBlocks = computed(() => {
 // ==== Действия ====
 
 export async function openScanner(): Promise<void> {
+  // Итерация 3.5.3: игнор-лист и запомненный логин теперь читаются из асинхронного
+  // хранилища. Ждём их ДО показа окна: иначе окно откроется с пустым полем логина,
+  // а скрытые ранее тайтлы на мгновение выскочат в списке расхождений.
+  // Чтение одноразовое, поэтому задержка есть только при первом открытии.
+  await loadScannerStorage()
   isScannerOpen.value = true
   if (!shikiLogin.value) shikiLogin.value = getSavedShikiLogin()
   ignore.value = cmpGetIgnore()

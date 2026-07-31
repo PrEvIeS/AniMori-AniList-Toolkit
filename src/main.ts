@@ -22,6 +22,7 @@ import { initScannerUI } from './features/scanner'
 import { initSearch } from './features/search'
 import { initTranslator } from './features/translator'
 import { initActionBar } from './features/ui/actions'
+import { initLinks } from './features/ui/links'
 import { initLoggerUI } from './features/ui/logger-ui'
 import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
@@ -87,6 +88,12 @@ async function bootstrap(): Promise<void> {
 
   // Читает settings.enableLogger, поэтому только после loadSettings().
   installGlobalErrorHandlers()
+
+  // Пункт 4.5: перехват ссылок в десктопной сборке. Ставится рано и до проверок
+  // домена: ссылки есть на любой странице, куда бы окно ни зашло, а без обработчика
+  // клики по ним просто исчезают. Сама функция проверяет платформу и в браузере
+  // не делает ничего.
+  initLinks()
 
   // Итерация 3.5.3: токен AniList теперь лежит в асинхронном хранилище, а берётся
   // синхронно при сборке заголовков запроса. Токен нужен сравнению списков, переносу

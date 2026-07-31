@@ -24,6 +24,7 @@ import {
 } from '../../core/dictionary'
 import { saveSetting, settings } from '../../core/settings'
 import type { AccentPreset, AniMoriSettings, TitleSource } from '../../core/settings'
+import { syncAdblock } from '../adblock'
 import { Logger } from '../../utils/logger'
 
 // ==== Адреса: только конкатенацией, никогда шаблонной строкой ====
@@ -121,6 +122,26 @@ export const enablePlayer = settingRef('enablePlayer', 'set_player')
 export const enableRatings = settingRef('enableRatings', 'set_ratings')
 export const enableFranchise = settingRef('enableFranchise', 'set_franchise')
 export const enableThemes = settingRef('enableThemes', 'set_themes')
+
+/**
+ * Пункт 2.10 плана: блокировка рекламы самого AniList.
+ *
+ * Здесь, в отличие от blockPlayerPopups, потребитель есть уже сейчас, поэтому
+ * тумблер не просто пишет ключ, а сразу дёргает модуль: включил — стиль и
+ * наблюдатель поднялись, выключил — снялись. Перезагрузка нужна только чтобы
+ * увидеть баннеры обратно: выпотрошенные слоты мы не восстанавливаем.
+ */
+export const hideAds = computed<boolean>({
+  get: () => {
+    void settingsVersion.value
+    return settings.hideAds
+  },
+  set: (value) => {
+    saveSetting('hideAds', 'set_hide_ads', value)
+    settingsVersion.value++
+    syncAdblock()
+  },
+})
 
 /**
  * Пункт 2.8 плана: блокировка всплывающих окон плеера.

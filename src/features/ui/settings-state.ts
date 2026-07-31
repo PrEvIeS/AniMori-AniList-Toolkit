@@ -122,6 +122,16 @@ export const enableRatings = settingRef('enableRatings', 'set_ratings')
 export const enableFranchise = settingRef('enableFranchise', 'set_franchise')
 export const enableThemes = settingRef('enableThemes', 'set_themes')
 
+/**
+ * Пункт 2.8 плана: блокировка всплывающих окон плеера.
+ *
+ * Потребителя в юзерскрипте нет — переключатель только пишет ключ в хранилище.
+ * Реальный перехват появится на пункте 4.7 в обработчике on_new_window Tauri,
+ * который читает это значение через мост. Поэтому настройка живёт в отдельной
+ * карточке «Десктоп» с явной подписью, чтобы никто не ждал эффекта в браузере.
+ */
+export const blockPlayerPopups = settingRef('blockPlayerPopups', 'set_block_popups')
+
 // ==== Вкладка «Ссылки» ====
 
 export const enableExtLinks = settingRef('enableExtLinks', 'set_extlinks')

@@ -67,6 +67,25 @@ export interface AniMoriSettings {
    * а вот дыры в вёрстке и лишние iframe пользователю не нужны.
    */
   hideAds: boolean
+  /**
+   * Пункт 3.7.2: показывать ли пилюлю «Перенос» в панели действий.
+   *
+   * Скрывается только кнопка, а не сам модуль: окно переноса остаётся
+   * смонтированным и доступным программно, а сетевой слой к панели не привязан.
+   * Смысл ключа чисто интерфейсный — перенос списков делают один раз, а место
+   * в пилюле занято постоянно.
+   *
+   * По умолчанию включено: скрывать функциональность за настройкой, о которой
+   * пользователь не знает, — верный способ сделать её ненайденной.
+   */
+  showSyncButton: boolean
+  /**
+   * Пункт 3.7.2: показывать ли пилюлю ⇄ (сравнение списков) в панели действий.
+   *
+   * Отдельный ключ, а не общий с переносом: у кнопок разная частота
+   * использования, и объединение заставило бы прятать обе ради одной.
+   */
+  showCompareButton: boolean
   /** Производная: тайтлы включены, пока основной источник != 'off'. */
   translateTitles: boolean
 }
@@ -99,6 +118,8 @@ const DEFAULT_SETTINGS: AniMoriSettings = {
   accentPreset: 'site',
   blockPlayerPopups: false,
   hideAds: true,
+  showSyncButton: true,
+  showCompareButton: true,
   translateTitles: true,
 }
 
@@ -131,6 +152,8 @@ async function readSettings(): Promise<AniMoriSettings> {
     accentPreset,
     blockPlayerPopups,
     hideAds,
+    showSyncButton,
+    showCompareButton,
   ] = await Promise.all([
     storage.get('set_interface', DEFAULT_SETTINGS.translateInterface),
     storage.get<TitleSource>('set_title_primary'),
@@ -154,6 +177,8 @@ async function readSettings(): Promise<AniMoriSettings> {
     storage.get<AccentPreset>('am_accent', DEFAULT_SETTINGS.accentPreset),
     storage.get('set_block_popups', DEFAULT_SETTINGS.blockPlayerPopups),
     storage.get('set_hide_ads', DEFAULT_SETTINGS.hideAds),
+    storage.get('set_btn_sync', DEFAULT_SETTINGS.showSyncButton),
+    storage.get('set_btn_compare', DEFAULT_SETTINGS.showCompareButton),
   ])
 
   // Обратная совместимость: старый ключ set_titles -> новый set_title_primary.
@@ -184,6 +209,8 @@ async function readSettings(): Promise<AniMoriSettings> {
     accentPreset,
     blockPlayerPopups,
     hideAds,
+    showSyncButton,
+    showCompareButton,
     translateTitles: titlePrimary !== 'off',
   }
 }

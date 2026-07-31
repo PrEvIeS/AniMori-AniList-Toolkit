@@ -8,10 +8,25 @@
 //
 // Счётчик и флаг были глобальными переменными IIFE. Теперь они приватные, а наружу
 // отдаются только геттеры — так UI не сможет случайно сбросить бэкофф.
+//
+// Пункт 3.5.2: транспорт переведён с GM_xmlhttpRequest на Bridge.http. Обёртка
+// new Promise + onload/onerror/ontimeout больше не нужна, вместе с ней ушёл и
+// внутренний тип Attempt: коды ответа разбираются там же, где они пришли.
+//
+// Вся защита осталась в этом файле и НЕ переехала в мост: мост знает только про
+// HTTP, а «403 — это блокировка, а не отсутствие данных» — знание прикладное.
+// Важное свойство моста: код вне 2xx исключением не считается, ответ возвращается
+// как обычный результат. Поэтому ветки по статусам стоят явными проверками, иначе
+// soft-block молча превратился бы в «данных нет», и цепочка названий перестала бы
+// уходить на фоллбэк.
 
+import { Bridge } from '@/bridge'
 import { ANIME365_DOMAINS, ANIME365_FAIL_LIMIT, ANIME365_THROTTLE } from '../core/constants'
 import { Logger } from '../utils/logger'
 import type { MediaType } from '../core/types'
+
+/** Коды soft-block: источник жив, но временно не отдаёт данные. */
+const BLOCKED_STATUSES = [403, 502, 503, 520, 521, 522, 523, 524]
 
 let anime365RateLimitPause = 0
 let anime365FailStreak = 0
@@ -20,6 +35,10 @@ let anime365Disabled = false
 /** Собирает абсолютный адрес для конкретного зеркала. */
 function mirrorUrl(domain: string, path: string): string {
   return 'https://' + domain + path
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** Отключён ли источник до конца сессии (для отображения в настройках). */
@@ -45,10 +64,16 @@ interface Anime365Series {
   url?: string
 }
 
-type Attempt =
-  | { ok: true; body: { data?: Anime365Series[] } | null }
-  | { rateLimited: true }
-  | { blocked: true; status: number }
+/** Общая реакция на серию сбоев: бэкофф и, при переполнении счётчика, отключение. */
+function registerFailure(): void {
+  if (anime365FailStreak < ANIME365_FAIL_LIMIT) return
+  anime365Disabled = true
+  anime365RateLimitPause = Date.now() + 15000
+  Logger(
+    'ERROR',
+    'anime365 отключён на эту сессию после серии сбоев — цепочка уходит на фоллбэк/оригинал.',
+  )
+}
 
 /**
  * Грузит русский тайтл и описание с anime365 по MAL ID. Только аниме.
@@ -62,46 +87,31 @@ export async function fetchAnime365ByMal(
   if (anime365Disabled) return null // отключён на сессию
 
   if (Date.now() < anime365RateLimitPause) {
-    await new Promise((r) =>
-      setTimeout(r, anime365RateLimitPause - Date.now() + Math.floor(Math.random() * 500)),
-    )
+    await sleep(anime365RateLimitPause - Date.now() + Math.floor(Math.random() * 500))
   }
 
   Logger('API', `Запрос к anime365 API: myAnimeListId=${malId}`)
 
   for (const domain of ANIME365_DOMAINS) {
     try {
-      const res = await new Promise<Attempt>((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: mirrorUrl(domain, `/api/series?myAnimeListId=${malId}&limit=1`),
-          timeout: 5000,
-          onload: (r) => {
-            if (r.status === 200)
-              resolve({ ok: true, body: JSON.parse(r.responseText) as { data?: Anime365Series[] } })
-            else if (r.status === 404) resolve({ ok: true, body: null })
-            else if (r.status === 429) resolve({ rateLimited: true })
-            // 403/503 + Cloudflare (520-524) — soft-block, а не «нет данных».
-            else if ([403, 502, 503, 520, 521, 522, 523, 524].includes(r.status))
-              resolve({ blocked: true, status: r.status })
-            else reject(new Error(`anime365 HTTP ${r.status}`))
-          },
-          onerror: reject,
-          ontimeout: reject,
-        })
+      const res = await Bridge.http.request({
+        method: 'GET',
+        url: mirrorUrl(domain, `/api/series?myAnimeListId=${malId}&limit=1`),
+        timeoutMs: 5000,
       })
 
       // Пауза между запросами (cache-miss)
-      await new Promise((r) => setTimeout(r, ANIME365_THROTTLE))
+      await sleep(ANIME365_THROTTLE)
 
-      if ('rateLimited' in res) {
+      if (res.status === 429) {
         anime365RateLimitPause = Date.now() + 5000
         Logger('WARN', `anime365 Rate Limit 429 (${domain}). Пауза 5с.`)
-        await new Promise((r) => setTimeout(r, 5000 + Math.floor(Math.random() * 1000)))
+        await sleep(5000 + Math.floor(Math.random() * 1000))
         return fetchAnime365ByMal(malId, type) // рекурсивный повтор (429)
       }
 
-      if ('blocked' in res) {
+      // 403/503 + Cloudflare (520-524) — soft-block, а не «нет данных».
+      if (BLOCKED_STATUSES.includes(res.status)) {
         anime365FailStreak++
         anime365RateLimitPause = Date.now() + 15000 // бэкофф
         Logger(
@@ -109,19 +119,20 @@ export async function fetchAnime365ByMal(
           `anime365 недоступен: HTTP ${res.status} (${domain}). ` +
             `Сбой ${anime365FailStreak}/${ANIME365_FAIL_LIMIT}, бэкофф 15с.`,
         )
-        if (anime365FailStreak >= ANIME365_FAIL_LIMIT) {
-          anime365Disabled = true
-          Logger(
-            'ERROR',
-            'anime365 отключён на эту сессию после серии сбоев — цепочка уходит на фоллбэк/оригинал.',
-          )
-        }
+        registerFailure()
         return null // -> resolveTitle: фоллбэк
+      }
+
+      // Всё прочее, кроме 200 и 404, уходит в catch этого же зеркала.
+      if (res.status !== 200 && res.status !== 404) {
+        throw new Error(`anime365 HTTP ${res.status}`)
       }
 
       anime365FailStreak = 0 // успех или 404 — сброс
 
-      const item = res.body?.data?.[0]
+      // 404 — источник ответил, данных просто нет.
+      const body = res.status === 200 ? (JSON.parse(res.text) as { data?: Anime365Series[] }) : null
+      const item = body?.data?.[0]
       if (item) {
         let desc = ''
         if (Array.isArray(item.descriptions)) {
@@ -137,20 +148,14 @@ export async function fetchAnime365ByMal(
       }
       return null // 200, но пусто
     } catch (e) {
+      // Сеть, таймаут (BridgeHttpError), неизвестный код или битый JSON.
       anime365FailStreak++
       Logger(
         'WARN',
         `Сбой запроса к зеркалу anime365: ${domain} (${String(e)}). ` +
           `Сбой ${anime365FailStreak}/${ANIME365_FAIL_LIMIT}.`,
       )
-      if (anime365FailStreak >= ANIME365_FAIL_LIMIT) {
-        anime365Disabled = true
-        anime365RateLimitPause = Date.now() + 15000
-        Logger(
-          'ERROR',
-          'anime365 отключён на эту сессию после серии сбоев — цепочка уходит на фоллбэк/оригинал.',
-        )
-      }
+      registerFailure()
     }
   }
 

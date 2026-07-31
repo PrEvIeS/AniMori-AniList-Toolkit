@@ -6,9 +6,9 @@ import { amSetAccent } from './core/accent'
 import { IS_ANILIST, IS_SHIKI } from './core/constants'
 import { openDB, runGarbageCollector } from './core/db'
 import { rebuildDictionary, setRemoteDict } from './core/dictionary'
-import { initLifecycle } from './core/lifecycle'
+import { initLifecycle, registerRouteTask, registerShutdownTask } from './core/lifecycle'
 import { loadSettings, settings } from './core/settings'
-import { initAdblock } from './features/adblock'
+import { destroyAdblock, initAdblock } from './features/adblock'
 import { initExporter } from './features/exporter'
 import { initMedia, refreshMediaPage, registerMediaWidget } from './features/media'
 import { extLinksWidget } from './features/media/extlinks'
@@ -23,12 +23,50 @@ import { initActionBar } from './features/ui/actions'
 import { initLoggerUI } from './features/ui/logger-ui'
 import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
+import { sweepPhantomRoots, unmountAll, unmountPageScoped } from './utils/vue-mounter'
 
 /**
  * Задержка перед запуском сборщика мусора кэша (строка 4653 монолита).
  * Смысл — не конкурировать с запросами и отрисовкой первой страницы.
  */
 const GC_DELAY_MS = 15000
+
+/**
+ * П.2.9: вся привязка подсистем к SPA-навигации собрана в одном месте.
+ *
+ * Почему здесь, а не в core/lifecycle.ts: ядро сознательно не знает ни о виджетах,
+ * ни о Vue, ни об адблоке — иначе core начал бы импортировать features и получился
+ * круговой граф зависимостей.
+ *
+ * Порядок задач важен: сначала снимаем то, что привязано к ушедшей странице,
+ * потом чистим фантомы, и только потом собираем новую страницу. Иначе уборка
+ * снесла бы только что вставленные виджеты.
+ */
+function wireLifecycle(): void {
+  // 1. Постраничные Vue-приложения (pageScoped: true) снимаются целиком.
+  //    Панель действий и модалки сюда НЕ попадают: они живут в body всю сессию.
+  registerRouteTask('vue:page-scoped', () => {
+    const count = unmountPageScoped()
+    if (count > 0) Logger('INFO', `[Router] Снято постраничных приложений: ${count}`)
+  })
+
+  // 2. Фантомы: узлы am-vue-root без живого приложения за ними. Остаются, когда React
+  //    переносит кусок разметки вместе с нашим корнем вместо того, чтобы его удалить.
+  registerRouteTask('vue:phantoms', () => {
+    sweepPhantomRoots()
+  })
+
+  // 3. Медиа-страница: загрузка данных при смене тайтла и восстановление виджетов.
+  registerRouteTask('media', refreshMediaPage)
+
+  // Задачи разбора выполняются в обратном порядке. В браузере не вызываются никогда:
+  // вкладку закрывают вместе с документом. Готовим их под Этап 3, где WebView Tauri
+  // живёт дольше страницы.
+  registerShutdownTask('vue:all', unmountAll)
+  registerShutdownTask('adblock', destroyAdblock)
+
+  initLifecycle()
+}
 
 /**
  * Порядок важен и взят из init() монолита (строки 4210-4230, 4596-4655):
@@ -58,6 +96,11 @@ async function bootstrap(): Promise<void> {
   // оказаться в документе раньше первой отрисовки баннера, иначе реклама успеет мигнуть
   // и вёрстка дёрнется. Функция сама проверяет settings.hideAds и при выключенной
   // настройке не делает ничего.
+  //
+  // П.2.9: адблок сознательно НЕ входит ни в реестр Vue-приложений, ни в задачи
+  // смены роута. Его наблюдатель висит на documentElement и обязан переживать переходы:
+  // если сносить его вместе с остальным, баннеры вернутся на первой же смене страницы.
+  // destroyAdblock() вызывается только при полном разборе и при выключении тумблера.
   initAdblock()
 
   // Без этого вызова amAccentTriple остаётся null и сохранённый пресет
@@ -113,7 +156,7 @@ async function bootstrap(): Promise<void> {
   // медиа-модуль, а здесь подключаются только последующие смены адреса.
   // Без этого вызова виджеты появлялись только там, где React успевал пересобрать
   // разметку и срабатывал наблюдатель мутаций.
-  initLifecycle(refreshMediaPage)
+  wireLifecycle()
 
   // Фоновая чистка устаревшего кэша. В порте функция была реализована, но ниоткуда
   // не вызывалась, из-за чего IndexedDB росла бесконечно.

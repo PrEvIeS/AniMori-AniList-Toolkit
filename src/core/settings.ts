@@ -29,6 +29,24 @@ export interface AniMoriSettings {
   mangalibDomain: string
   enableLogger: boolean
   accentPreset: AccentPreset
+  /**
+   * Пункт 2.8 плана: блокировать всплывающие окна, которые открывает плеер.
+   *
+   * В юзерскрипте потребителя нет и быть не может: браузер сам решает судьбу
+   * window.open из чужого iframe, а Kodik крутится в кросс-доменном фрейме —
+   * дотянуться до него скриптом нельзя. Настройка заработает на пункте 4.7,
+   * когда в Tauri появится обработчик on_new_window: он перехватывает запрос
+   * на создание окна из любого фрейма, включая рекламные прероллы Kodik.
+   *
+   * Оговорка на будущее: on_new_window ловит только НОВЫЕ окна и вкладки.
+   * Реклама, которая уводит текущий фрейм редиректом, и оверлеи, отрисованные
+   * внутри самого плеера, этим ключом не отсекаются — под них на 4.7 нужен
+   * отдельный фильтр навигации.
+   *
+   * По умолчанию выключено: поведение до Этапа 4 не меняется, а пользователь
+   * сознательно включает то, что заработает только в десктопной сборке.
+   */
+  blockPlayerPopups: boolean
   /** Производная: тайтлы включены, пока основной источник != 'off'. */
   translateTitles: boolean
 }
@@ -60,6 +78,7 @@ function readSettings(): AniMoriSettings {
     mangalibDomain: GM_getValue('set_mangalib_domain', 'mangalib.me'),
     enableLogger: GM_getValue('set_logger', true),
     accentPreset: GM_getValue<AccentPreset>('am_accent', 'site'),
+    blockPlayerPopups: GM_getValue('set_block_popups', false),
     translateTitles: titlePrimary !== 'off',
   }
 }

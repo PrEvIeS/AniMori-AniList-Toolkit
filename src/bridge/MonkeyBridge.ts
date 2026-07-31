@@ -11,6 +11,7 @@ import {
   type IBridge,
   type IClipboard,
   type IHttp,
+  type IShell,
   type IStorage,
 } from './IBridge'
 
@@ -145,6 +146,18 @@ const monkeyClipboard: IClipboard = {
   },
 }
 
+// ==== shell ====
+
+const monkeyShell: IShell = {
+  reload(): Promise<void> {
+    // В браузере это ровно то, что было в подвале настроек до пункта 4.3.
+    // Промис возвращается разрешённым только ради единого контракта: код после
+    // этой строки всё равно умрёт вместе со страницей.
+    location.reload()
+    return Promise.resolve()
+  },
+}
+
 // ==== сборка ====
 
 export const monkeyBridge: IBridge = {
@@ -152,6 +165,7 @@ export const monkeyBridge: IBridge = {
   storage: monkeyStorage,
   http: monkeyHttp,
   clipboard: monkeyClipboard,
+  shell: monkeyShell,
 }
 
 // Пункт 3.4: общее для обеих реализаций имя экспорта.

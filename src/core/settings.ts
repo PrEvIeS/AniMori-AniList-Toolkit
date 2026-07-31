@@ -47,6 +47,17 @@ export interface AniMoriSettings {
    * сознательно включает то, что заработает только в десктопной сборке.
    */
   blockPlayerPopups: boolean
+  /**
+   * Пункт 2.10 плана: резать рекламные блоки самого AniList.
+   *
+   * В отличие от blockPlayerPopups, этот ключ работает ВЕЗДЕ уже сейчас: баннеры
+   * AniList живут в главном фрейме на том же домене, где выполняется скрипт,
+   * поэтому их видит обычный модуль (src/features/adblock).
+   *
+   * По умолчанию включено: пустой рекламный слот — не потеря функциональности,
+   * а вот дыры в вёрстке и лишние iframe пользователю не нужны.
+   */
+  hideAds: boolean
   /** Производная: тайтлы включены, пока основной источник != 'off'. */
   translateTitles: boolean
 }
@@ -79,6 +90,7 @@ function readSettings(): AniMoriSettings {
     enableLogger: GM_getValue('set_logger', true),
     accentPreset: GM_getValue<AccentPreset>('am_accent', 'site'),
     blockPlayerPopups: GM_getValue('set_block_popups', false),
+    hideAds: GM_getValue('set_hide_ads', true),
     translateTitles: titlePrimary !== 'off',
   }
 }

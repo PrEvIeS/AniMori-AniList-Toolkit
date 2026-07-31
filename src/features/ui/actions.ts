@@ -9,6 +9,7 @@
 
 import { mountApp, unmountApp } from '../../utils/vue-mounter'
 import ActionPanel from './ActionPanel.vue'
+import { initReloadControls } from './reload'
 
 export {
   ACTION_ORDER,
@@ -41,7 +42,14 @@ export function initActionBar(): void {
   // обновления в Tampermonkey — тогда пилюль отрисовалась бы дважды.
   document.getElementById(CONTAINER_ID)?.remove()
 
-  // watchContainer: false — наблюдатель на childList у body был бы пустой тратой:
+  // Пункт 4.3: кнопка «Обновить» и горячие клавиши десктопной оболочки.
+  //
+  // Зарегистрированы здесь, а не в bootstrap(): это принадлежность именно панели,
+  // и точка входа не должна знать про ещё одну кнопку. Сама функция молча выходит
+  // в браузерной сборке, поэтому ветвления по платформе здесь нет.
+  initReloadControls()
+
+  // watchContainer: false — наблюдатель на childList у body был бы пустая трата:
   // AniList дёргает детей body постоянно (модалки, тултипы), а панель за весь этап 1
   // ни разу не пропала: она fixed и лежит вне дерева React.
   mountApp(ACTION_PANEL_APP_KEY, ActionPanel, {

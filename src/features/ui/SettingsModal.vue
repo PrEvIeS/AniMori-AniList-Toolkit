@@ -12,13 +12,10 @@
   по событию change (потеря фокуса), а не на каждое нажатие клавиши. Сохраняем это поведение,
   иначе домены и словарь писались бы в хранилище посимвольно.
 
-  Пункт 2.8: во вкладке «Модули» появилась карточка «Десктоп» — единственный блок настроек,
-  которого не было в 1.9.1. Он намеренно отделён от остальных модулей: переключатель пишет ключ,
-  но потребитель появится только на 4.7 в on_new_window Tauri.
-
-  Пункт 2.10: там же карточка «Реклама». В отличие от «Десктопа», её тумблер действует сразу —
-  hideAds дёргает syncAdblock() в settings-state.ts. Перезагрузка нужна только чтобы вернуть
-  баннеры обратно: выпотрошенные слоты мы не восстанавливаем.
+  Пункты 2.8 и 2.10: во вкладке «Модули» есть один тумблер «Блокировщик рекламы» — единственный
+  элемент, которого не было в 1.9.1. Сознательно без пояснений и без деления на «баннеры» и
+  «попапы»: для пользователя это одна функция. Один чекбокс пишет сразу два ключа
+  (set_hide_ads и set_block_popups) — см. hideAds в settings-state.ts.
 
   Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
@@ -269,43 +266,12 @@
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
               </div>
-            </div>
-
-            <div class="amk-card">
-              <div class="amk-card-title">Реклама</div>
               <div class="amk-row">
-                <span class="amk-row-label"
-                  ><b>Блокировать рекламу AniList</b
-                  ><span class="amk-row-hint">баннеры сайта · применяется сразу</span></span
-                >
+                <span class="amk-row-label"><b>Блокировщик рекламы</b></span>
                 <label class="amk-switch">
                   <input type="checkbox" id="set_hide_ads" v-model="hideAds" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
-              </div>
-              <div class="amk-row-hint" style="padding: 8px 2px 2px; line-height: 1.5">
-                Рекламные слоты сайта скрываются вместе с отступами, а их содержимое (включая iframe) удаляется,
-                чтобы не тратить трафик и память. Выключение вернёт баннеры после перезагрузки страницы.
-              </div>
-            </div>
-
-            <div class="amk-card">
-              <div class="amk-card-title">Десктоп</div>
-              <div class="amk-row">
-                <span class="amk-row-label"
-                  ><b>Блокировать попапы плеера</b
-                  ><span class="amk-row-hint">рекламные окна Kodik · только в десктопной версии</span></span
-                >
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_block_popups" v-model="blockPlayerPopups" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <div class="amk-row-hint" style="padding: 8px 2px 2px; line-height: 1.5">
-                В браузере переключатель ничего не делает: скрипт не может вмешаться в чужой iframe плеера.
-                Настройка вступит в силу в десктопном приложении — там новые окна перехватываются на уровне
-                оболочки. Реклама, которая уводит текущую страницу редиректом, и оверлеи внутри самого видео
-                этим не блокируются.
               </div>
             </div>
           </div>
@@ -646,7 +612,6 @@ import {
   alClientId,
   alToken,
   animegoDomain,
-  blockPlayerPopups,
   closeSettings,
   commitDictEntry,
   copyDictToClipboard,

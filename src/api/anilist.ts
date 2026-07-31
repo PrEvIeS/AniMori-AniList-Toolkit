@@ -16,9 +16,16 @@
 //      вызывающего кода: это просьба подождать, а не отказ. Очередь перевода
 //      считает отказы попытками и после трёх бросает элементы без перевода.
 //
-// Сессионное хранилище токена (GM_getValue в getAlToken) сознательно оставлено
-// как есть: хранилище переезжает на мост отдельным пунктом 3.5.3, где сразу будет
-// решён вопрос асинхронного чтения во всех потребителях токена.
+// Пункт 3.5.3: токен AL_TOKEN переехал с GM_getValue на Bridge.storage.
+// Хранилище моста асинхронное, а getAlToken() зовут из мест, где ждать нельзя
+// (сборка заголовков запроса, панель настроек, окно экспорта). Поэтому здесь тот
+// же приём, что у настроек и своих ссылок: значение один раз читается в память на
+// старте через loadAlToken(), геттеры остаются синхронными, а setAlToken() сначала
+// правит память и только потом пишет в хранилище и никогда не отклоняется.
+//
+// Кэш живёт именно здесь, потому что это единственный модуль, которому токен нужен
+// для работы. Панель настроек и окно синхронизации им пользуются, но своей копии
+// не держат — иначе после смены токена в настройках запросы ушли бы со старым.
 
 import { Bridge, type HttpResponse } from '@/bridge'
 import { IS_ANILIST } from '../core/constants'
@@ -30,8 +37,14 @@ const GRAPHQL_URL = 'https://graphql.anilist.co'
 /** Пауза по умолчанию, если сервер не прислал retry-after. */
 const DEFAULT_RETRY_MS = 5000
 
+/** Ключ хранилища для токена. Имя сохранено из монолита ради совместимости. */
+const TOKEN_KEY = 'AL_TOKEN'
+
 /** Unix-время, до которого запросы к AniList приостановлены после 429. */
 let alRateLimitPause = 0
+
+/** Копия токена в памяти: заполняется loadAlToken() до первого запроса. */
+let alTokenCache = ''
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -56,11 +69,42 @@ export interface GraphQLResponse<T = unknown> {
 }
 
 /**
+ * Читает токен из хранилища в память. Вызывается один раз при старте, до того как
+ * что-либо успеет обратиться к AniList с авторизацией. Ошибка чтения не должна
+ * ронять запуск: без токена работают все публичные запросы.
+ */
+export async function loadAlToken(): Promise<void> {
+  try {
+    const stored = await Bridge.storage.get<unknown>(TOKEN_KEY, '')
+    alTokenCache = typeof stored === 'string' ? stored : ''
+  } catch (e) {
+    Logger('ERROR', 'Ошибка чтения AL_TOKEN', e)
+    alTokenCache = ''
+  }
+}
+
+/**
+ * Токен ровно в том виде, в каком его сохранил пользователь, без подстановки из
+ * Vuex. Нужен полям ввода в настройках и в окне экспорта: там нельзя показывать
+ * чужой сессионный токен сайта как «сохранённый пользователем».
+ */
+export function getStoredAlToken(): string {
+  return alTokenCache
+}
+
+/** Сохраняет токен: сначала в память, потом в хранилище. Никогда не отклоняется. */
+export function setAlToken(token: string): void {
+  alTokenCache = token
+  void Bridge.storage.set(TOKEN_KEY, token).catch((e: unknown) => {
+    Logger('ERROR', 'Ошибка записи AL_TOKEN', e)
+  })
+}
+
+/**
  * Токен AniList: из настроек, либо (на anilist.co) из Vuex у залогиненного пользователя.
  */
 export function getAlToken(): string | null {
-  const stored = GM_getValue('AL_TOKEN')
-  if (typeof stored === 'string' && stored) return stored
+  if (alTokenCache) return alTokenCache
 
   if (IS_ANILIST) {
     try {

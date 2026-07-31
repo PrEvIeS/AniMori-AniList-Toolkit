@@ -12,7 +12,11 @@
     "build:userscript": "vite build --mode userscript",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "format": "prettier --write \"src/**/*.{ts,vue,scss}\" \"*.{ts,json,md}\""
+    "format": "prettier --write \"src/**/*.{ts,vue,scss}\" \"*.{ts,json,md}\"",
+    "build:tauri": "vue-tsc --noEmit && vite build --mode tauri",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

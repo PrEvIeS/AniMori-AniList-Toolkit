@@ -9,6 +9,21 @@ import monkey from 'vite-plugin-monkey'
 export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
+      // Пункт 3.4: выбор реализации Bridge на этапе сборки.
+      //
+      // Подмена пути надёжнее ветвления по __ANIMORI_PLATFORM__ внутри кода:
+      // TauriBridge создаёт LazyStore на верхнем уровне модуля, и такой побочный
+      // эффект Rollup вправе сохранить даже после удаления недостижимой ветки — вместе
+      // с ним в бандл юзерскрипта уехали бы пакеты @tauri-apps/*.
+      //
+      // Ключ обязан идти до '@': совпадение строковых алиасов идёт по порядку.
+      // Пересечения всё равно нет: '@' срабатывает лишь на точном '@' или префиксе '@/'.
+      '@bridge-impl': fileURLToPath(
+        new URL(
+          mode === 'tauri' ? './src/bridge/TauriBridge.ts' : './src/bridge/MonkeyBridge.ts',
+          import.meta.url,
+        ),
+      ),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },

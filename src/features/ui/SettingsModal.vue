@@ -12,10 +12,14 @@
   по событию change (потеря фокуса), а не на каждое нажатие клавиши. Сохраняем это поведение,
   иначе домены и словарь писались бы в хранилище посимвольно.
 
-  Пункты 2.8 и 2.10: во вкладке «Модули» есть один тумблер «Блокировщик рекламы» — единственный
-  элемент, которого не было в 1.9.1. Сознательно без пояснений и без деления на «баннеры» и
-  «попапы»: для пользователя это одна функция. Один чекбокс пишет сразу два ключа
-  (set_hide_ads и set_block_popups) — см. hideAds в settings-state.ts.
+  Пункты 2.8 и 2.10: тумблер «Блокировщик рекламы» — единственный элемент, которого не было
+  в 1.9.1. Сознательно без пояснений и без деления на «баннеры» и «попапы»: для пользователя
+  это одна функция. Один чекбокс пишет сразу два ключа (set_hide_ads и set_block_popups) —
+  см. hideAds в settings-state.ts.
+
+  Пункт 2.9: тумблер адблока переехал из «Модулей» во вкладку «Прочее», строкой под «Логгером».
+  Логика деления: во «Модулях» живёт то, что добавляет блоки на страницу тайтла (плеер, рейтинги,
+  франшиза, темы), а адблок ничего не добавляет и работает на всём сайте — ему место рядом с логгером.
 
   Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
@@ -266,13 +270,6 @@
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
               </div>
-              <div class="amk-row">
-                <span class="amk-row-label"><b>Блокировщик рекламы</b></span>
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_hide_ads" v-model="hideAds" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
             </div>
           </div>
 
@@ -491,6 +488,13 @@
                 >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_logger" v-model="enableLogger" />
+                  <span class="amk-track"></span><span class="amk-thumb"></span>
+                </label>
+              </div>
+              <div class="amk-row">
+                <span class="amk-row-label"><b>Блокировщик рекламы</b></span>
+                <label class="amk-switch">
+                  <input type="checkbox" id="set_hide_ads" v-model="hideAds" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
               </div>

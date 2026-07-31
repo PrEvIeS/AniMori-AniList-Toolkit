@@ -8,6 +8,12 @@
 // РИСК №6 из AUDITION.md: LOG_LIMIT = 1000 на каждый тип (до ~6000 объектов в памяти).
 // В Tauri вкладка не закрывается месяцами -> на этапе 4 заменить на ring-buffer 300-500
 // записей + потоковую запись в .log через plugin-fs.
+//
+// Пункт 3.5: настройки читаются асинхронно, поэтому на верхнем уровне модуля
+// settings.enableLogger больше не спрашивается: импорты выполняются до bootstrap(),
+// и там всегда лежал бы дефолт true — логи сессии восстанавливались бы даже
+// при выключенном логгере. Восстановление переехало в installGlobalErrorHandlers(),
+// который bootstrap() зовёт сразу после await loadSettings().
 
 import { settings } from '@/core/settings'
 
@@ -28,8 +34,15 @@ export const LOG_LIMIT = 1000
 
 export let scriptLogs: LogEntry[] = []
 
-// Восстановление логов из сессии
-if (settings.enableLogger) {
+/**
+ * Восстановление логов из sessionStorage.
+ *
+ * Вызывается только после загрузки настроек и только при включённом логгере —
+ * точно так же, как работал верхнеуровневый блок до перехода на асинхронное хранилище.
+ * sessionStorage через мост НЕ идёт: это память вкладки, а не настройки приложения,
+ * и в WebView Tauri она работает штатно.
+ */
+function restoreSessionLogs(): void {
   try {
     const savedLogs = sessionStorage.getItem('animori_logs')
     if (savedLogs) scriptLogs = JSON.parse(savedLogs) as LogEntry[]
@@ -111,9 +124,14 @@ export function isOwnScriptSource(str: unknown): boolean {
 /**
  * Глобальные перехватчики ошибок. В монолите вешались на верхнем уровне IIFE;
  * теперь вызываются явно из bootstrap() — импорт модуля не должен иметь сайд-эффектов.
+ *
+ * Здесь же восстанавливаются логи предыдущей страницы сессии: оба действия зависят
+ * от одного флага и оба требуют уже загруженных настроек.
  */
 export function installGlobalErrorHandlers(): void {
   if (!settings.enableLogger) return
+
+  restoreSessionLogs()
 
   window.addEventListener('error', (e: ErrorEvent) => {
     // Только свои, не баги AniList/Shikimori

@@ -16,6 +16,10 @@
   которого не было в 1.9.1. Он намеренно отделён от остальных модулей: переключатель пишет ключ,
   но потребитель появится только на 4.7 в on_new_window Tauri.
 
+  Пункт 2.10: там же карточка «Реклама». В отличие от «Десктопа», её тумблер действует сразу —
+  hideAds дёргает syncAdblock() в settings-state.ts. Перезагрузка нужна только чтобы вернуть
+  баннеры обратно: выпотрошенные слоты мы не восстанавливаем.
+
   Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
 <template>
@@ -264,6 +268,24 @@
                   <input type="checkbox" id="set_themes" v-model="enableThemes" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
+              </div>
+            </div>
+
+            <div class="amk-card">
+              <div class="amk-card-title">Реклама</div>
+              <div class="amk-row">
+                <span class="amk-row-label"
+                  ><b>Блокировать рекламу AniList</b
+                  ><span class="amk-row-hint">баннеры сайта · применяется сразу</span></span
+                >
+                <label class="amk-switch">
+                  <input type="checkbox" id="set_hide_ads" v-model="hideAds" />
+                  <span class="amk-track"></span><span class="amk-thumb"></span>
+                </label>
+              </div>
+              <div class="amk-row-hint" style="padding: 8px 2px 2px; line-height: 1.5">
+                Рекламные слоты сайта скрываются вместе с отступами, а их содержимое (включая iframe) удаляется,
+                чтобы не тратить трафик и память. Выключение вернёт баннеры после перезагрузки страницы.
               </div>
             </div>
 
@@ -648,6 +670,7 @@ import {
   fallbackDisabled,
   filteredDictEntries,
   generateAuthLink,
+  hideAds,
   importDictFromFile,
   isFallbackOptionDisabled,
   isSettingsOpen,

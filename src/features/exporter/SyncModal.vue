@@ -1,20 +1,23 @@
 <script setup lang="ts">
-// Этап 2 п.2.7: окно переноса списков Shikimori ↔ AniList.
+// Этап 2 п.2.7: окно переноса списков Shikimori → AniList.
 //
-// Разметка снята с `openExportModal()` версии 1.9.1 буква в букву: тот же порядок блоков
-// (ряд из двух полей → карточка «Что переносить» → карточка «Токен AniList» → «Запуск»),
-// те же id, классы и inline-стили. Окно светлое, поэтому у полей свои тёмные границы и текст
-// — без этого поля сливаются с фоном.
+// Разметка снята с `openExportModal()` версии 1.9.1: тот же порядок блоков (ряд из двух
+// полей → карточка «Что переносить» → карточка «Токен AniList» → «Запуск»), те же id и классы.
 //
-// Отличия от монолита ровно три, все осознанные:
-//  1. Предупреждение о публичности профиля — требование RM2 п.2.7. Скрытый профиль даёт 403,
-//     и раньше пользователь узнавал об этом только из сообщения об ошибке посреди переноса.
-//  2. Подпись режима берётся из `syncMode`: тот же компонент станет импортом в десктопе.
-//  3. Нет отдельного `<span class="amk-dot">`: в итерации 5 выяснилось, что точку рисует сам CSS,
-//     а ручной span даёт задвоение.
+// Пункт 3.7 снял с окна всю светлую обвязку. Раньше окно рисовалось на Shikimori, где нет
+// переменных темы AniList, поэтому фон, цвет текста и границы полей задавались вручную
+// (белый фон, чёрный текст), а недостающие переменные подставлял sync-theme.ts. Теперь окно
+// открывается только на AniList, где работают те же --color-*, что у настроек и сравнения.
+// Оформление отдано классам .amk-*, и окно автоматически следует теме сайта и акценту.
+//
+// Отличия от монолита, все осознанные:
+//  1. Предупреждение о публичности профиля — требование RM2 п.2.7. Текст зависит от платформы:
+//     в браузере запросы уходят с куками сессии и скрытый профиль читается, в десктопе — нет.
+//     Показывать браузерному пользователю требование, которое его не касается, нечестно.
+//  2. Подпись режима берётся из `syncMode`.
+//  3. Нет отдельного `<span class="amk-dot">`: точку рисует сам CSS, ручной span даёт задвоение.
 
-import { computed, onMounted, ref, watch } from 'vue'
-import { amkShikiTokens } from './sync-theme'
+import { isAnonymousShikiAccess } from '../../api/shikimori-user'
 import {
   AL_DEVELOPER_URL,
   AL_REDIRECT_URL,
@@ -34,38 +37,32 @@ import {
   syncMode,
 } from './sync-state'
 
-const overlayRef = ref<HTMLElement | null>(null)
+const modeLabel = syncMode === 'export' ? 'экспорт' : 'импорт'
 
-const modeLabel = computed(() => (syncMode.value === 'export' ? 'экспорт' : 'импорт'))
+/**
+ * В десктопе списки читаются анонимно и открытый профиль обязателен. В юзерскрипте
+ * запрос идёт через GM_xmlhttpRequest с куками браузера, поэтому требования нет — нужен
+ * лишь выполненный вход на Shikimori в том же браузере.
+ */
+const anonymous = isAnonymousShikiAccess()
 
-const FIELD_STYLE =
-  'flex:1;width:auto;background:rgba(0,0,0,0.08);color:#000;border:1px solid rgba(0,0,0,0.2);'
+const FIELD_STYLE = 'flex:1;width:auto;'
 
 const AUTH_LINK_STYLE =
   'color:rgb(var(--color-blue));text-decoration:none;font-weight:700;display:inline-block;padding:6px 12px;border:1px solid rgb(var(--color-blue));border-radius:6px;'
-
-// Тема Shikimori меняется без перезагрузки, поэтому переменные считываются при каждом показе.
-function applyTokens() {
-  if (overlayRef.value) amkShikiTokens(overlayRef.value)
-}
-onMounted(applyTokens)
-watch(isSyncOpen, (open) => {
-  if (open) requestAnimationFrame(applyTokens)
-})
 </script>
 
 <template>
   <div
     v-if="isSyncOpen"
     id="shiki-export-overlay"
-    ref="overlayRef"
     class="amk-overlay"
     style="display: flex"
     @click.self="closeSyncModal"
   >
-    <div class="amk-modal" style="width: 500px; background: rgba(255, 255, 255, 0.85)">
+    <div class="amk-modal" style="width: 500px">
       <div class="amk-head">
-        <h2 class="amk-title" style="color: #000">
+        <h2 class="amk-title">
           <span style="color: #e05264">Shikimori</span>&nbsp;➜&nbsp;<span style="color: #3dbbee"
             >AniList</span
           >
@@ -83,12 +80,18 @@ watch(isSyncOpen, (open) => {
             border-radius: 8px;
             background: rgba(224, 82, 100, 0.12);
             border: 1px solid rgba(224, 82, 100, 0.35);
-            color: #000;
             line-height: 1.4;
           "
         >
-          ⚠️ Ваш профиль на Shikimori должен быть открыт (публичен) на время переноса списков. Если
-          профиль скрыт настройками приватности, сервер откажет в доступе.
+          <template v-if="anonymous">
+            ⚠️ Списки читаются без входа в аккаунт, поэтому ваш профиль на Shikimori должен быть
+            открыт (публичен) на время переноса. Если профиль скрыт настройками приватности,
+            сервер откажет в доступе.
+          </template>
+          <template v-else>
+            ℹ️ Списки читаются с Shikimori под вашей сессией в этом же браузере. Если вы не вошли
+            в аккаунт, скрытый профиль будет недоступен.
+          </template>
         </div>
 
         <div style="display: flex; gap: 10px">
@@ -187,7 +190,6 @@ watch(isSyncOpen, (open) => {
         <button
           id="se-start"
           class="amk-btn amk-btn-primary amk-btn-block"
-          style="border: 1px solid rgba(0, 0, 0, 0.3)"
           :disabled="isRunning"
           @click="runSync"
         >

@@ -9,7 +9,12 @@
 //
 // Гард тёзок: если совпадение не кандзи-точное (score < 90), требуем пересечения
 // по MAL id тайтлов. Без этого однофамильцы подменяли описания персонажей.
+//
+// Пункт 3.5.2: транспорт переведён с GM_xmlhttpRequest на Bridge.http. Изменена
+// ровно одна функция — локальная обёртка request(); вся стратегия поиска, пороги
+// совпадения, гард тёзок и кэш ролей остались нетронутыми.
 
+import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
 import { Logger } from '../utils/logger'
 import { scoreNameMatch } from '../utils/name-match'
@@ -45,26 +50,34 @@ interface RawResponse {
 }
 
 /**
- * Обёртка над GM_xmlhttpRequest, которая никогда не режектит.
+ * Обёртка над Bridge.http, которая никогда не режектит.
  * В монолите было onerror: () => resolve({status: 0}) — неполный объект ответа,
  * который не проходит типизацию. Поведение то же: status 0 = сетевой сбой.
+ *
+ * Форма результата (status + responseText) сохранена намеренно: на неё завязаны
+ * все три шага поиска ниже, и менять её в одной итерации с транспортом — лишний риск.
+ * Коды ответа мост исключением не считает, поэтому 404 и 429 приходят сюда обычным
+ * путём и разбираются вызывающим кодом, как и раньше.
  */
-function request(opts: {
+async function request(opts: {
   method: 'GET' | 'POST'
   url: string
   headers?: Record<string, string>
   data?: string
 }): Promise<RawResponse> {
-  return new Promise((resolve) => {
-    GM_xmlhttpRequest({
+  try {
+    const r = await Bridge.http.request({
       method: opts.method,
       url: opts.url,
       headers: opts.headers,
-      data: opts.data,
-      onload: (r) => resolve({ status: r.status, responseText: r.responseText }),
-      onerror: () => resolve({ status: 0, responseText: '' }),
+      body: opts.data,
     })
-  })
+    return { status: r.status, responseText: r.text }
+  } catch {
+    // Транспортный сбой (BridgeHttpError). Молча отдаём status 0 — так было и в монолите:
+    // поиск персон не должен ронять перевод страницы из-за одного упавшего зеркала.
+    return { status: 0, responseText: '' }
+  }
 }
 
 /** Кандидат из списка поиска. */

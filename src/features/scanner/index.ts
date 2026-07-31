@@ -8,9 +8,14 @@
 // Теперь модуль сам заявляет о себе в панели действий через initScannerUI(), как это
 // делают initSettingsUI() и initLoggerUI(). main.ts больше не знает ни про id кнопки,
 // ни про её порядок, ни про обработчик: фича самодостаточна и снимается одной строкой.
+//
+// Этап 3 п.3.7.2: видимость кнопки привязана к настройке. Зависимость от ui/settings-state
+// односторонняя и безопасная: панель настроек про сканер не знает и ничего отсюда
+// не импортирует.
 
 import { mountApp, unmountApp } from '../../utils/vue-mounter'
 import { ACTION_ORDER, registerActionButton } from '../ui/actions'
+import { showCompareButton } from '../ui/settings-state'
 import ScannerModal from './ScannerModal.vue'
 import { closeScanner, isScannerOpen, openScanner } from './scanner-state'
 
@@ -51,6 +56,10 @@ export function toggleCompareModal(): void {
  * Вызывать до initActionBar(), как и остальные init*UI(): порядок пилюль задаёт
  * ACTION_ORDER, а не очередь вызовов. Модалка здесь намеренно не монтируется —
  * ленивое монтирование при первом открытии сохраняется.
+ *
+ * П.3.7.2: регистрация безусловная, даже если тумблер выключен: панель сама отсеивает
+ * скрытые кнопки в actionButtons. Передаём ссылку на модель, а не её значение, иначе
+ * панель запомнила бы состояние на момент старта и тумблер требовал бы перезагрузки.
  */
 export function initScannerUI(): void {
   registerActionButton({
@@ -58,6 +67,7 @@ export function initScannerUI(): void {
     label: '⇄',
     title: 'Сравнить списки Shikimori и AniList (AniMori)',
     order: ACTION_ORDER.compare,
+    visible: showCompareButton,
     onClick: () => void openCompareModal(),
   })
 }

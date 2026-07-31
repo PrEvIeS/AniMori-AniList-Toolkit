@@ -299,9 +299,47 @@ interface ShikiRoleEntry {
 }
 
 /**
+ * Сколько тайтлов максимум проверяем при резолве через роли.
+ * Без потолка персона с сорока тайтлами стоит сорока запросов, а совпадение
+ * почти всегда находится на первых же: список AniList идёт по убыванию значимости.
+ */
+const MAX_MEDIA_PROBES = 5
+
+/**
+ * Кэш списков ролей на время сессии.
+ *
+ * АУДИТ (итерация 10): без кэша один и тот же /roles тянулся до 11 раз за минуту:
+ * на странице десяток персонажей из одного аниме, и каждый независимо запрашивал
+ * один и тот же список. Это давало 35% лишнего трафика и выбивало 429.
+ *
+ * Храним именно промис, а не результат: тогда параллельные вызовы дожидаются
+ * одного запроса, а не стартуют свой каждый.
+ */
+const rolesCache = new Map<string, Promise<ShikiRoleEntry[] | null>>()
+
+/** Загружает роли тайтла через кэш. */
+function loadRoles(kind: string, id: number): Promise<ShikiRoleEntry[] | null> {
+  const key = kind + '/' + String(id)
+  const cached = rolesCache.get(key)
+  if (cached) return cached
+
+  const task = fetchShiki<ShikiRoleEntry[]>('/api/' + kind + '/' + String(id) + '/roles')
+    .then((res) => res.data)
+    .catch((e: unknown) => {
+      // Сбой не кэшируем: зеркало могло лечь временно.
+      rolesCache.delete(key)
+      Logger('ERROR', `Не удалось загрузить роли: ${key}`, e)
+      return null
+    })
+
+  rolesCache.set(key, task)
+  return task
+}
+
+/**
  * Резолвит персонажа/автора через роли в общих тайтлах, когда поиск по имени не сработал.
  * Кандидаты уже ограничены составом тайтла, поэтому порог мягче (55), но слабые
- * совпадения по подстроке (30) всё равно отсекаются.
+ * совпадения по подстроке (30) вс个 равно отсекаются.
  */
 export async function resolveShikiPersonByMedia(
   personData: AniListPersonRef,
@@ -311,6 +349,7 @@ export async function resolveShikiPersonByMedia(
   const mediaRefs = mediaNodes
     .filter((m) => m.idMal)
     .map((m) => ({ id: m.idMal as number, kind: m.type === 'MANGA' ? 'mangas' : 'animes' }))
+    .slice(0, MAX_MEDIA_PROBES)
   if (mediaRefs.length === 0) return null
 
   const target: NameTarget = {
@@ -322,9 +361,9 @@ export async function resolveShikiPersonByMedia(
   let bestScore = 0
 
   for (const ref of mediaRefs) {
-    const rolesRes = await fetchShiki<ShikiRoleEntry[]>(`/api/${ref.kind}/${ref.id}/roles`)
-    if (rolesRes.data) {
-      const items = rolesRes.data
+    const roles = await loadRoles(ref.kind, ref.id)
+    if (roles) {
+      const items = roles
         .map((r) => (type === 'characters' ? r.character : r.person))
         .filter((x): x is PersonCandidate => Boolean(x))
       for (const c of items) {

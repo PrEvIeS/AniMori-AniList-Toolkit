@@ -5,6 +5,12 @@
 //
 // Прогресс раньше писался в `btn.textContent` из глубины сетевых функций. Теперь
 // это `buttonLabel` — обычный ref, а `sync-api.ts` просто зовёт колбэк.
+//
+// Пункт 3.5.3: токен больше не читается и не пишется через GM_*. Его кэш живёт в
+// api/anilist.ts, поэтому здесь просто геттер и сеттер. Это важно именно здесь:
+// токен сохраняется ровно перед серией авторизованных запросов, и если бы запись
+// шла только в асинхронное хранилище, первый же запрос мог бы уйти без токена
+// и весь экспорт упал бы на первом шаге.
 
 import { computed, ref } from 'vue'
 import { IS_SHIKI } from '../../core/constants'
@@ -22,7 +28,7 @@ import {
   type AniListUser,
   type HistoryDates,
 } from './sync-api'
-import { anilistQuery } from '../../api/anilist'
+import { anilistQuery, getStoredAlToken, setAlToken } from '../../api/anilist'
 
 /** Подпись кнопки в покое. В 1.9.1 было жёсткое 'Экспорт'. */
 export const IDLE_LABEL = 'Экспорт'
@@ -74,7 +80,7 @@ function guessShikiUser(): string {
 
 export function openSyncModal(): void {
   if (!shikiUser.value) shikiUser.value = guessShikiUser()
-  alToken.value = (GM_getValue('AL_TOKEN', '') as string) || ''
+  alToken.value = getStoredAlToken()
   isSyncOpen.value = true
 }
 
@@ -109,7 +115,7 @@ export async function runSync(): Promise<void> {
     return
   }
 
-  GM_setValue('AL_TOKEN', token)
+  setAlToken(token)
   // Токен не остаётся в поле после сохранения — поведение из 1.9.1.
   alToken.value = ''
   isSyncOpen.value = false

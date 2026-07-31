@@ -8,19 +8,8 @@
     "beforeBuildCommand": "npm run build:tauri"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "AniMori",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1024,
-        "minHeight": 600,
-        "resizable": true,
-        "fullscreen": false,
-        "center": true
-      }
-    ],
+    "withGlobalTauri": false,
+    "windows": [],
     "security": {
       "csp": null
     }

@@ -30,10 +30,24 @@
 // страницы. Теперь любой неуспех возвращает id в очередь и снимает маркер, а после
 // трёх неудач ключ отпускается совсем, чтобы не крутиться вечно.
 //
+// Пункт 3.8: темп запросов больше НЕ регулируется отсюда.
+//
+// Раньше после каждого элемента пачки стояла своя пауза (250 мс для тайтлов, 300 мс
+// для персон) поверх шлюза внутри api-клиентов. Получался двойной троттлинг: пачка
+// из сорока тайтлов простаивала десять секунд даже когда все сорок брались из кэша
+// и ни одного сетевого запроса не делалось. Теперь темп держит общий ограничитель
+// (src/api/rate-limit.ts), а очередь просто отдаёт работу так быстро, как её берут.
+// Ждать здесь нечего: acquireSlot() внутри клиента сам притормозит отправку.
+//
+// Второе изменение 3.8: в проверку лимитов добавлен anime365. Он стоит в той же
+// цепочке резолва названий, что и Shikimori, и если он ушёл в паузу или бэкофф,
+// запускать новую пачку так же бессмысленно.
+//
 // РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
 // обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
 
 import { anilistQuery, isAniListRateLimited } from '../../api/anilist'
+import { isAnime365RateLimited } from '../../api/anime365'
 import { fetchShiki, isShikimoriRateLimited, pauseShikimori } from '../../api/shikimori'
 import {
   fetchShikiPersonREST,
@@ -194,10 +208,6 @@ export function getPendingQueueSizes(): Record<QueueKind, number> {
   return { MED2: pending.MED2.size, CHR2: pending.CHR2.size, STF3: pending.STF3.size }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 function totalPending(): number {
   return pending.MED2.size + pending.CHR2.size + pending.STF3.size
 }
@@ -248,7 +258,9 @@ function requeue(kind: QueueKind, id: number): void {
   releaseQueued(key)
 
   if (tries >= MAX_ATTEMPTS) {
-    Logger('QUEUE', `[Process] ${key}: неудач подряд ${tries}, ключ отпущен`)
+    // Это не рутина очереди, а потеря перевода: элемент останется английским
+    // до перезагрузки страницы. Уровень QUEUE прятал такие случаи от глаз.
+    Logger('WARN', `[Process] ${key}: неудач подряд ${tries}, ключ отпущен`)
     queue.delete(key)
     return
   }
@@ -308,10 +320,12 @@ async function processTransQueue(): Promise<void> {
     while (totalPending() > 0) {
       Logger('QUEUE', `[Process] Запуск обработки. В ожидании: ${totalPending()} элементов.`)
 
-      // Лимит со стороны API: отступаем и пробуем позже, а не колотим в закрытую дверь.
-      if (isAniListRateLimited() || isShikimoriRateLimited()) {
+      // Лимит со стороны любого из трёх источников цепочки: отступаем и пробуем
+      // позже, а не колотим в закрытую дверь. anime365 добавлен в 3.8 — он стоит
+      // в том же резолве названий, что и Shikimori.
+      if (isAniListRateLimited() || isShikimoriRateLimited() || isAnime365RateLimited()) {
         const wait = 1000 + Math.floor(Math.random() * 500)
-        Logger('QUEUE', `[Process] Активен лимит API, повтор через ${wait}ms`)
+        Logger('WARN', `[Process] Активен лимит API, повтор через ${wait}ms`)
         setTimeout(() => void processTransQueue(), wait)
         return
       }
@@ -370,7 +384,7 @@ async function processMediaBatch(): Promise<void> {
       Logger('ERROR', `Перевод названия: сбой на id ${row.id}`, e)
       requeue('MED2', row.id)
     }
-    await sleep(250)
+    // Паузы здесь нет: темп держит общий ограничитель внутри api-клиентов.
   }
 }
 
@@ -436,7 +450,7 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
           const rest = rows.slice(i)
           for (const pendingRow of rest) returnToQueue(kind, pendingRow.id)
           Logger(
-            'QUEUE',
+            'WARN',
             `Перевод имён (${kind}): лимит Shikimori, пауза 6с, возвращено в очередь ${rest.length}`,
           )
           return
@@ -469,7 +483,7 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
       Logger('ERROR', `Перевод имён (${kind}): сбой на id ${row.id}`, e)
       requeue(kind, row.id)
     }
-    await sleep(300)
+    // Паузы здесь нет: темп держит общий ограничитель внутри api-клиентов.
   }
 }
 

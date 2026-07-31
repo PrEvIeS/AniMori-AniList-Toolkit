@@ -26,6 +26,10 @@
   и выключают сами функции, а здесь речь только о том, что показано в пилюле: сами модули
   остаются рабочими.
 
+  Пункт 4.3: подвал больше не зовёт location.reload() напрямую. В десктопной оболочке этот
+  вызов молча не делал ничего, и кнопки «Применить и перезагрузить» и «Очистить кэш» выглядели
+  сломанными. Теперь обе идут через reloadPage() из ./reload, который зовёт мост.
+
   Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
 -->
 <template>
@@ -613,7 +617,7 @@
       </div>
 
       <div class="amk-foot">
-        <button class="amk-btn amk-btn-primary amk-btn-block" id="am-apply" @click="reloadPage()">
+        <button class="amk-btn amk-btn-primary amk-btn-block" id="am-apply" @click="onApply()">
           Применить и перезагрузить
         </button>
         <button class="amk-btn amk-btn-danger" id="am-clear" @click="onClearCache()">Очистить кэш</button>
@@ -630,6 +634,7 @@ import { CL_COLORS } from '../../core/custom-links'
 import { clearCache } from '../../core/db'
 import type { TitleSource } from '../../core/settings'
 import { amCopy } from '../../utils/dom'
+import { reloadPage } from './reload'
 import {
   ACCENT_KEYS,
   AL_DEV_SETTINGS,
@@ -808,14 +813,17 @@ function onSupportCopy(e: Event): void {
 
 // ==== Подвал ====
 
-function reloadPage(): void {
-  location.reload()
+// Пункт 4.3: перезагрузка идёт через мост (./reload), а не location.reload():
+// в десктопном окне второй вариант не работает вовсе. Обёртка нужна ради void:
+// reloadPage() асинхронен, а обработчику клика нечего делать с промисом.
+function onApply(): void {
+  void reloadPage()
 }
 
 function onClearCache(): void {
   void clearCache().then(() => {
     alert('Кэш сброшен!')
-    location.reload()
+    void reloadPage()
   })
 }
 

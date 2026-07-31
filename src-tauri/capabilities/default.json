@@ -1,14 +1,28 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
-  "windows": [
-    "main"
-  ],
+  "description": "Разрешения для окна main, которое открыто на anilist.co: хранилище настроек, запись в буфер обмена и сетевые запросы к источникам из src/api.",
+  "windows": ["main"],
+  "local": true,
+  "remote": {
+    "urls": ["https://anilist.co", "https://*.anilist.co"]
+  },
   "permissions": [
     "core:default",
-    "http:default",
     "store:default",
-    "clipboard-manager:default"
+    "clipboard-manager:allow-write-text",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://graphql.anilist.co/*" },
+        { "url": "https://shikimori.io/*" },
+        { "url": "https://shikimori.rip/*" },
+        { "url": "https://smotret-anime.online/*" },
+        { "url": "https://anime365.ru/*" },
+        { "url": "https://api.animethemes.moe/*" },
+        { "url": "https://raw.githubusercontent.com/*" },
+        { "url": "https://kodik-api.com/*" }
+      ]
+    }
   ]
 }

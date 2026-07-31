@@ -153,3 +153,11 @@ export const monkeyBridge: IBridge = {
   http: monkeyHttp,
   clipboard: monkeyClipboard,
 }
+
+// Пункт 3.4: общее для обеих реализаций имя экспорта.
+//
+// src/bridge/index.ts импортирует platformBridge из псевдопути '@bridge-impl', который
+// resolve.alias разводит на этот файл или на TauriBridge в зависимости от mode сборки.
+// Одинаковое имя избавляет точку входа от любых ветвлений: вторая реализация просто
+// не попадает в граф модулей, а вместе с ней и пакеты @tauri-apps/*.
+export { monkeyBridge as platformBridge }

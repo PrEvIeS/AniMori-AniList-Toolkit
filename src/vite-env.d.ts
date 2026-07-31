@@ -5,7 +5,7 @@ declare const __ANIMORI_PLATFORM__: 'userscript' | 'tauri'
 
 // ==== GM_* API ====
 // @types/greasemonkey описывает только GM.* (GM4), а монолит использует GM_*.
-// Этап 3 спрячет эти вызовы за Bridge; до тех пор описываем ровно то, что есть в @grant.
+// Этап 3 прячет эти вызовы за Bridge; до тех пор описываем ровно то, что есть в @grant.
 declare function GM_getValue<T>(key: string, defaultValue: T): T
 declare function GM_getValue(key: string): unknown
 declare function GM_setValue(key: string, value: unknown): void
@@ -28,6 +28,13 @@ declare interface GMXhrDetails {
   data?: string
   responseType?: 'text' | 'json' | 'blob' | 'arraybuffer'
   timeout?: number
+  /**
+   * Не отправлять куки текущей сессии. Реализует режим credentials: 'omit' из IBridge.
+   *
+   * Поддерживается Tampermonkey и Violentmonkey, но не Greasemonkey 4. Менеджеры без
+   * поддержки просто игнорируют поле и отправляют куки — см. предупреждение в MonkeyBridge.
+   */
+  anonymous?: boolean
   onload?: (response: GMXhrResponse) => void
   onerror?: (response: GMXhrResponse) => void
   ontimeout?: (response: GMXhrResponse) => void
@@ -35,3 +42,12 @@ declare interface GMXhrDetails {
 }
 
 declare function GM_xmlhttpRequest(details: GMXhrDetails): { abort: () => void }
+
+// Информация о менеджере юзерскриптов. Доступна без отдельного @grant.
+// Нужна MonkeyBridge, чтобы понять, поддерживается ли анонимный запрос.
+declare const GM_info:
+  | {
+      scriptHandler?: string
+      version?: string
+    }
+  | undefined

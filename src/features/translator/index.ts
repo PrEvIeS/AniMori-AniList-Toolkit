@@ -22,6 +22,14 @@
 // dataset.translated и dataset.queued хранят id (ключ) тайтла, а не флаг '1', иначе
 // узел навсегда глохнет после первого перевода и покажет оригинал.
 //
+// ВАЖНО про потерю элементов (аудит журнала от 31.07). Пачка удаляла id из pending
+// ДО запроса к AniList. Любой сбой сети, любой id, на который AniList не вернул
+// строку, и любое исключение внутри строки означали: id из pending исчез, а на
+// элементе остался маркер dataset.queued. Следующий скан такой элемент пропускал,
+// запросов по нему больше не было — карточка оставалась английской до перезагрузки
+// страницы. Теперь любой неуспех возвращает id в очередь и снимает маркер, а после
+// трёх неудач ключ отпускается совсем, чтобы не крутиться вечно.
+//
 // РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
 // обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
 
@@ -70,6 +78,20 @@ const NOT_FOUND = 'NOT_FOUND'
 
 const MEDIA_BATCH = 40
 const PERSON_BATCH = 10
+
+/**
+ * Окно сбора пачки. Первый промах не запускает обработку немедленно: за эти
+ * полсекунды в очередь успевают попасть остальные карточки экрана, и вместо
+ * десяти запросов к AniList по одному элементу уходит один на десять.
+ * Окно фиксированное, а не скользящее: поток промахов не должен откладывать старт.
+ */
+const DISPATCH_DELAY_MS = 500
+
+/** Пауза перед возвратом сбойного id в очередь — чтобы не крутить цикл на упавшей сети. */
+const RETRY_DELAY_MS = 2000
+
+/** Сколько раз пробуем один ключ, прежде чем отпустить его до перезагрузки страницы. */
+const MAX_ATTEMPTS = 3
 
 /**
  * Свои виджеты: их содержимое уже на русском и собрано вручную.
@@ -148,8 +170,12 @@ const pending: Record<QueueKind, Set<number>> = {
   STF3: new Set<number>(),
 }
 
+/** Счётчик неудачных попыток по ключу. Успех обнуляет запись. */
+const attempts = new Map<string, number>()
+
 let isProcessing = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let dispatchTimer: ReturnType<typeof setTimeout> | null = null
 let mutationHookTimer: ReturnType<typeof setTimeout> | null = null
 let isStarted = false
 let mutationHook: (() => void) | null = null
@@ -177,6 +203,61 @@ function totalPending(): number {
 }
 
 // ==== Очередь ====
+
+/**
+ * Ставит обработку в план. Если окно сбора уже открыто, второй раз не переставляем:
+ * иначе непрерывный поток промахов при скролле откладывал бы старт бесконечно.
+ */
+function scheduleDispatch(): void {
+  if (dispatchTimer) return
+  dispatchTimer = setTimeout(() => {
+    dispatchTimer = null
+    void processTransQueue()
+  }, DISPATCH_DELAY_MS)
+}
+
+/**
+ * Снимает маркер «уже в очереди» со всех элементов ключа.
+ * Без этого повторная постановка невозможна: queueContent отсекает элемент
+ * по dataset.queued, и карточка молча остаётся непереведённой.
+ */
+function releaseQueued(key: string): void {
+  for (const { el } of queue.get(key) ?? []) {
+    if (el.dataset.queued === key) delete el.dataset.queued
+  }
+}
+
+/**
+ * Возвращает id в очередь немедленно, не считая это неудачей.
+ * Для рейт-лимита: элемент не сломан, просто сейчас не время.
+ */
+function returnToQueue(kind: QueueKind, id: number): void {
+  releaseQueued(`${kind}_${id}`)
+  pending[kind].add(id)
+}
+
+/**
+ * Возвращает id в очередь после сбоя, с паузой и счётчиком попыток.
+ * После MAX_ATTEMPTS ключ отпускается: маркеры сняты, запись из очереди удалена,
+ * так что новый узел на странице сможет попробовать снова с чистого листа.
+ */
+function requeue(kind: QueueKind, id: number): void {
+  const key = `${kind}_${id}`
+  const tries = (attempts.get(key) ?? 0) + 1
+  attempts.set(key, tries)
+  releaseQueued(key)
+
+  if (tries >= MAX_ATTEMPTS) {
+    Logger('QUEUE', `[Process] ${key}: неудач подряд ${tries}, ключ отпущен`)
+    queue.delete(key)
+    return
+  }
+
+  setTimeout(() => {
+    pending[kind].add(id)
+    scheduleDispatch()
+  }, RETRY_DELAY_MS)
+}
 
 /**
  * Кладёт элемент в очередь перевода или сразу берёт готовое из кэша.
@@ -215,7 +296,7 @@ async function queueContent(
   queue.set(key, list)
   pending[kind].add(id)
 
-  setTimeout(() => void processTransQueue(), 500)
+  scheduleDispatch()
 }
 
 /** Основной цикл: пачка за пачкой, пока очередь не опустеет. */
@@ -257,7 +338,15 @@ async function processMediaBatch(): Promise<void> {
     rows = res.data?.Page?.media ?? []
   } catch (e) {
     Logger('ERROR', 'Перевод названий: сбой запроса к AniList', e)
+    ids.forEach((id) => requeue('MED2', id))
     return
+  }
+
+  // AniList мог не вернуть часть строк. Молча забыть их нельзя: элемент помечен
+  // как поставленный в очередь и сам себя больше не предложит.
+  const returned = new Set(rows.map((row) => row.id))
+  for (const id of ids) {
+    if (!returned.has(id)) requeue('MED2', id)
   }
 
   for (const row of rows) {
@@ -275,9 +364,11 @@ async function processMediaBatch(): Promise<void> {
         : { ru: NOT_FOUND }
 
       await dbSet('shikiCache', { key: `MED2_${row.id}`, data: payload, ts: Date.now() })
+      attempts.delete(`MED2_${row.id}`)
       applyTranslation('MED2', row.id, payload)
     } catch (e) {
       Logger('ERROR', `Перевод названия: сбой на id ${row.id}`, e)
+      requeue('MED2', row.id)
     }
     await sleep(250)
   }
@@ -298,10 +389,19 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
     rows = res.data?.Page?.[cfg.gqlField] ?? []
   } catch (e) {
     Logger('ERROR', `Перевод имён (${kind}): сбой запроса к AniList`, e)
+    ids.forEach((id) => requeue(kind, id))
     return
   }
 
-  for (const row of rows) {
+  const returned = new Set(rows.map((row) => row.id))
+  for (const id of ids) {
+    if (!returned.has(id)) requeue(kind, id)
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    if (!row) continue
+
     try {
       let person: {
         russian: string | null
@@ -330,10 +430,15 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
         )
 
         if (res.status === 429) {
-          // Возвращаем id в очередь и выходим: дожмём позже, ничего не потеряв.
+          // Возвращаем в очередь текущую строку И ВЕСЬ ОСТАТОК пачки: они уже
+          // вынуты из pending, и без этого возврата теряются безвозвратно.
           pauseShikimori(6000)
-          pending[kind].add(row.id)
-          Logger('QUEUE', `Перевод имён (${kind}): лимит Shikimori, пауза 6с`)
+          const rest = rows.slice(i)
+          for (const pendingRow of rest) returnToQueue(kind, pendingRow.id)
+          Logger(
+            'QUEUE',
+            `Перевод имён (${kind}): лимит Shikimori, пауза 6с, возвращено в очередь ${rest.length}`,
+          )
           return
         }
 
@@ -358,9 +463,11 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
           : { ru: NOT_FOUND }
 
       await dbSet('shikiCache', { key: `${kind}_${row.id}`, data: payload, ts: Date.now() })
+      attempts.delete(`${kind}_${row.id}`)
       applyTranslation(kind, row.id, payload)
     } catch (e) {
       Logger('ERROR', `Перевод имён (${kind}): сбой на id ${row.id}`, e)
+      requeue(kind, row.id)
     }
     await sleep(300)
   }

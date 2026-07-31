@@ -4,7 +4,7 @@
 // WebviewWindowBuilder, и для окна, объявленного в конфиге, добавить его после
 // создания невозможно. Метка остаётся "main" — на неё ссылается capabilities.
 
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 // Стартовая страница. Не корень домена: на anilist.co/ стоит лендинг для гостей,
 // а авторизованного пользователя всё равно уносит на /home.
@@ -40,12 +40,33 @@ fn css_injection_script() -> String {
     )
 }
 
+/// Перезагружает окно, из которого пришёл вызов.
+///
+/// Пункт 4.3, правка по итогам первого живого запуска. Фронтенд не может перезагрузить
+/// себя сам: location.reload() в окне на внешнем URL не даёт ничего, а в JS-API Tauri
+/// метода перезагрузки у класса Webview нет вовсе. На стороне Rust такой метод есть.
+///
+/// Окно приходит параметром, а не ищется по метке "main": если на пункте 4.7 появятся
+/// дополнительные окна, команда останется верной без правок.
+///
+/// Ошибка превращается в строку: tauri::Error не сериализуема, а мост на стороне JS
+/// пишет текст отказа в журнал.
+#[tauri::command]
+fn animori_reload(window: WebviewWindow) -> Result<(), String> {
+    window.reload().map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
+        // Собственные команды под ACL не подпадают, поэтому отдельного разрешения в
+        // capabilities не требуют. Сам доступ к IPC из контекста anilist.co открывает
+        // блок remote.urls (пункт 4.4) — тот же самый, без которого не работали бы сеть
+        // и хранилище.
+        .invoke_handler(tauri::generate_handler![animori_reload])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

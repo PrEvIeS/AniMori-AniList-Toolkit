@@ -223,7 +223,7 @@ function fillBox(box: HTMLElement, themes: MalThemes): void {
 }
 
 async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<void> {
-  // Блок создаём сразу скрытым: он занимает место в DOM и не даёт повторно дљ1гать API.
+  // Блок создаём сразу скрытым: он занимает место в DOM и не даёт повторно дёргать API.
   const box = document.createElement('div')
   box.className = 'animori-themes animori-franchise am-accent-scope'
   box.style.display = 'none'

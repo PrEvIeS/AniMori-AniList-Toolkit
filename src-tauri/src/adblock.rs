@@ -8,13 +8,14 @@
 // прячет баннеры самого AniList через CSS и работает также в браузере.
 //
 // ОТКУДА СПИСОК. Из живой охоты 02.08.2026: разведчик (net-probe) собрал всю цепочку
-// от первого обращения плеера к биржам до самого ролика (cdn2.adstag0102.xyz/video/0/901.mp4).
+// от первого обращения плеера к биржам до самого ролика (adstag0102.xyz/video/0/901.mp4).
 // Ничего в списке не взято «по памяти» или из чужих списков.
 //
 // ДВА СЛОЯ ПРАВИЛ. Одних доменов мало: победитель того аукциона жил на домене
-// с номером в имени (adstag0102), а такие меняют пачками. Поэтому есть второй слой —
-// приметы в самом адресе (vast, vpaid, cookie-sync и прочее): это стандарты видеорекламы,
-// и новый домен попадётся на них без всяких правок списка.
+// с номером в имени (adstag0102), причём даже поддомен меняется от запуска к запуску
+// (r5, cdn2, v3…). Поэтому есть второй слой — приметы в самом адресе (vast, vpaid,
+// cookie-sync и прочее): это стандарты видеорекламы, и новый домен попадётся на них
+// без всяких правок списка.
 //
 // БЕЛЫЙ СПИСОК ПРОВЕРЯЕТСЯ ПЕРВЫМ и всегда побеждает. Без него приметы из второго
 // слоя однажды совпадут с адресом самого видео или нашего же API, и человек увидит
@@ -43,7 +44,8 @@ use std::sync::{Mutex, OnceLock};
 use tauri::WebviewWindow;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2WebResourceRequestedEventArgs,
-    ICoreWebView2_2, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    ICoreWebView2_2, ICoreWebView2_22, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
 use webview2_com::WebResourceRequestedEventHandler;
 use windows::core::{w, Interface, PCWSTR, PWSTR};
@@ -292,8 +294,19 @@ pub fn install(window: &WebviewWindow) {
 
 /// Подписка на событие запроса.
 ///
-/// Фильтр "*" с контекстом ALL — это все запросы окна, включая вложенные кадры.
-/// Сузить его нельзя: реклама и живёт ровно во вложенных кадрах.
+/// Фильтр "*" с контекстом ALL — это все виды ресурсов. Сузить его нельзя:
+/// реклама ходит и за скриптами, и за XHR, и за видеофайлом.
+///
+/// ГЛАВНОЕ — ВТОРОЙ ПАРАМЕТР ОБ ИСТОЧНИКАХ ЗАПРОСА. Старый вызов
+/// AddWebResourceRequestedFilter без него охватывает ТОЛЬКО главный документ:
+/// запросы из вложенных кадров событие НЕ поднимают, и сам Microsoft пометил тот вызов
+/// как устаревший именно из-за этого. Именно на этом блокировщик промахнулся в первой
+/// живой проверке 02.08.2026: реклама плеера живёт ровно во вложенном кадре, то есть
+/// в единственном месте, куда старый фильтр не смотрит.
+///
+/// Новый вызов живёт в более свежей версии интерфейса, поэтому есть отступление
+/// на старый: на древнем рантайме WebView2 лучше резать хотя бы рекламу самого сайта,
+/// чем отвалиться целиком.
 unsafe fn attach(
     controller: ICoreWebView2Controller,
     window: WebviewWindow,
@@ -301,7 +314,21 @@ unsafe fn attach(
     let core = controller.CoreWebView2()?;
     let environment = core.cast::<ICoreWebView2_2>()?.Environment()?;
 
-    core.AddWebResourceRequestedFilter(w!("*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?;
+    match core.cast::<ICoreWebView2_22>() {
+        Ok(core22) => {
+            core22.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                w!("*"),
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
+            )?;
+        }
+        Err(_) => {
+            log::warn!(
+                "Блокировщик: старый рантайм WebView2, реклама внутри плеера резаться не будет"
+            );
+            core.AddWebResourceRequestedFilter(w!("*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?;
+        }
+    }
 
     let handler = WebResourceRequestedEventHandler::create(Box::new(move |_sender, args| {
         let Some(args) = args else { return Ok(()) };

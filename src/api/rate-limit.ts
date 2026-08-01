@@ -177,3 +177,20 @@ export const anime365Limiter = createRateLimiter({
   windowMs: API_WINDOW_MS,
   maxPerWindow: API_MAX_PER_WINDOW,
 })
+
+/**
+ * Ограничитель AnimeThemes.moe. Добавлен на этапе 4: это был последний сетевой
+ * клиент, ходивший в сеть мимо учёта вообще.
+ *
+ * Отдельный бюджет, а не общий с Shikimori: это другой сервис со своим счётом
+ * по IP, и складывать их в одно окно значило бы без причины тормозить перевод
+ * из-за запросов за музыкой. Режим тот же: темп здесь всё равно низкий — один
+ * запрос на тайтл и тот кэшируется на 90 дней, так что ограничитель здесь —
+ * страховка от всплеска при быстром переборе страниц, а не постоянный тормоз.
+ */
+export const animeThemesLimiter = createRateLimiter({
+  name: 'AnimeThemes',
+  minIntervalMs: API_MIN_INTERVAL_MS,
+  windowMs: API_WINDOW_MS,
+  maxPerWindow: API_MAX_PER_WINDOW,
+})

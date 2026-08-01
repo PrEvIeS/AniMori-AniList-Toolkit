@@ -12,9 +12,10 @@
 //      и добавка +500мс сохранены.
 //
 //   2) Код вне 2xx мост исключением не считает, поэтому 429 и прочие ошибки
-//      разбираются явными ветками. 429 НИКОГДА не должен стать ошибкой для
-//      вызывающего кода: это просьба подождать, а не отказ. Очередь перевода
-//      считает отказы попытками и после трёх бросает элементы без перевода.
+//      разбираются явными ветками. 429 не должен становиться ошибкой для
+//      вызывающего кода, пока есть смысл ждать: это просьба подождать, а не отказ.
+//      Очередь перевода считает отказы попытками и после трёх бросает элементы
+//      без перевода. Оговорка «пока есть смысл ждать» — см. MAX_RATE_RETRIES ниже.
 //
 //   3) credentials: 'omit' — обязательно, и это не оптимизация, а условие работоспособности.
 //      Дефолт моста — 'include', то есть запрос со страницы anilist.co уходит на
@@ -45,6 +46,19 @@ const GRAPHQL_URL = 'https://graphql.anilist.co'
 
 /** Пауза по умолчанию, если сервер не прислал retry-after. */
 const DEFAULT_RETRY_MS = 5000
+
+/**
+ * Сколько раз подряд повторять запрос после 429.
+ *
+ * До этого повтор был безусловным и рекурсивным, без счётчика попыток. Пока сервер
+ * отвечает 429, вызов не завершается никогда: обещание висит, вызывающий код ждёт,
+ * интерфейс выглядит зависшим. В браузере это лечилось перезагрузкой вкладки,
+ * в оболочке — ничем.
+ *
+ * Три попытки согласованы с MAX_RATE_RETRIES в api/rate-limit.ts: правило поведения
+ * при лимите должно быть одинаковым у всех сетевых клиентов.
+ */
+const MAX_RATE_RETRIES = 3
 
 /** Ключ хранилища для токена. Имя сохранено из монолита ради совместимости. */
 const TOKEN_KEY = 'AL_TOKEN'
@@ -136,13 +150,16 @@ function readRetryAfter(headers: Record<string, string>): number {
 }
 
 /**
- * GraphQL-запрос к AniList с паузой после 429 и автоматическим повтором.
+ * GraphQL-запрос к AniList с паузой после 429 и ограниченным числом повторов.
+ *
  * @param useAuth Добавлять ли заголовок Authorization (см. getAlToken()).
+ * @param attempt Служебный счётчик повторов после 429. Снаружи не передаётся.
  */
 export async function anilistQuery<T = unknown>(
   query: string,
   variables: Record<string, unknown>,
   useAuth = false,
+  attempt = 0,
 ): Promise<GraphQLResponse<T>> {
   if (Date.now() < alRateLimitPause) {
     await sleep(alRateLimitPause - Date.now() + Math.floor(Math.random() * 500))
@@ -184,10 +201,21 @@ export async function anilistQuery<T = unknown>(
   if (res.status === 429) {
     const waitTime = readRetryAfter(res.headers)
     alRateLimitPause = Date.now() + waitTime + 500
-    Logger('ERROR', `AniList Rate Limit 429! Ожидание ${waitTime}ms`, res)
-    // Повтор после паузы (429)
+
+    // Пауза выставляется в любом случае, даже когда повторы исчерпаны: остальные
+    // вызовы должны увидеть её и не добивать сервер.
+    if (attempt >= MAX_RATE_RETRIES) {
+      Logger('ERROR', `AniList Rate Limit 429: повторы исчерпаны (${MAX_RATE_RETRIES})`, res)
+      throw new Error('AniList Rate Limit: повторы исчерпаны')
+    }
+
+    Logger(
+      'ERROR',
+      `AniList Rate Limit 429! Ожидание ${waitTime}ms (попытка ${attempt + 1} из ${MAX_RATE_RETRIES})`,
+      res,
+    )
     await sleep(waitTime + 500 + Math.floor(Math.random() * 500))
-    return anilistQuery<T>(query, variables, useAuth)
+    return anilistQuery<T>(query, variables, useAuth, attempt + 1)
   }
 
   if (res.status !== 200) {

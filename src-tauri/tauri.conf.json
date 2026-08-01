@@ -5,7 +5,8 @@
   "identifier": "com.foulnike.animori",
   "build": {
     "frontendDist": "../dist",
-    "beforeBuildCommand": "npm run build:tauri"
+    "beforeBuildCommand": "npm run build:tauri",
+    "beforeDevCommand": "npm run build:tauri"
   },
   "app": {
     "withGlobalTauri": false,

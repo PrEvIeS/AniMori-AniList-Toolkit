@@ -37,6 +37,46 @@ import {
 const store = new LazyStore('animori-settings.json', { autoSave: true })
 
 /**
+ * Снимок всего файла настроек в памяти.
+ *
+ * Зачем. Каждый store.get() — отдельный переход в процесс оболочки и обратно. На старте
+ * их набирается больше тридцати: двадцать четыре ключа в readSettings(), токен AniList,
+ * свои ссылки, пользовательский словарь. В браузере эти же чтения бесплатны (GM_getValue
+ * синхронный), поэтому разница между сборками ощущается именно как «в приложении
+ * запускается заметно дольше и перевод появляется рывком».
+ *
+ * Решение: один entries() вместо тридцати get(). Дальше чтения обслуживаются из памяти,
+ * а записи обновляют снимок вместе с файлом. Снимок — единственный владелец правды на
+ * время сессии: файл вне приложения никто не меняет, а все записи проходят через set()
+ * ниже.
+ */
+let snapshot: Map<string, unknown> | null = null
+
+/** Незавершённая загрузка снимка. Нужна, чтобы параллельные чтения не дёргали entries() повторно. */
+let snapshotLoading: Promise<Map<string, unknown> | null> | null = null
+
+async function loadSnapshot(): Promise<Map<string, unknown> | null> {
+  if (snapshot) return snapshot
+  if (snapshotLoading) return snapshotLoading
+
+  snapshotLoading = (async () => {
+    try {
+      const entries = await store.entries()
+      snapshot = new Map(entries)
+      return snapshot
+    } catch (e) {
+      // Молчать нельзя, но и падать незачем: ниже есть путь через store.get() по одному ключу.
+      console.error('[AniMori] Не удалось прочитать файл настроек целиком', e)
+      return null
+    } finally {
+      snapshotLoading = null
+    }
+  })()
+
+  return snapshotLoading
+}
+
+/**
  * Незавершённые записи.
  *
  * Нужны потому, что почти ни один вызывающий set() его не ждёт: запись идёт из
@@ -48,13 +88,25 @@ const store = new LazyStore('animori-settings.json', { autoSave: true })
  */
 const pendingWrites = new Set<Promise<void>>()
 
+/**
+ * Сколько раз flush() готов дождаться новой партии записей.
+ *
+ * Прежний цикл while не имел предела: пока идёт непрерывный поток set(), ожидание
+ * не заканчивается никогда. Для подвала настроек, где переключатель пишет два ключа
+ * подряд, хватает единиц проходов, а верхняя граница превращает возможное зависание
+ * кнопки перезагрузки в худшем случае в лишние миллисекунды.
+ */
+const FLUSH_MAX_ROUNDS = 5
+
 // Перегрузки повторяют MonkeyBridge: объектный литерал не умеет реализовывать перегруженный
 // метод, поэтому нужна именно function-декларация.
 async function storageGet<T>(key: string, defaultValue: T): Promise<T>
 async function storageGet<T = unknown>(key: string): Promise<T | undefined>
 async function storageGet<T>(key: string, defaultValue?: T): Promise<T | undefined> {
   const hasDefault = arguments.length >= 2
-  const value = await store.get<T>(key)
+
+  const cache = await loadSnapshot()
+  const value = cache ? (cache.get(key) as T | undefined) : await store.get<T>(key)
 
   // В отличие от GM_getValue, store.get возвращает undefined для отсутствующего ключа
   // и дефолт не принимает — подставляем его сами.
@@ -64,6 +116,10 @@ async function storageGet<T>(key: string, defaultValue?: T): Promise<T | undefin
 
 /** Собственно запись: значение в стор плюс немедленная выгрузка файла на диск. */
 async function writeValue(key: string, value: unknown): Promise<void> {
+  // Снимок правится сразу, до похода в оболочку: чтение сразу после set() обязано
+  // видеть новое значение, иначе панель настроек показала бы старое.
+  if (snapshot) snapshot.set(key, value)
+
   await store.set(key, value)
   // Явный save() вместо ожидания autoSave: контракт IStorage.set требует, чтобы
   // к моменту разрешения промиса значение было долговечным, а не только поставленным
@@ -91,10 +147,11 @@ const tauriStorage: IStorage = {
   },
 
   async flush(): Promise<void> {
-    // Цикл, а не один Promise.all: пока ждём текущую партию, могли прийти новые записи —
-    // именно так ведёт себя подвал настроек, где переключатель типа «Скрывать рекламу»
-    // пишет два ключа подряд.
-    while (pendingWrites.size > 0) {
+    // Несколько проходов, а не один Promise.all: пока ждём текущую партию, могли прийти
+    // новые записи — именно так ведёт себя подвал настроек, где переключатель типа
+    // «Скрывать рекламу» пишет два ключа подряд. Число проходов ограничено: см. FLUSH_MAX_ROUNDS.
+    for (let round = 0; round < FLUSH_MAX_ROUNDS; round++) {
+      if (pendingWrites.size === 0) return
       await Promise.all([...pendingWrites])
     }
   },

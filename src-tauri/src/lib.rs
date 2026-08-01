@@ -62,6 +62,108 @@ fn css_injection_script() -> String {
     )
 }
 
+/// Разведка к пункту 4.7: куда вообще ходит кадр плеера.
+///
+/// Зачем это нужно. Рекламный оверлей появляется внутри чужого iframe (Kodik),
+/// куда код со стороны anilist.co не имеет доступа вообще. Чтобы потом блокировать
+/// рекламу точечно, а не по догадкам, сначала надо увидеть список адресов, к которым
+/// обращается плеер.
+///
+/// Почему скрипт, а не перехват запросов в WebView2. Перехват на уровне движка
+/// требует двух тяжёлых зависимостей (webview2-com, windows) и unsafe-кода с COM.
+/// Для разовой разведки это неоправдано: перечень адресов отлично виден из самого
+/// фрейма через Resource Timing. Настоящая блокировка потом всё равно пойдёт через
+/// движок: из JS чужой кадр запрос не отменит.
+///
+/// Скрипт вешается на ВСЕ фреймы (initialization_script_for_all_frames), потому что
+/// обычный initialization_script попадает только в главный фрейм, а весь интерес
+/// как раз во вложенных. Бандл туда не идёт и идти не должен: это полтора сотни
+/// килобайт и целый Vue в каждом рекламном iframe.
+///
+/// Что собирается: только сводка по источникам (схема + хост) с одним примером
+/// адреса и счётчиком. Полный список URL собирать нельзя: видео едет сотнями
+/// сегментов в минуту и затопит любой журнал. Сводка уходит в главный фрейм
+/// через postMessage — единственный легальный канал между чужими доменами.
+///
+/// ВРЕМЕННЫЙ КОД. Сносится вместе с features/adblock/net-probe.ts сразу после того,
+/// как список рекламных адресов собран. В юзерскриптной сборке его нет вообще:
+/// там некому вешать скрипт на чужие фреймы.
+const NET_PROBE_SCRIPT: &str = r#"(function () {
+  try {
+    if (window.__animoriNetProbe) return;
+    window.__animoriNetProbe = true;
+
+    var isTop = window.top === window;
+    var seen = {};
+    var dirty = false;
+
+    // Главный фрейм отсеивает сам AniList: там сотни своих запросов, и они
+    // к охоте не относятся. Во вложенных фреймах пишем всё подряд.
+    function skip(u) {
+      if (!isTop) return false;
+      return u.hostname === 'anilist.co' || /\.anilist\.co$/.test(u.hostname);
+    }
+
+    function note(raw, kind) {
+      try {
+        var u = new URL(String(raw), location.href);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+        if (skip(u)) return;
+        var key = kind + ' ' + u.origin;
+        var rec = seen[key];
+        if (!rec) {
+          rec = seen[key] = { origin: u.origin, kind: kind, count: 0, sample: u.href };
+          dirty = true;
+        }
+        rec.count++;
+      } catch (e) {}
+    }
+
+    // Resource Timing видит все подгружаемые ресурсы кадра: скрипты, картинки,
+    // fetch, XHR, медиа. Это надёжнее подмены fetch/XMLHttpRequest: подмена
+    // ломается, если чужой код сохранил ссылку на оригинал раньше нас.
+    // buffered: true отдаёт и то, что успело загрузиться до подписки.
+    try {
+      var po = new PerformanceObserver(function (list) {
+        var items = list.getEntries();
+        for (var i = 0; i < items.length; i++) note(items[i].name, 'res');
+      });
+      po.observe({ type: 'resource', buffered: true });
+    } catch (e) {}
+
+    // Попытки открыть окно фиксируются отдельным видом: если они всё же есть,
+    // это сразу видно в отчёте, а не тонет среди обычных запросов.
+    try {
+      var openOriginal = window.open;
+      window.open = function (target) {
+        note(target || '', 'open');
+        return openOriginal.apply(window, arguments);
+      };
+    } catch (e) {}
+
+    function send() {
+      if (!dirty) return;
+      dirty = false;
+      var list = [];
+      for (var key in seen) {
+        if (Object.prototype.hasOwnProperty.call(seen, key)) list.push(seen[key]);
+      }
+      try {
+        window.top.postMessage(
+          { __animoriNetProbe: 1, frame: location.href, items: list },
+          '*'
+        );
+      } catch (e) {}
+    }
+
+    // Пачками раз в три секунды и только при появлении НОВОГО источника:
+    // иначе сама разведка стала бы тормозом во время просмотра.
+    setInterval(send, 3000);
+    window.addEventListener('load', send);
+  } catch (e) {}
+})();
+"#;
+
 /// Домен, который живёт внутри окна. Всё остальное — внешние ресурсы.
 ///
 /// Сравнение идёт по хосту целиком или по суффиксу с точкой, а не через contains:
@@ -178,6 +280,10 @@ pub fn run() {
             .center()
             .initialization_script(css_injection_script())
             .initialization_script(ANIMORI_JS)
+            // Разведка к 4.7. Ставится ПОСЛЕ бандла: в главном фрейме скрипты идут
+            // по порядку регистрации, и приёмник сводки из бандла должен быть готов раньше,
+            // чем уйдёт первое сообщение. Во вложенные фреймы идёт ТОЛЬКО этот скрипт.
+            .initialization_script_for_all_frames(NET_PROBE_SCRIPT)
             // Пункт 4.5, страховка на стороне оболочки.
             //
             // Основную работу делает перехватчик кликов в features/ui/links.ts, но полагаться

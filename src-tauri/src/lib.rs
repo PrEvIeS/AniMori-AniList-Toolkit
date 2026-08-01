@@ -80,6 +80,16 @@ fn css_injection_script() -> String {
 /// как раз во вложенных. Бандл туда не идёт и идти не должен: это полтора сотни
 /// килобайт и целый Vue в каждом рекламном iframe.
 ///
+/// ПРАВКА ПОСЛЕ ПЕРВОЙ ОХОТЫ. Первый заход собрал триста источников главной страницы
+/// (AniList торгует рекламой через полторы сотни бирж) и до кадра плеера просто
+/// не добрался: потолок выбрался за секунды. Поэтому теперь
+///
+///   1. в главном кадре разведчик не работает вовсе — там нечего ловить, рекламу
+///      самого сайта режет CSS-блокировщик;
+///   2. во вложенных кадрах он молчит, пока из приложения не придёт команда
+///      __animoriNetProbeArm. Охота начинается по Ctrl+Shift+S, и в улов попадает
+///      только то, что случилось после нажатия.
+///
 /// Что собирается: только сводка по источникам (схема + хост) с одним примером
 /// адреса и счётчиком. Полный список URL собирать нельзя: видео едет сотнями
 /// сегментов в минуту и затопит любой журнал. Сводка уходит в главный фрейм
@@ -90,25 +100,22 @@ fn css_injection_script() -> String {
 /// там некому вешать скрипт на чужие фреймы.
 const NET_PROBE_SCRIPT: &str = r#"(function () {
   try {
+    // Главный кадр слушает сводки, но сам ничего не собирает.
+    if (window.top === window) return;
     if (window.__animoriNetProbe) return;
     window.__animoriNetProbe = true;
 
-    var isTop = window.top === window;
+    var armed = false;
+    var started = false;
+    var timer = null;
     var seen = {};
     var dirty = false;
 
-    // Главный фрейм отсеивает сам AniList: там сотни своих запросов, и они
-    // к охоте не относятся. Во вложенных фреймах пишем всё подряд.
-    function skip(u) {
-      if (!isTop) return false;
-      return u.hostname === 'anilist.co' || /\.anilist\.co$/.test(u.hostname);
-    }
-
     function note(raw, kind) {
+      if (!armed) return;
       try {
         var u = new URL(String(raw), location.href);
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
-        if (skip(u)) return;
         var key = kind + ' ' + u.origin;
         var rec = seen[key];
         if (!rec) {
@@ -122,27 +129,34 @@ const NET_PROBE_SCRIPT: &str = r#"(function () {
     // Resource Timing видит все подгружаемые ресурсы кадра: скрипты, картинки,
     // fetch, XHR, медиа. Это надёжнее подмены fetch/XMLHttpRequest: подмена
     // ломается, если чужой код сохранил ссылку на оригинал раньше нас.
-    // buffered: true отдаёт и то, что успело загрузиться до подписки.
-    try {
-      var po = new PerformanceObserver(function (list) {
-        var items = list.getEntries();
-        for (var i = 0; i < items.length; i++) note(items[i].name, 'res');
-      });
-      po.observe({ type: 'resource', buffered: true });
-    } catch (e) {}
+    // buffered: true отдаёт и то, что успело загрузиться до подписки, поэтому
+    // поздний старт охоты не теряет историю кадра.
+    function start() {
+      if (started) return;
+      started = true;
+      try {
+        var po = new PerformanceObserver(function (list) {
+          var items = list.getEntries();
+          for (var i = 0; i < items.length; i++) note(items[i].name, 'res');
+        });
+        po.observe({ type: 'resource', buffered: true });
+      } catch (e) {}
 
-    // Попытки открыть окно фиксируются отдельным видом: если они всё же есть,
-    // это сразу видно в отчёте, а не тонет среди обычных запросов.
-    try {
-      var openOriginal = window.open;
-      window.open = function (target) {
-        note(target || '', 'open');
-        return openOriginal.apply(window, arguments);
-      };
-    } catch (e) {}
+      // Попытки открыть окно фиксируются отдельным видом: если они всё же есть,
+      // это сразу видно в отчёте, а не тонет среди обычных запросов.
+      try {
+        var openOriginal = window.open;
+        window.open = function (target) {
+          note(target || '', 'open');
+          return openOriginal.apply(window, arguments);
+        };
+      } catch (e) {}
+
+      if (!timer) timer = setInterval(send, 2000);
+    }
 
     function send() {
-      if (!dirty) return;
+      if (!armed || !dirty) return;
       dirty = false;
       var list = [];
       for (var key in seen) {
@@ -156,10 +170,22 @@ const NET_PROBE_SCRIPT: &str = r#"(function () {
       } catch (e) {}
     }
 
-    // Пачками раз в три секунды и только при появлении НОВОГО источника:
-    // иначе сама разведка стала бы тормозом во время просмотра.
-    setInterval(send, 3000);
-    window.addEventListener('load', send);
+    // Команда приходит сверху и повторяется каждые две секунды: кадр рекламы
+    // рождается позже начала охоты, и одиночную команду он бы не застал.
+    window.addEventListener('message', function (e) {
+      var d = e.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.__animoriNetProbeArm === 1) {
+        if (!armed) {
+          armed = true;
+          seen = {};
+          dirty = false;
+          start();
+        }
+      } else if (d.__animoriNetProbeArm === 0) {
+        armed = false;
+      }
+    });
   } catch (e) {}
 })();
 "#;

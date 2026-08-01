@@ -13,10 +13,16 @@
 //     Сигнатура осталась синхронной, чтобы не менять обработчики клика в компоненте.
 //   • свои ссылки и локальный словарь уже живут в core/custom-links и core/dictionary
 //     со своими кэшами — здесь их геттеры по-прежнему синхронные.
+//
+// Косметическая уборка (2 августа): прямых window.open здесь больше нет — внешние
+// адреса уходят через Bridge.shell.openExternal(). В браузере это та же новая вкладка,
+// в десктопной сборке — системный браузер, но теперь без участия глобального патча
+// из features/ui/links.ts и с записью в журнал при отказе.
 
 import { computed, ref } from 'vue'
 import type { WritableComputedRef } from 'vue'
 
+import { Bridge } from '@/bridge'
 import { getStoredAlToken, setAlToken } from '../../api/anilist'
 import { AM_ACCENTS, amSetAccent } from '../../core/accent'
 import { CL_COLORS, getCustomLinks, setCustomLinks } from '../../core/custom-links'
@@ -45,6 +51,19 @@ export const AL_DEV_SETTINGS = HTTPS + 'anilist.co/settings/developer'
 export const AL_PIN_REDIRECT = HTTPS + 'anilist.co/api/v2/oauth/pin'
 export const AL_AUTHORIZE = HTTPS + 'anilist.co/api/v2/oauth/authorize'
 export const CUSTOM_URL_EXAMPLE = HTTPS + 'site.com/search?q={query}'
+
+/**
+ * Единая точка открытия внешних адресов из панели настроек.
+ *
+ * Мост сам выбирает путь: в юзерскрипте — новая вкладка браузера, в десктопной
+ * сборке — системный браузер. Отказ пишется в журнал: молчаливо не открывшаяся
+ * ссылка уже однажды была дефектом без единого следа в логах.
+ */
+function openExternal(url: string): void {
+  void Bridge.shell.openExternal(url).catch((e: unknown) => {
+    Logger('ERROR', 'Не удалось открыть ссылку: ' + url, e)
+  })
+}
 
 // ==== Видимость панели и активная вкладка ====
 
@@ -134,10 +153,10 @@ export const enableThemes = settingRef('enableThemes', 'set_themes')
  * Пункт 2.10 плана: единственный тумблер блокировщика рекламы.
  *
  * Осознанно сведён в один переключатель «на всё». Пользователю не нужно знать,
- * что баннеры сайта режет DOM-модуль, а всплывающие окна плеера будет резать
- * оболочка Tauri на пункте 4.7 — это одна и та же кнопка «блокировать рекламу».
+ * что баннеры сайта режет DOM-модуль, а рекламу внутри плеера — сетевой блокировщик
+ * уровня движка в оболочке Tauri: это одна и та же кнопка «блокировать рекламу».
  * Поэтому запись идёт сразу в два ключа: set_hide_ads читает наш модуль,
- * set_block_popups прочтёт десктопный мост.
+ * set_block_popups читает десктопный мост.
  *
  * В отличие от остальных моделей, здесь есть немедленный потребитель, поэтому
  * после записи дёргаем syncAdblock(): включил — стиль и наблюдатель поднялись,
@@ -421,11 +440,11 @@ export function shareDict(): void {
     alert(
       'Словарь большой и не помещается в ссылку — он скопирован в буфер обмена. Откроется форма issue, вставьте (Ctrl+V) содержимое в тело.',
     )
-    window.open(short, '_blank', 'noopener')
+    openExternal(short)
     return
   }
 
-  window.open(url, '_blank', 'noopener')
+  openExternal(url)
 }
 
 // ==== Авторизация AniList ====

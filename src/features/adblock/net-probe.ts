@@ -5,32 +5,49 @@
 //
 // Зачем. Оверлейная реклама появляется внутри чужого iframe, в который наш код не
 // имеет права заглянуть. Чтобы блокировать точечно (а не резать наугад и ломать плеер),
-// нужен список реальных адресов. Скрипт-разведчик из оболочки стоит во всех фреймах
-// и шлёт сюда сводку; этот модуль её копит, показывает в логгере и отдаёт текстом
-// в буфер обмена по Ctrl+Shift+A.
+// нужен список реальных адресов. Скрипт-разведчик из оболочки стоит во всех вложенных
+// кадрах и шлёт сюда сводку; этот модуль её копит, показывает в логгере и отдаёт
+// текстом в буфер обмена.
 //
-// Почему postMessage, а не вызов команды Tauri из самого кадра: разрешения в
-// capabilities/default.json выданы только контексту anilist.co. Чужой фрейм к IPC не допущен
-// и допущен быть не должен — это была бы дыра в безопасности ради отладки.
+// ПРАВКА ПОСЛЕ ПЕРВОЙ ОХОТЫ. Первый заход утонул в мусоре: сам AniList тянет рекламу
+// через полторы сотни бирж, потолок в 300 источников выбрался за секунды на главной
+// странице, и для кадра плеера места уже не осталось. Отсюда два изменения:
 //
-// В браузерной сборке модуль тоже собирается, но молчит: сообщения слать некому,
-// вешать скрипты на чужие фреймы юзерскрипт не может. Цена — один слушатель message.
+//   1. Разведчик молчит, пока охота не начата вручную (Ctrl+Shift+S). Начало охоты
+//      обнуляет прошлый улов, поэтому в отчёт попадает только то, что случилось
+//      между «старт» и «стоп».
+//   2. Главный кадр не собирается вообще — ни здесь, ни в скрипте оболочки. Рекламу
+//      самого сайта режет CSS-блокировщик, и в этом отчёте она только мешает.
 
 import { Bridge } from '@/bridge'
 import { Logger } from '../../utils/logger'
 
-/** Ключ сообщения. Сознательно не пересекается с kodik_player_api из media/player.ts. */
+/** Ключ сводки. Сознательно не пересекается с kodik_player_api из media/player.ts. */
 const PROBE_KEY = '__animoriNetProbe'
 
-/**
- * Потолок собираемых источников. Реально их десятки; потолок нужен только на
- * случай сетки, которая генерит поддомен на каждый запрос — иначе за час просмотра
- * отчёт раздулся бы до нечитаемого размера.
- */
-const MAX_ENTRIES = 300
+/** Ключ команды «начать/прекратить сбор», уходит вниз по кадрам. */
+const ARM_KEY = '__animoriNetProbeArm'
 
-/** Горячая клавиша выгрузки отчёта в буфер обмена. */
-const HOTKEY_CODE = 'KeyA'
+/** Потолок на случай сетки, которая генерит новый поддомен на каждый запрос. */
+const MAX_ENTRIES = 600
+
+/** Ctrl+Shift+S — начать или закончить охоту. */
+const HOTKEY_HUNT = 'KeyS'
+
+/** Ctrl+Shift+A — выгрузить отчёт в буфер обмена. */
+const HOTKEY_REPORT = 'KeyA'
+
+/**
+ * Как часто повторяется команда «собирай».
+ *
+ * Повтор обязателен: кадр рекламы рождается уже после начала охоты, а команда,
+ * отправленная до его появления, до него не долетит. Раз в две секунды достаточно,
+ * чтобы поймать кадр в первые мгновения жизни, и слишком редко, чтобы это чувствовалось.
+ */
+const ARM_INTERVAL_MS = 2000
+
+/** Ограничитель обхода дерева кадров: реклама вкладывается вглубь, но не бесконечно. */
+const MAX_FRAME_DEPTH = 6
 
 interface ProbeItem {
   origin: string
@@ -40,7 +57,7 @@ interface ProbeItem {
 }
 
 interface ProbeEntry extends ProbeItem {
-  /** Адрес фрейма, из которого ушёл запрос. Главный кадр или кадр плеера — разница критичная. */
+  /** Адрес кадра, из которого ушёл запрос. */
   frame: string
   /** Когда источник увидели впервые — помогает сопоставить список с моментом показа рекламы. */
   firstSeen: string
@@ -48,8 +65,10 @@ interface ProbeEntry extends ProbeItem {
 
 const entries = new Map<string, ProbeEntry>()
 let installed = false
+let hunting = false
+let armTimer: ReturnType<typeof setInterval> | null = null
 
-/** Адрес фрейма без параметров: в них ездят токены и одноразовые ключи. */
+/** Адрес кадра без параметров: в них ездят токены и одноразовые ключи. */
 function shortFrame(raw: string): string {
   try {
     const u = new URL(raw)
@@ -61,6 +80,41 @@ function shortFrame(raw: string): string {
 
 function isProbeMessage(data: unknown): data is { frame?: unknown; items?: unknown } {
   return typeof data === 'object' && data !== null && PROBE_KEY in (data as object)
+}
+
+/**
+ * Рассылает команду всем вложенным кадрам, включая вложенные во вложенные.
+ *
+ * Обойти дерево можно даже через границу доменов: длина списка кадров и сами кадры
+ * доступны всегда, недоступно только их содержимое. Само сообщение — единственный
+ * легальный способ достучаться до чужого кадра.
+ */
+function broadcast(win: Window, value: number, depth: number): void {
+  if (depth > MAX_FRAME_DEPTH) return
+
+  let count = 0
+  try {
+    count = win.length
+  } catch {
+    return
+  }
+
+  for (let i = 0; i < count; i++) {
+    let child: Window | null = null
+    try {
+      child = win[i] as Window
+    } catch {
+      continue
+    }
+    if (!child) continue
+
+    try {
+      child.postMessage({ [ARM_KEY]: value }, '*')
+    } catch {
+      /* кадр мог исчезнуть между обходом и отправкой */
+    }
+    broadcast(child, value, depth + 1)
+  }
 }
 
 function takeItem(frame: string, raw: unknown): void {
@@ -89,9 +143,13 @@ function takeItem(frame: string, raw: unknown): void {
     firstSeen: new Date().toLocaleTimeString('ru-RU', { hour12: false }),
   })
 
-  // Пишем только первое появление источника. Писать каждый запрос нельзя: видео
-  // едет сотнями сегментов в минуту и вытеснит из журнала всё остальное.
-  Logger('NET', `Разведка: новый источник ${item.origin}`, {
+  // Тип записи обычный INFO, а не собственный: логгер умеет фильтровать только
+  // известные ему типы, и записи с выдуманным типом было невозможно отобрать
+  // в модалке среди сотен строк.
+  //
+  // Пишем только первое появление источника: видео едет сотнями сегментов в минуту
+  // и вытеснило бы из журнала всё остальное.
+  Logger('INFO', `Разведка: новый источник ${item.origin}`, {
     кадр: frame,
     вид: kind === 'open' ? 'попытка открыть окно' : 'запрос',
     пример: item.sample.slice(0, 300),
@@ -99,6 +157,7 @@ function takeItem(frame: string, raw: unknown): void {
 }
 
 function onMessage(event: MessageEvent): void {
+  if (!hunting) return
   if (!isProbeMessage(event.data)) return
 
   const data = event.data
@@ -108,12 +167,43 @@ function onMessage(event: MessageEvent): void {
   for (const item of data.items) takeItem(frame, item)
 }
 
+/** Начало охоты: чистый лист и команда всем кадрам собирать. */
+export function startNetProbeHunt(): void {
+  entries.clear()
+  hunting = true
+
+  broadcast(window, 1, 0)
+  if (!armTimer) armTimer = setInterval(() => broadcast(window, 1, 0), ARM_INTERVAL_MS)
+
+  Logger('INFO', 'Разведка: охота начата, прошлый улов очищен (Ctrl+Shift+S — стоп)')
+}
+
+/** Конец охоты: кадры перестают собирать, улов остаётся до следующего старта. */
+export function stopNetProbeHunt(): void {
+  hunting = false
+
+  if (armTimer) {
+    clearInterval(armTimer)
+    armTimer = null
+  }
+  broadcast(window, 0, 0)
+
+  Logger('INFO', `Разведка: охота закончена, источников поймано ${entries.size}`)
+}
+
+/** Идёт ли сбор прямо сейчас. */
+export function isNetProbeHunting(): boolean {
+  return hunting
+}
+
 /**
  * Готовый к отправке текст отчёта. Группировка по кадрам: строки из кадра
- * плеера и строки с самого сайта нельзя путать: блокировать мы будем только первые.
+ * плеера и строки с самого сайта путать нельзя — блокировать будем только первые.
  */
 export function buildNetProbeReport(): string {
-  if (entries.size === 0) return 'Разведка: ни одного запроса не зафиксировано.'
+  if (entries.size === 0) {
+    return 'Разведка: улов пуст. Охота начинается по Ctrl+Shift+S, до этого сбор не идёт.'
+  }
 
   const byFrame = new Map<string, ProbeEntry[]>()
   for (const entry of entries.values()) {
@@ -124,7 +214,7 @@ export function buildNetProbeReport(): string {
 
   const lines: string[] = [
     `AniMori: разведка сетевых источников, ${new Date().toLocaleString('ru-RU')}`,
-    `Всего источников: ${entries.size}`,
+    `Всего источников: ${entries.size}${hunting ? ' (охота идёт)' : ''}`,
     '',
   ]
 
@@ -142,7 +232,7 @@ export function buildNetProbeReport(): string {
   return lines.join('\n')
 }
 
-/** Сколько источников уже поймано (для отладки и будущего UI). */
+/** Сколько источников уже поймано. */
 export function getNetProbeCount(): number {
   return entries.size
 }
@@ -158,23 +248,31 @@ export async function copyNetProbeReport(): Promise<void> {
     // откуда его можно скопировать руками.
     Logger('ERROR', 'Разведка: не удалось записать в буфер обмена', e)
   }
-  Logger('NET', 'Разведка: полный отчёт', { отчёт: report })
+  Logger('INFO', 'Разведка: полный отчёт', { отчёт: report })
 }
 
 function onKeyDown(e: KeyboardEvent): void {
   if (!e.ctrlKey || !e.shiftKey || e.altKey) return
-  if (e.code !== HOTKEY_CODE) return
-  e.preventDefault()
-  void copyNetProbeReport()
+
+  if (e.code === HOTKEY_HUNT) {
+    e.preventDefault()
+    if (hunting) stopNetProbeHunt()
+    else startNetProbeHunt()
+    return
+  }
+
+  if (e.code === HOTKEY_REPORT) {
+    e.preventDefault()
+    void copyNetProbeReport()
+  }
 }
 
 /**
- * Запуск. Ставится рано и безусловно: сообщения из кадра плеера начнут приходить
- * сразу после его открытия, а пропущенную пачку никто не повторит.
+ * Запуск. Слушатели ставятся сразу, но сбор не идёт: разведчики в кадрах молчат,
+ * пока не придёт команда. Простой стоит два слушателя и пустую Map.
  *
  * Настройкой модуль сознательно НЕ управляется: это временная разведка на одну-две
  * итерации, а не функция продукта; тумблер пришлось бы вводить и сразу убирать.
- * Стоимость простоя — два слушателя и пустая Map.
  */
 export function initNetProbe(): void {
   if (installed) return
@@ -183,13 +281,23 @@ export function initNetProbe(): void {
   window.addEventListener('message', onMessage)
   window.addEventListener('keydown', onKeyDown)
 
-  Logger('INFO', 'Разведка сетевых источников включена (Ctrl+Shift+A — отчёт в буфер обмена)')
+  Logger(
+    'INFO',
+    'Разведка сетевых источников готова: Ctrl+Shift+S — старт/стоп охоты, Ctrl+Shift+A — отчёт в буфер обмена',
+  )
 }
 
 /** Остановка — для полного разбора приложения. */
 export function destroyNetProbe(): void {
   if (!installed) return
   installed = false
+
+  if (armTimer) {
+    clearInterval(armTimer)
+    armTimer = null
+  }
+  hunting = false
+
   window.removeEventListener('message', onMessage)
   window.removeEventListener('keydown', onKeyDown)
 }

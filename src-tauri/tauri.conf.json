@@ -6,7 +6,10 @@
   "build": {
     "frontendDist": "../dist",
     "beforeBuildCommand": "npm run build:tauri",
-    "beforeDevCommand": "npm run build:tauri"
+    "beforeDevCommand": {
+      "script": "npm run build:tauri",
+      "wait": true
+    }
   },
   "app": {
     "withGlobalTauri": false,

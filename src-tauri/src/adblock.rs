@@ -48,7 +48,6 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use webview2_com::WebResourceRequestedEventHandler;
 use windows::core::{w, Interface, PCWSTR, PWSTR};
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::WinRT::EventRegistrationToken;
 
 /// Служебный хост, через который страница включает и выключает блокировщик.
 const CONTROL_HOST: &str = "adblock.animori.invalid";
@@ -313,7 +312,10 @@ unsafe fn attach(
         Ok(())
     }));
 
-    let mut token = EventRegistrationToken::default();
+    // Тип токена подписки берётся из самой функции add_WebResourceRequested.
+    // Писать его имя руками нельзя: в разных версиях привязок WebView2 он лежит
+    // в разных местах, и сборка ломается на ровном месте при обновлении зависимостей.
+    let mut token = Default::default();
     core.add_WebResourceRequested(&handler, &mut token)?;
 
     log::info!("Блокировщик рекламы подключён к движку окна");

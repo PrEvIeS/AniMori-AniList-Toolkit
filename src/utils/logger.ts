@@ -2,12 +2,24 @@
 // и глобальные перехватчики ошибок (строки 267-393 монолита).
 //
 // UI-часть (createSingleLogEl / renderAllLogs / openLoggerModal, строки 396-665) СОЗНАТЕЛЬНО
-// НЕ перенесена: на этапе 2 она станет LoggerModal.vue. Чтобы ядро не знало о UI,
+// НЕ перенесена: на этапе 2 она стала LoggerModal.vue. Чтобы ядро не знало о UI,
 // прямой вызов appendLogEntry() заменён подпиской registerLogSink().
 //
-// РИСК №6 из AUDITION.md: LOG_LIMIT = 1000 на каждый тип (до ~6000 объектов в памяти).
-// В Tauri вкладка не закрывается месяцами -> на этапе 4 заменить на ring-buffer 300-500
-// записей + потоковую запись в .log через plugin-fs.
+// РИСК №6 из AUDITION.md закрыт здесь, на этапе 4.
+//
+//   Было: LOG_LIMIT = 1000 на КАЖДЫЙ из шести типов, то есть до ~6000 объектов
+//   со стеками в памяти. В браузере это сходило с рук: любой переход между страницами
+//   перезапускает скрипт и обнуляет массив. В оболочке окно не закрывается сутками,
+//   и верхняя граница из теоретической становится достижимой.
+//
+//   Стало: один кольцевой буфер на LOG_CAPACITY записей суммарно. Размер согласован
+//   с буфером интерфейса (MAX_UI_LOGS в features/ui/logger-state.ts): держать в ядре
+//   больше, чем способна показать модалка, незачем.
+//
+//   Вытеснение не слепое. Записи типа ERROR переживают вытеснение, пока в буфере есть
+//   хоть что-то другое: диагностическая ценность у них несопоставима, а теряются они
+//   первыми именно тогда, когда нужнее всего — при обвале, который сам же и заливает
+//   журнал сотнями записей API и QUEUE.
 //
 // Пункт 3.5: настройки читаются асинхронно, поэтому на верхнем уровне модуля
 // settings.enableLogger больше не спрашивается: импорты выполняются до bootstrap(),
@@ -23,9 +35,8 @@
 //      событий, тем сильнее тормозит. Теперь запись идёт не чаще раза в FLUSH_DELAY_MS,
 //      плюс принудительно перед уходом со страницы, чтобы ничего не потерять.
 //
-//   2. Обрезка по LOG_LIMIT считается по счётчикам типов, а не обходом всего массива
-//      на каждую запись. Поиск старейшей записи типа теперь случается только в момент
-//      реального переполнения.
+//   2. Обрезка больше не обходит массив на каждую запись: кольцевой буфер вытесняет
+//      с головы за одно действие, и счётчики типов стали не нужны.
 
 import { settings } from '@/core/settings'
 
@@ -42,7 +53,16 @@ export interface LogEntry {
   stack: string
 }
 
-export const LOG_LIMIT = 1000
+/** Сколько записей всего живёт в памяти. Совпадает с MAX_UI_LOGS в logger-state.ts. */
+export const LOG_CAPACITY = 500
+
+/**
+ * Прежнее имя лимита. Оставлено ради внешних импортов и читается теперь как
+ * «вместимость буфера», а не «лимит на тип».
+ *
+ * @deprecated используйте LOG_CAPACITY
+ */
+export const LOG_LIMIT = LOG_CAPACITY
 
 /** Сколько последних записей переживает переход между страницами (квота sessionStorage). */
 const SESSION_KEEP = 200
@@ -52,17 +72,22 @@ const FLUSH_DELAY_MS = 1000
 
 export let scriptLogs: LogEntry[] = []
 
-/** Сколько записей каждого типа лежит в scriptLogs прямо сейчас. */
-const typeCounts = new Map<string, number>()
-
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushHooksInstalled = false
 
-/** Пересчитывает счётчики типов по всему массиву. Нужен после восстановления из сессии. */
-function recountTypes(): void {
-  typeCounts.clear()
-  for (const entry of scriptLogs) {
-    typeCounts.set(entry.type, (typeCounts.get(entry.type) ?? 0) + 1)
+/**
+ * Освобождает место под новую запись, если буфер полон.
+ *
+ * Сначала ищем самую старую запись НЕ типа ERROR — их и вытесняем. Поиск идёт только
+ * в момент реального переполнения и в подавляющем большинстве случаев заканчивается
+ * на первом же элементе: поток журнала — это API, DB и QUEUE, а ошибки в нём редки.
+ * Если буфер целиком состоит из ошибок, вытесняется самая старая из них: расти дальше
+ * буфер не имеет права ни при каких условиях, иначе весь смысл ограничения теряется.
+ */
+function makeRoom(): void {
+  while (scriptLogs.length >= LOG_CAPACITY) {
+    const victim = scriptLogs.findIndex((x) => x.type !== 'ERROR')
+    scriptLogs.splice(victim >= 0 ? victim : 0, 1)
   }
 }
 
@@ -106,12 +131,18 @@ function scheduleSessionFlush(): void {
  * точно так же, как работал верхнеуровневый блок до перехода на асинхронное хранилище.
  * sessionStorage через мост НЕ идёт: это память вкладки, а не настройки приложения,
  * и в WebView Tauri она работает штатно.
+ *
+ * Восстановленный хвост обрезается по вместимости: SESSION_KEEP меньше LOG_CAPACITY,
+ * но полагаться на это соотношение нельзя — в хранилище может лежать запись,
+ * сделанная прежней версией скрипта с другими лимитами.
  */
 function restoreSessionLogs(): void {
   try {
     const savedLogs = sessionStorage.getItem('animori_logs')
-    if (savedLogs) scriptLogs = JSON.parse(savedLogs) as LogEntry[]
-    recountTypes()
+    if (savedLogs) {
+      const parsed = JSON.parse(savedLogs) as LogEntry[]
+      scriptLogs = parsed.slice(-LOG_CAPACITY)
+    }
   } catch (e) {
     // Logger может быть не готов — прямой console.warn.
     console.warn('[AniMori] Не удалось восстановить логи сессии', e)
@@ -150,18 +181,9 @@ export function Logger(type: LogType | string, message: string, details: unknown
     details: parsedDetails,
     stack,
   }
-  scriptLogs.push(entry)
 
-  // Обрезка по типу: обход массива только когда лимит действительно превышен.
-  const count = (typeCounts.get(type) ?? 0) + 1
-  typeCounts.set(type, count)
-  if (count > LOG_LIMIT) {
-    const oldest = scriptLogs.findIndex((x) => x.type === type)
-    if (oldest >= 0) {
-      scriptLogs.splice(oldest, 1)
-      typeCounts.set(type, count - 1)
-    }
-  }
+  makeRoom()
+  scriptLogs.push(entry)
 
   scheduleSessionFlush()
 

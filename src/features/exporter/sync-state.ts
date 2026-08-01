@@ -23,6 +23,13 @@
 //      запись оставила бы сканеру старое значение до конца сессии.
 //
 //   2. Режим теперь всегда 'import' и больше не зависит от домена.
+//
+// Этап 4: отказ токена разбирается отдельной веткой. anilistQuery() на любой код
+// вне 200 бросает `Error <код>`, и общий catch показывал «Ошибка: Error 401» — текст,
+// по которому невозможно догадаться, что просто протух токен. Токены AniList живут
+// год, то есть встреча с этим сообщением гарантирована каждому, кто пользуется
+// переносом достаточно долго. Заодно убран non-null на res.data!.Viewer: ответ без data
+// давал TypeError вместо внятного сообщения.
 
 import { computed, ref } from 'vue'
 import { Logger } from '../../utils/logger'
@@ -121,6 +128,30 @@ export function generateAuthUrl(): void {
 }
 
 /**
+ * Отказался ли AniList принимать токен.
+ *
+ * anilistQuery() бросает обычный Error с текстом `Error <код>` либо с текстом
+ * GraphQL-ошибки, отдельного типа там нет. Заводить его ради одной ветки здесь значило бы
+ * трогать клиент, которым пользуется весь проект, ради одного сценария, поэтому
+ * распознаём по тексту. AniList отвечает 401 на протухший или чужой токен и 400 с
+ * GraphQL-ошибкой Invalid token — на синтаксически испорченный.
+ */
+function isAuthFailure(e: unknown): boolean {
+  const message = e instanceof Error ? e.message : String(e)
+  return (
+    message.includes('Error 401') ||
+    message.includes('Error 403') ||
+    message.toLowerCase().includes('invalid token')
+  )
+}
+
+/** Текст для пользователя при отказе токена. */
+const TOKEN_REJECTED_MESSAGE =
+  'AniList отклонил токен: он неверный либо истёк. Токены действуют год, после чего ' +
+  'его нужно выпустить заново: откройте окно переноса, создайте ссылку по Client ID ' +
+  'и вставьте полученный токен в поле.'
+
+/**
  * Перенос Shikimori → AniList. Порядок шагов, проверки, тексты alert и confirm
  * сохранены из монолита без изменений.
  */
@@ -154,12 +185,30 @@ export async function runSync(): Promise<void> {
   try {
     resetSyncFailures()
     onProgress('Соединение с AniList...')
-    const res = await anilistQuery<{ Viewer: AniListUser }>(
-      'query{Viewer{id name mediaListOptions{scoreFormat}}}',
-      {},
-      true,
-    )
-    const alUser = res.data!.Viewer
+
+    // Первый авторизованный запрос — он же проверка токена. Разбираем его отказ
+    // отдельно от остального переноса: дальше идти всё равно некуда, а причина
+    // чинится ровно одним действием пользователя.
+    let alUser: AniListUser
+    try {
+      const res = await anilistQuery<{ Viewer: AniListUser }>(
+        'query{Viewer{id name mediaListOptions{scoreFormat}}}',
+        {},
+        true,
+      )
+      const viewer = res.data?.Viewer
+      if (!viewer) {
+        // Ответ 200 без Viewer — тоже отказ в авторизации: анониму AniList отдаёт null.
+        throw new Error(TOKEN_REJECTED_MESSAGE)
+      }
+      alUser = viewer
+    } catch (e) {
+      if (isAuthFailure(e)) {
+        Logger('ERROR', 'Перенос: AniList отклонил токен', e)
+        throw new Error(TOKEN_REJECTED_MESSAGE)
+      }
+      throw e
+    }
 
     onProgress('Поиск профиля Shiki...')
     const shikiId = await fetchShikiUserId(user)

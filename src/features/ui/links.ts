@@ -21,6 +21,21 @@
 import { Bridge } from '@/bridge'
 import { Logger } from '@/utils/logger'
 
+/**
+ * Пометка «клик по этому элементу — не переход по ссылке».
+ *
+ * Ставится на собственные элементы управления, которые лежат ВНУТРИ ссылки:
+ * сейчас это кнопка копирования трека в блоке музыкальных тем, но случай общий —
+ * любая иконка-действие внутри карточки-ссылки попадает в ту же ловушку.
+ *
+ * Зачем это нужно. Наш обработчик висит на документе в фазе перехвата, а обработчик
+ * такой кнопки — на ней самой, то есть в фазе всплытия. Очередь до него доходит
+ * ПОСЛЕ нас, поэтому ни preventDefault, ни stopPropagation оттуда нас уже не
+ * останавливают: к тому моменту ссылка отработана. Для пользователя это выглядит
+ * как два действия на один клик — трек копируется и одновременно открывается браузер.
+ */
+const NO_NAV_ATTR = 'data-am-no-nav'
+
 /** Хосты, которые живут внутри окна. Совпадает с is_internal_host в lib.rs и с remote.urls в capability. */
 function isInternalHost(host: string): boolean {
   return host === 'anilist.co' || host.endsWith('.anilist.co')
@@ -70,6 +85,10 @@ function onClick(e: MouseEvent): void {
 
   const target = e.target
   if (!(target instanceof Element)) return
+
+  // Проверка идёт ДО разбора ссылки: спрашивать её позже бессмысленно, потому что
+  // решение о переходе принимается здесь и сейчас. См. комментарий к NO_NAV_ATTR.
+  if (target.closest(`[${NO_NAV_ATTR}]`)) return
 
   const anchor = target.closest('a[href]')
   if (!(anchor instanceof HTMLAnchorElement)) return

@@ -11,6 +11,7 @@ import { loadUserDict, rebuildDictionary, setRemoteDict } from './core/dictionar
 import { initLifecycle, registerRouteTask, registerShutdownTask } from './core/lifecycle'
 import { loadSettings, settings } from './core/settings'
 import { destroyAdblock, initAdblock } from './features/adblock'
+import { destroyNetProbe, initNetProbe } from './features/adblock/net-probe'
 import { initExporter } from './features/exporter'
 import { initMedia, refreshMediaPage, registerMediaWidget } from './features/media'
 import { extLinksWidget } from './features/media/extlinks'
@@ -68,6 +69,8 @@ function wireLifecycle(): void {
   // живёт дольше страницы.
   registerShutdownTask('vue:all', unmountAll)
   registerShutdownTask('adblock', destroyAdblock)
+  // Временная разведка к 4.7 — снимается вместе со всем остальным.
+  registerShutdownTask('net-probe', destroyNetProbe)
 
   initLifecycle()
 }
@@ -132,6 +135,12 @@ async function bootstrap(): Promise<void> {
   // если сносить его вместе с остальным, баннеры вернутся на первой же смене страницы.
   // destroyAdblock() вызывается только при полном разборе и при выключении тумблера.
   initAdblock()
+
+  // Временная разведка к пункту 4.7: приёмник сводки о том, куда ходят вложенные
+  // фреймы (прежде всего кадр плеера). Ставится сразу за адблоком и до любого UI:
+  // первое сообщение из чужого кадра может прийти в любой момент, а повторять его
+  // некому. В браузерной сборке слушатель просто молчит.
+  initNetProbe()
 
   // Без этого вызова amAccentTriple остаётся null и сохранённый пресет
   // игнорируется: виджеты красятся синим AniList независимо от выбора.

@@ -160,10 +160,16 @@ function createTrack(
   }
 
   // Копирование «Название — Исполнитель». Внутри ссылки гасим переход и всплытие.
+  //
+  // Атрибут data-am-no-nav — не дублирование preventDefault, а единственное, что работает
+  // в десктопной сборке. Там перехватчик ссылок (features/ui/links.ts) висит на документе
+  // в фазе перехвата и отрабатывает РАНЬШЕ этого обработчика: клик по иконке копирования
+  // давал сразу два действия — трек копировался и тут же открывался браузер со стримингом.
   const copyBtn = document.createElement('span')
   copyBtn.className = 'am-theme-copy'
   copyBtn.title = 'Скопировать трек'
   copyBtn.setAttribute('aria-label', 'Скопировать трек')
+  copyBtn.setAttribute('data-am-no-nav', '')
   copyBtn.innerHTML = COPY_ICON
   copyBtn.addEventListener('click', (event) => {
     event.preventDefault()
@@ -217,7 +223,7 @@ function fillBox(box: HTMLElement, themes: MalThemes): void {
 }
 
 async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<void> {
-  // Блок создаём сразу скрытым: он занимает место в DOM и не даёт повторно дёргать API.
+  // Блок создаём сразу скрытым: он занимает место в DOM и не даёт повторно дљ1гать API.
   const box = document.createElement('div')
   box.className = 'animori-themes animori-franchise am-accent-scope'
   box.style.display = 'none'

@@ -68,7 +68,12 @@ export default defineConfig(({ mode }) => {
                   'Русский перевод, поиск, плеер, рейтинги Shiki и MAL, дерево хронологии, опенинги/эндинги, музыка, внешние ссылки, экспорт и сравнение списков Shikimori/AniList.',
                 author: 'foulnike',
                 license: 'MIT',
-                match: ['https://anilist.co/*', '*://shikimori.io/*'],
+                // Только anilist.co. Прежний '*://shikimori.io/*' стал мёртвым после пункта 3.7:
+                // точка входа выходит на шаге `if (IS_SHIKI) return`, то есть на Shikimori скрипт
+                // грузился, чтобы сразу ничего не сделать. Перенос списков этого не требует:
+                // после 3.6 списки Shikimori читаются через мост с любого домена, а разрешает
+                // такой запрос @connect, а не @match — он ниже и остаётся на месте.
+                match: ['https://anilist.co/*'],
                 grant: [
                   'GM_xmlhttpRequest',
                   'GM_setValue',

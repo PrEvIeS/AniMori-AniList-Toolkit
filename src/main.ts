@@ -1,7 +1,7 @@
 /** AniMori userscript entry point. */
 
 import './style.scss'
-import { fetchInterfaceDictionary } from './api/dictionary'
+import { loadInterfaceDictionary } from './api/dictionary'
 import { loadAlToken } from './api/anilist'
 import { amSetAccent } from './core/accent'
 import { IS_ANILIST, IS_SHIKI } from './core/constants'
@@ -160,12 +160,22 @@ async function bootstrap(): Promise<void> {
     settings.translateStaff
 
   if (needTranslator) {
+    // Правка пункта 4.5 (дефект «перевод периодически пропадает целиком»). Раньше здесь
+    // стоял прямой сетевой запрос за словарём, и старт ЖДАЛ его при каждом запуске окна:
+    // не отдался GitHub — интерфейс остаётся английским до следующей перезагрузки,
+    // отдался медленно — на столько же задерживаются переводчик, поиск и все виджеты.
+    // Теперь словарь берётся из IndexedDB и применяется сразу, а сеть работает только
+    // на обновление и уходит в фон. Ждём её лишь на самом первом запуске и после
+    // ручной очистки кэша.
+    //
+    // Колбэк может быть вызван дважды — кэшем и затем фоновым обновлением. Это штатно:
+    // setRemoteDict() пересобирает итоговый словарь и сам просит переводчик пройти
+    // по странице заново.
     Logger('API', 'Загрузка словаря интерфейса...')
-    const remoteDict = await fetchInterfaceDictionary()
-    // setRemoteDict сам пересобирает итоговый словарь; при сбое загрузки
-    // пересобираем вручную, чтобы правки пользователя всё равно применились.
-    if (remoteDict) setRemoteDict(remoteDict)
-    else rebuildDictionary()
+    const applied = await loadInterfaceDictionary((dict) => setRemoteDict(dict))
+    // Словаря нет ни в кэше, ни в сети: пересобираем вручную, чтобы правки
+    // пользователя всё равно применились.
+    if (!applied) rebuildDictionary()
   } else {
     rebuildDictionary()
   }

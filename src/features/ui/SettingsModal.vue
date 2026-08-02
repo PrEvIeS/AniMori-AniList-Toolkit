@@ -21,6 +21,11 @@
   Логика деления: во «Модулях» живёт то, что добавляет блоки на страницу тайтла (плеер, рейтинги,
   франшиза, темы), а адблок ничего не добавляет и работает на всём сайте — ему место рядом с логгером.
 
+  Правка 2 августа: тумблер адблока показывается только в десктопной сборке
+  (v-if="isAdblockAvailable"). В юзерскрипте блокировщика больше нет, и вместо строки стоит
+  подсказка про расширение браузера: просто убрать строку было бы хуже — блокировку рекламы
+  всё равно ищут в настройках, а пустое место ответа не даёт.
+
   Пункт 3.7.2: там же, во «Прочем», появилась карточка «Панель действий» с видимостью кнопок
   переноса и сравнения. Отдельная карточка, а не строки в общей: логгер и адблок включают
   и выключают сами функции, а здесь речь только о том, что показано в пилюле: сами модули
@@ -500,12 +505,20 @@
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
               </div>
-              <div class="amk-row">
+              <div class="amk-row" v-if="isAdblockAvailable">
                 <span class="amk-row-label"><b>Блокировщик рекламы</b></span>
                 <label class="amk-switch">
                   <input type="checkbox" id="set_hide_ads" v-model="hideAds" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
+              </div>
+              <div class="amk-row" v-else>
+                <span class="amk-row-label"
+                  ><b>Блокировщик рекламы</b
+                  ><span class="amk-row-hint"
+                    >в браузере с рекламой лучше справится расширение — например, uBlock Origin</span
+                  ></span
+                >
               </div>
             </div>
 
@@ -676,6 +689,7 @@ import {
   generateAuthLink,
   hideAds,
   importDictFromFile,
+  isAdblockAvailable,
   isFallbackOptionDisabled,
   isSettingsOpen,
   loadAuthState,

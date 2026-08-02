@@ -229,9 +229,49 @@ export function getPendingQueueSizes(): Record<QueueKind, number> {
  * счётчик по-прежнему работает и не даёт крутить цикл на упавшей сети.
  */
 export function resetTranslatorRetries(): void {
+  const dropped = dropDetachedEntries()
+  if (dropped > 0) {
+    Logger('QUEUE', `[Process] Смена страницы: снято с очереди оторванных элементов ${dropped}`)
+  }
+
   if (attempts.size === 0) return
   Logger('QUEUE', `[Process] Смена страницы: сброшено счётчиков неудач ${attempts.size}`)
   attempts.clear()
+}
+
+/**
+ * Выбрасывает из очереди элементы, чьи узлы больше не в документе.
+ *
+ * Вторая половина дефекта A11. После ухода со списка в MED2 оставались
+ * полторы-две сотни карточек покинутой страницы. Писать перевод некуда —
+ * узлов нет, — но очередь честно ходила за каждым в anime365 по одному,
+ * по четверти секунды на тайтл, и открытая страница ждала минутами.
+ *
+ * Уже отправленные пачки это не ломает: их id вынуты из pending раньше,
+ * а результат всё равно ляжет в кэш и пригодится при возврате.
+ */
+function dropDetachedEntries(): number {
+  let dropped = 0
+
+  for (const [key, entries] of [...queue]) {
+    const alive = entries.filter((entry) => entry.el.isConnected)
+    if (alive.length === entries.length) continue
+
+    if (alive.length > 0) {
+      queue.set(key, alive)
+      continue
+    }
+
+    queue.delete(key)
+    attempts.delete(key)
+
+    const sep = key.indexOf('_')
+    const kind = key.slice(0, sep) as QueueKind
+    const id = Number(key.slice(sep + 1))
+    if (pending[kind]?.delete(id)) dropped++
+  }
+
+  return dropped
 }
 
 function totalPending(): number {
@@ -375,9 +415,15 @@ async function processTransQueue(): Promise<void> {
         return
       }
 
-      if (pending.MED2.size > 0) await processMediaBatch()
-      else if (pending.CHR2.size > 0) await processPersonBatch('CHR2')
+      // Дефект A11. Строгий приоритет MED2 морил голодом персонажей: после
+      // списка из двух сотен тайтлов очередь MED2 не пустеет минутами, и
+      // CHR2/STF3 открытой страницы не получают ход вообще.
+      // Персоны идут первыми по двум причинам: они бывают только на той
+      // странице, где стоит пользователь, и пачка у них вчетверо меньше
+      // (10 против 40), то есть задержка для тайтлов пренебрежимая.
+      if (pending.CHR2.size > 0) await processPersonBatch('CHR2')
       else if (pending.STF3.size > 0) await processPersonBatch('STF3')
+      else if (pending.MED2.size > 0) await processMediaBatch()
     }
 
     Logger('QUEUE', '[Process] Очередь пуста. Ожидание новых элементов.')

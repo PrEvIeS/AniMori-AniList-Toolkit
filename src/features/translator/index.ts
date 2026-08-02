@@ -108,6 +108,13 @@ const RETRY_DELAY_MS = 2000
 const MAX_ATTEMPTS = 3
 
 /**
+ * Порог «уже неважно» для отбора пачки. Всё, что дальше края экрана, считается
+ * фоном и уступает место видимому. Значение не критично: оно влияет только на
+ * порядок, ни один элемент из очереди не пропадает.
+ */
+const VIEWPORT_MARGIN_PX = 600
+
+/**
  * Свои виджеты: их содержимое уже на русском и собрано вручную.
  * Ссылки внутри них переводчику отдавать нельзя — он перепишет наш текст
  * и снесёт бейджи (год, тип, статус в списке).
@@ -278,6 +285,72 @@ function totalPending(): number {
   return pending.MED2.size + pending.CHR2.size + pending.STF3.size
 }
 
+/**
+ * Расстояние от элемента до видимой области, в пикселях. 0 — элемент на экране.
+ * Оторванные и скрытые узлы получают бесконечность и уходят в самый хвост.
+ *
+ * Ключ может держать несколько элементов (карточка в списке и та же ссылка
+ * в боковом блоке), поэтому берём ближайший из них.
+ */
+function entryDistance(key: string): number {
+  const viewport = window.innerHeight || document.documentElement.clientHeight
+  let best = Number.POSITIVE_INFINITY
+
+  for (const { el } of queue.get(key) ?? []) {
+    if (!el.isConnected) continue
+
+    const rect = el.getBoundingClientRect()
+    // Нулевая рамка — узел в документе, но не отрисован (скрытая вкладка,
+    // свёрнутый блок). Показать ему перевод сейчас всё равно некому.
+    if (rect.width === 0 && rect.height === 0) continue
+
+    let distance = 0
+    if (rect.bottom < 0) distance = -rect.bottom
+    else if (rect.top > viewport) distance = rect.top - viewport
+
+    if (distance < best) best = distance
+    if (best === 0) break
+  }
+
+  return best
+}
+
+/**
+ * Набирает пачку, отдавая приоритет тому, что пользователь видит прямо сейчас.
+ *
+ * Дефект A12. Отбор шёл в порядке постановки в очередь, то есть в порядке обхода
+ * DOM. При потолке ограничителя в 60 запросов в минуту длина очереди определяла
+ * всё: открыв список из двух сотен тайтлов и пролистав вниз, человек ждал, пока
+ * пройдут все карточки выше. Теперь видимое переводится первым, остальное
+ * дозаполняется фоном и оседает в кэше.
+ *
+ * Отбор снимает выбранные id с pending — вызывающему это делать больше не нужно.
+ */
+function pickBatch(kind: QueueKind, size: number): number[] {
+  const ids = [...pending[kind]]
+
+  // Очередь короче пачки — считать расстояния незачем, берём всё.
+  if (ids.length <= size) {
+    ids.forEach((id) => pending[kind].delete(id))
+    return ids
+  }
+
+  const ranked = ids
+    .map((id) => ({ id, distance: entryDistance(`${kind}_${id}`) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, size)
+
+  const onScreen = ranked.filter((item) => item.distance <= VIEWPORT_MARGIN_PX).length
+  Logger(
+    'QUEUE',
+    `[Process] ${kind}: взято ${ranked.length} из ${ids.length}, в зоне видимости ${onScreen}`,
+  )
+
+  const picked = ranked.map((item) => item.id)
+  picked.forEach((id) => pending[kind].delete(id))
+  return picked
+}
+
 // ==== Очередь ====
 
 /**
@@ -441,8 +514,7 @@ async function processTransQueue(): Promise<void> {
 
 /** Пачка тайтлов: один запрос в AniList на до 40 штук, дальше — поштучно в Shikimori. */
 async function processMediaBatch(): Promise<void> {
-  const ids = [...pending.MED2].slice(0, MEDIA_BATCH)
-  ids.forEach((id) => pending.MED2.delete(id))
+  const ids = pickBatch('MED2', MEDIA_BATCH)
 
   let rows: AniListMediaRow[] = []
   try {
@@ -489,9 +561,7 @@ async function processMediaBatch(): Promise<void> {
 /** Пачка персонажей или авторов: сначала поиск по ролям, потом по имени. */
 async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
   const cfg = PERSON_CONFIG[kind]
-  const ids = [...pending[kind]].slice(0, PERSON_BATCH)
-  ids.forEach((id) => pending[kind].delete(id))
-
+  const ids = pickBatch(kind, PERSON_BATCH)
   let rows: AniListPersonRow[] = []
   try {
     const res = await anilistQuery<{ Page?: Record<string, AniListPersonRow[] | undefined> }>(

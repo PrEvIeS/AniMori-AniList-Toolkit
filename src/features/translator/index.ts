@@ -43,15 +43,6 @@
 // цепочке резолва названий, что и Shikimori, и если он ушёл в паузу или бэкофф,
 // запускать новую пачку так же бессмысленно.
 //
-// Правка 2 августа 2026: спим до конца паузы, а не по секунде.
-//
-// Когда AniList выключил API целиком и отвечал 403, клиент не ставил паузу, и очередь
-// шла по кругу два раза в секунду: пачка падала → requeue снимал маркеры → обход
-// страницы находил те же карточки заново. Отступ теперь живёт в api/anilist.ts,
-// а здесь осталось второе полуследствие: ждать надо ровно столько, сколько просит
-// источник. С прежней секундой пятнадцатиминутная пауза дала бы девятьсот записей
-// WARN и вытеснила из журнала (LOG_LIMIT = 1000) всё остальное.
-//
 // РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
 // обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
 
@@ -491,9 +482,6 @@ async function processTransQueue(): Promise<void> {
       // позже, а не колотим в закрытую дверь. anime365 добавлен в 3.8 — он стоит
       // в том же резолве названий, что и Shikimori.
       if (isAniListRateLimited() || isShikimoriRateLimited() || isAnime365RateLimited()) {
-        // Ждём ровно столько, сколько просит AniList: при его аварии пауза
-        // измеряется минутами, и ежесекундный опрос только забивал бы журнал.
-        // Для двух других источников секунды хватает: их паузы короткие.
         const wait = Math.max(1000, anilistPauseRemaining()) + Math.floor(Math.random() * 500)
         Logger('WARN', `[Process] Активен лимит API, повтор через ${wait}ms`)
         setTimeout(() => void processTransQueue(), wait)
@@ -603,4 +591,431 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
         link: string | null
       } | null = null
 
-      // Путь 1: ч
+      // Путь 1: через роли в общих тайтлах — надёжнее всего против тёзок.
+      const byMedia = await resolveShikiPersonByMedia(row, cfg.resolveType)
+      if (byMedia?.id) {
+        const details = await fetchShiki<{ description?: string | null; url?: string | null }>(
+          `/api/${cfg.endpoint}/${byMedia.id}`,
+        )
+        person = {
+          russian: byMedia.russian ?? null,
+          description: details.data?.description ?? null,
+          link: buildPersonLink(details.domain, details.data?.url ?? null),
+        }
+      } else {
+        // Путь 2: поиск по имени со всеми вариантами порядка слов.
+        const res = await fetchShikiPersonREST(
+          cfg.endpoint,
+          row.name.full,
+          row.name.native,
+          collectTargetMalIds(row, cfg.resolveType),
+        )
+
+        if (res.status === 429) {
+          // Возвращаем в очередь текущую строку И ВЕСЬ ОСТАТОК пачки: они уже
+          // вынуты из pending, и без этого возврата теряются безвозвратно.
+          pauseShikimori(6000)
+          const rest = rows.slice(i)
+          for (const pendingRow of rest) returnToQueue(kind, pendingRow.id)
+          Logger(
+            'WARN',
+            `Перевод имён (${kind}): лимит Shikimori, пауза 6с, возвращено в очередь ${rest.length}`,
+          )
+          return
+        }
+
+        if (res.status === 200 && res.data) {
+          person = {
+            russian: res.data.russian,
+            description: res.data.description,
+            link: buildPersonLink(res.data.domain, res.data.url),
+          }
+        }
+      }
+
+      const payload: TranslationPayload =
+        person && person.russian
+          ? {
+              ru: person.russian,
+              desc:
+                person.description && person.link
+                  ? cleanShikiBB(person.description, person.link)
+                  : undefined,
+            }
+          : { ru: NOT_FOUND }
+
+      await dbSet('shikiCache', { key: `${kind}_${row.id}`, data: payload, ts: Date.now() })
+      attempts.delete(`${kind}_${row.id}`)
+      applyTranslation(kind, row.id, payload)
+    } catch (e) {
+      Logger('ERROR', `Перевод имён (${kind}): сбой на id ${row.id}`, e)
+      requeue(kind, row.id)
+    }
+    // Паузы здесь нет: темп держит общий ограничитель внутри api-клиентов.
+  }
+}
+
+/**
+ * Собирает MAL id тайтлов персоны — их требует гард тёзок в shikimori-people.
+ */
+function collectTargetMalIds(row: AniListPersonRow, type: 'characters' | 'staff'): number[] {
+  const nodes = (type === 'characters' ? row.media : row.staffMedia)?.nodes ?? []
+  const ids: number[] = []
+  for (const node of nodes) {
+    if (node.idMal) ids.push(node.idMal)
+  }
+  return ids
+}
+
+/**
+ * Собирает абсолютную ссылку на страницу персоны.
+ * В монолите здесь была ошибка склейки (тот же класс багов, что чинил коммит 1306f00):
+ * домен и фоллбэк подставлялись внутрь шаблонной строки, и ссылка ломалась.
+ */
+function buildPersonLink(domain: string | null, url: string | null): string | null {
+  if (!url) return null
+  const host = domain ?? SHIKI_DOMAINS[0] ?? 'shikimori.io'
+  return 'https://' + host + url
+}
+
+// ==== Применение к странице ====
+
+/** Есть ли у элемента свой видимый текст (прямой непустой текстовый узел). */
+function hasOwnText(el: Element): boolean {
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE && (child.nodeValue ?? '').trim().length > 0) return true
+  }
+  return false
+}
+
+/**
+ * Пишет перевод в элемент, не разрушая разметку.
+ *
+ * Правило: textContent допустим ТОЛЬКО для элемента без дочерних элементов.
+ * Иначе внутри лежит вёрстка (обложка карточки, бейджи года и типа в хронологии
+ * франшизы), и присваивание текста снесло бы её целиком — так ломались карточки
+ * избранного на профиле и строки виджета франшизы.
+ *
+ * @returns false, если писать было некуда: вызывающий сам решает, что делать.
+ */
+function writeText(el: HTMLElement, text: string): boolean {
+  if (safelySetText(el, text)) return true
+  if (el.children.length > 0) return false
+  el.textContent = text
+  return true
+}
+
+/** Подставляет готовый перевод во все элементы, ждавшие этот id. */
+function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload): void {
+  const key = `${kind}_${id}`
+  const entries = queue.get(key) ?? []
+  if (data.ru === NOT_FOUND) {
+    queue.delete(key)
+    return
+  }
+
+  for (const { el, extra } of entries) {
+    try {
+      // 1. Плавающая подсказка под курсором.
+      // Узел общий для всех карточек, поэтому пишем только если курсор всё ещё
+      // на том тайтле, для которого заказывали перевод (монолит: translatingId).
+      if (el.classList.contains('title') && el.closest('.tooltip')) {
+        if (el.dataset.translatingId !== String(id)) continue
+        el.dataset.ru = data.ru
+        writeText(el, data.ru)
+        el.dataset.translated = String(id)
+        continue
+      }
+
+      // 2. Главный заголовок страницы и заголовок вкладки браузера.
+      if (extra) {
+        writeText(el, data.ru)
+        document.title = `${data.ru} · AniList`
+        el.dataset.translated = String(id)
+        continue
+      }
+
+      // 3. Блок описания.
+      if (el.classList.contains('description')) {
+        applyDescription(el, data)
+        el.dataset.translated = String(id)
+        continue
+      }
+
+      // 4. Обычная карточка в списке или сетке.
+      // Если текста внутри нет (плитка-обложка), ограничиваемся подсказкой:
+      // родной тултип AniList покажет имя сам.
+      const nameEl = el.querySelector<HTMLElement>('.name') ?? el
+      writeText(nameEl, data.ru)
+      if (el.getAttribute('title')) el.setAttribute('title', data.ru)
+      if (el.getAttribute('aria-label')) el.setAttribute('aria-label', data.ru)
+      el.dataset.translated = String(id)
+    } catch (e) {
+      Logger('WARN', `Не удалось применить перевод для ${key}`, e)
+    }
+  }
+
+  queue.delete(key)
+}
+
+/**
+ * Вставляет русское описание, а оригинал прячет в раскрывашку.
+ * Оригинал помечается am-notr, иначе переводчик со временем перепишет его фразы
+ * и смысл кнопки «Оригинальное описание» теряется.
+ */
+function applyDescription(el: HTMLElement, data: TranslationPayload): void {
+  if (!data.desc) return
+  if (el.querySelector('.ru-desc')) return
+
+  const originalHtml = el.innerHTML
+
+  const ru = document.createElement('div')
+  ru.className = 'ru-desc'
+  ru.style.marginBottom = '20px'
+  ru.innerHTML = data.desc
+
+  const details = document.createElement('details')
+  details.classList.add(NO_TRANSLATE_CLASS)
+  const summary = document.createElement('summary')
+  summary.textContent = 'Оригинальное описание (AniList)'
+  summary.style.cssText = 'cursor:pointer;color:#3dbbee;font-weight:bold;outline:none;'
+  const original = document.createElement('div')
+  original.innerHTML = originalHtml
+  details.append(summary, original)
+
+  el.innerHTML = ''
+  el.append(ru, details)
+}
+
+/**
+ * Подсказка при наведении: надо угадать, к какой карточке она относится.
+ *
+ * Узел тултипа один на всю страницу: AniList переписывает его текст под каждую
+ * новую карточку. Поэтому ориентируемся не на маркер «уже переводили», а на то,
+ * совпадает ли видимый текст с тем, что мы туда вписали в последний раз.
+ */
+function processTooltip(tooltipNode: HTMLElement): void {
+  const titleEl = tooltipNode.querySelector<HTMLElement>('.title')
+  if (!titleEl) return
+
+  // В тултипе уже стоит наш перевод — трогать нечего.
+  const current = (titleEl.textContent ?? '').trim()
+  if (titleEl.dataset.ru && titleEl.dataset.ru === current) return
+
+  const hovered = document.querySelectorAll<HTMLElement>(':hover')
+  const target = hovered.length > 0 ? hovered[hovered.length - 1] : null
+  if (!target) return
+
+  const link = target.closest<HTMLAnchorElement>(
+    'a[href^="/anime/"], a[href^="/manga/"], a[href^="/character/"], a[href^="/staff/"]',
+  )
+  const holder =
+    link ??
+    target.closest<HTMLElement>(
+      '.media-card, .character-card, .staff-card, .relation-card, .studio-anime',
+    )
+  if (!holder) return
+
+  const href =
+    holder instanceof HTMLAnchorElement
+      ? holder.getAttribute('href')
+      : (holder
+          .querySelector<HTMLAnchorElement>(
+            'a[href^="/anime/"], a[href^="/manga/"], a[href^="/character/"], a[href^="/staff/"]',
+          )
+          ?.getAttribute('href') ?? null)
+  const parsed = href ? parseAniListHref(href) : null
+  if (!parsed) return
+
+  titleEl.dataset.translatingId = String(parsed.id)
+  void queueContent(parsed.id, parsed.kind, titleEl, false, true)
+}
+
+/** Разбирает ссылку AniList вида /anime/123/... в пару «тип очереди + id». */
+function parseAniListHref(href: string): { kind: QueueKind; id: number } | null {
+  const m = href.match(/^\/(anime|manga|character|staff)\/(\d+)/)
+  if (!m || !m[1] || !m[2]) return null
+  const id = parseInt(m[2], 10)
+  if (!id) return null
+
+  if (m[1] === 'character') return settings.translateCharacters ? { kind: 'CHR2', id } : null
+  if (m[1] === 'staff') return settings.translateStaff ? { kind: 'STF3', id } : null
+  return settings.translateTitles ? { kind: 'MED2', id } : null
+}
+
+/** Насколько ссылка похожа на обычную карточку, а не на обложку или меню. */
+function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
+  // Свой UI переводить нельзя: там уже русский текст и своя разметка.
+  if (link.closest(`.${NO_TRANSLATE_CLASS}`)) return false
+  if (link.closest(SELF_UI_SELECTOR)) return false
+
+  if (link.querySelector('img')) return false
+  if (link.classList.contains('cover')) return false
+  if (link.closest('.nav')) return false
+
+  // Плитки-обложки (избранное на профиле) текста в себе не держат: имя там
+  // показывает родной тултип AniList. Писать в такую ссылку нечего.
+  if (!hasOwnText(link) && !link.querySelector('.name')) return false
+
+  if (kind === 'MED2') {
+    if (link.classList.contains('relation-title')) return false
+    if (link.closest('.relations')) return false
+    if (link.closest('.role')) return false
+  }
+  return true
+}
+
+/**
+ * Обходит страницу и собирает всё, что надо перевести.
+ * Задержка 300 мс — чтобы при быстром скролле не бегать по DOM на каждый чих.
+ * Повторные постановки отсекает сам queueContent по маркеру dataset.queued.
+ */
+function debouncedFindContent(): void {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    if (!settings.translateTitles && !settings.translateCharacters && !settings.translateStaff) {
+      return
+    }
+
+    // Ссылки в списках и сетках.
+    const linkSelectors: Array<{ selector: string; kind: QueueKind; enabled: boolean }> = [
+      {
+        selector: 'a[href^="/anime/"], a[href^="/manga/"]',
+        kind: 'MED2',
+        enabled: settings.translateTitles,
+      },
+      { selector: 'a[href^="/character/"]', kind: 'CHR2', enabled: settings.translateCharacters },
+      { selector: 'a[href^="/staff/"]', kind: 'STF3', enabled: settings.translateStaff },
+    ]
+
+    for (const { selector, kind, enabled } of linkSelectors) {
+      if (!enabled) continue
+      document.querySelectorAll<HTMLAnchorElement>(selector).forEach((link) => {
+        if (!isTranslatableLink(link, kind)) return
+        const parsed = parseAniListHref(link.getAttribute('href') ?? '')
+        if (!parsed || parsed.kind !== kind) return
+        void queueContent(parsed.id, kind, link)
+      })
+    }
+
+    // Заголовок и описание текущей страницы.
+    const page = parseAniListHref(window.location.pathname)
+    if (!page) return
+
+    const headerSelector =
+      page.kind === 'MED2'
+        ? '.header .content h1'
+        : '.header .names h1.name, .header h1.name, .header .content h1'
+
+    const h1 = document.querySelector<HTMLElement>(headerSelector)
+    if (h1 && h1.dataset.translated !== String(page.id)) {
+      void queueContent(page.id, page.kind, h1, true)
+    }
+
+    const desc = document.querySelector<HTMLElement>('.description')
+    if (desc && !(desc.querySelector('.ru-desc') && desc.dataset.translated === String(page.id))) {
+      void queueContent(page.id, page.kind, desc)
+    }
+  }, 300)
+}
+
+// ==== Наблюдатель ====
+
+/** Ищет тултип, к которому относится изменённый узел. */
+function findTooltip(node: Node | null): HTMLElement | null {
+  const el = node instanceof HTMLElement ? node : (node?.parentElement ?? null)
+  if (!el) return null
+  if (el.classList.contains('tooltip')) return el
+  return el.closest<HTMLElement>('.tooltip')
+}
+
+/**
+ * Запускает переводчик: один раз на страницу.
+ * Вызывать только ПОСЛЕ loadSettings(), openDB() и загрузки словаря.
+ */
+export function initTranslator(): void {
+  if (isStarted) return
+  isStarted = true
+
+  let mutationQueue: MutationRecord[] = []
+  let rafId: number | null = null
+
+  const processMutations = (): void => {
+    rafId = null
+    const batch = mutationQueue
+    mutationQueue = []
+    const startTime = performance.now()
+
+    for (const mutation of batch) {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          translateNode(node)
+          if (!(node instanceof HTMLElement)) return
+
+          // AniList прячет длинные описания под кнопку — раскрываем сразу,
+          // иначе русское описание встанет в обрезанный блок.
+          if (node.classList.contains('description-length-toggle')) node.click()
+          else node.querySelector<HTMLElement>('.description-length-toggle')?.click()
+
+          if (node.classList.contains('tooltip')) processTooltip(node)
+          else {
+            const tooltip = node.querySelector<HTMLElement>('.tooltip')
+            if (tooltip) processTooltip(tooltip)
+          }
+        })
+
+        // Содержимое уже существующего тултипа заменили под новую карточку
+        // (строка 3021 монолита): переводим его заново.
+        const reused = findTooltip(mutation.target)
+        if (reused) processTooltip(reused)
+      } else if (mutation.type === 'characterData') {
+        translateNode(mutation.target)
+        // Тултип часто обновляется точечной правкой текста (строка 3016 монолита).
+        const tooltip = findTooltip(mutation.target)
+        if (tooltip) processTooltip(tooltip)
+      } else if (mutation.type === 'attributes') {
+        const name = mutation.attributeName
+        if (name && TRANSLATABLE_ATTRS.includes(name)) translateNode(mutation.target)
+      }
+    }
+
+    const spent = Math.round(performance.now() - startTime)
+    if (spent > 50) Logger('WARN', `[Performance] Обновление интерфейса заняло ${spent}ms`)
+
+    debouncedFindContent()
+
+    // Виджеты медиа-страницы восстанавливаем с задержкой, чтобы не дёргать их на каждый чих.
+    if (mutationHook) {
+      if (mutationHookTimer) clearTimeout(mutationHookTimer)
+      mutationHookTimer = setTimeout(() => mutationHook?.(), 150)
+    }
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    mutationQueue.push(...mutations)
+    if (rafId === null) rafId = requestAnimationFrame(processMutations)
+  })
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+    attributeFilter: [...TRANSLATABLE_ATTRS],
+  })
+
+  setupVueInputInterceptor()
+
+  // После редактирования словаря перевод применяется сразу, без перезагрузки страницы.
+  registerRetranslateCallback(() => {
+    try {
+      translateNode(document.body)
+    } catch (e) {
+      Logger('WARN', 'Ре-скан перевода не удался', e)
+    }
+  })
+
+  Logger('INFO', 'Переводчик интерфейса запущен')
+  translateNode(document.body)
+  debouncedFindContent()
+}

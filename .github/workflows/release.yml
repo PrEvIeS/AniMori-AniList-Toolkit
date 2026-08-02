@@ -15,6 +15,11 @@
 # которое ему дал Tauri. Переименуешь артефакт — манифест покажет на несуществующий
 # адрес, и обновление упадёт у всех сразу. Подпись считается от содержимого,
 # поэтому копия под другим именем ничему не мешает.
+#
+# ВАЖНО ПРО ОТМЕНУ. Удаление тега уже запущенный прогон не останавливает: он
+# работает со своей копией кода и на финальном шаге создаёт тег заново вместе
+# с релизом. Чтобы отменить выпуск, сначала жми Cancel во вкладке Actions,
+# и только потом удаляй тег.
 
 name: release
 
@@ -36,6 +41,36 @@ jobs:
     steps:
       - name: Исходный код
         uses: actions/checkout@v4
+
+      # Текст верхнего раздела CHANGELOG уходит и в описание релиза, и в окно
+      # обновления внутри приложения: апдейтер показывает пользователю ровно
+      # то, что лежит в поле notes манифеста, а туда попадает описание релиза.
+      # Поэтому отсылка вида "См. CHANGELOG.md" здесь бесполезна — человек
+      # видит её в диалоге вместо перечня изменений.
+      #
+      # Разбор простой: находим строки вида "## [" и берём всё между первой
+      # и второй. Заголовок раздела не нужен — номер версии и так в имени релиза.
+      - name: Описание релиза из CHANGELOG
+        id: notes
+        shell: pwsh
+        run: |
+          $lines = Get-Content CHANGELOG.md -Encoding utf8
+          $marks = 0..($lines.Count - 1) | Where-Object { $lines[$_] -match '^## \[' }
+          if ($marks.Count -eq 0) {
+            throw 'В CHANGELOG.md не найдено ни одного раздела вида "## [версия]"'
+          }
+          $from = $marks[0] + 1
+          $to = if ($marks.Count -gt 1) { $marks[1] - 1 } else { $lines.Count - 1 }
+          $body = ($lines[$from..$to] -join "`n").Trim()
+          # Потолок на случай очень большого раздела: тело релиза уходит в манифест
+          # обновлений, раздувать его нечем.
+          if ($body.Length -gt 3000) {
+            $body = $body.Substring(0, 3000).TrimEnd() + "`n`n…полный список изменений — в CHANGELOG.md"
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 -Value 'body<<ANIMORI_NOTES'
+          Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 -Value $body
+          Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 -Value 'ANIMORI_NOTES'
+          Write-Host "Взято строк описания: $($to - $from + 1)"
 
       - name: Node.js
         uses: actions/setup-node@v4
@@ -86,7 +121,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: AniMori ${{ github.ref_name }}
-          releaseBody: См. CHANGELOG.md
+          releaseBody: ${{ steps.notes.outputs.body }}
           # Черновик и предварительный релиз оба выключены осознанно:
           # адрес releases/latest/download/... видит только опубликованный
           # непредварительный релиз, и апдейтер любой другой просто не заметит.

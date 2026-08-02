@@ -188,6 +188,15 @@ const pending: Record<QueueKind, Set<number>> = {
 const attempts = new Map<string, number>()
 
 let isProcessing = false
+
+/**
+ * Заявка на повторный прогон. Дефект A7 (журнал ч.3 §6.10).
+ * Пока пачка обрабатывается, новые промахи попадают в processTransQueue,
+ * та молча выходила по isProcessing — и если работающий цикл к этому моменту
+ * уже проверил totalPending() и выходил из while, разбудить очередь было нечем.
+ * Элементы висели до следующего перехода по сайту.
+ */
+let rerunRequested = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let dispatchTimer: ReturnType<typeof setTimeout> | null = null
 let mutationHookTimer: ReturnType<typeof setTimeout> | null = null
@@ -206,6 +215,23 @@ export function registerMutationHook(hook: (() => void) | null): void {
 /** Размеры очередей для инспектора логгера (только чтение). */
 export function getPendingQueueSizes(): Record<QueueKind, number> {
   return { MED2: pending.MED2.size, CHR2: pending.CHR2.size, STF3: pending.STF3.size }
+}
+
+/**
+ * Сбрасывает счётчики неудач. Дефект A8 (журнал ч.3 §6.11).
+ *
+ * После MAX_ATTEMPTS ключ отпускался, но запись в attempts оставалась равной 3.
+ * Новый узел на странице ставился в очередь и на первом же сбое получал tries = 4,
+ * то есть отбрасывался мгновенно, без единой реальной попытки. Один неудачный
+ * момент (сеть моргнула) травил ключ на всё время жизни вкладки.
+ *
+ * Вызывать на смену роута: новая страница — новый шанс. Внутри одной страницы
+ * счётчик по-прежнему работает и не даёт крутить цикл на упавшей сети.
+ */
+export function resetTranslatorRetries(): void {
+  if (attempts.size === 0) return
+  Logger('QUEUE', `[Process] Смена страницы: сброшено счётчиков неудач ${attempts.size}`)
+  attempts.clear()
 }
 
 function totalPending(): number {
@@ -287,34 +313,53 @@ async function queueContent(
   force = false,
 ): Promise<void> {
   const key = `${kind}_${id}`
-  if (el.dataset.queued === key && !extra && !force) return
-  el.dataset.queued = key
+if (el.dataset.queued === key && !extra && !force) return
 
-  const cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
+// Дефект A6 (журнал ч.3 §6.9). Маркер dataset.queued раньше ставился ЗДЕСЬ,
+// до await dbGet. Вызывают нас как void queueContent(...), то есть отказ
+// IndexedDB никто не ловил: элемент оставался помеченным, в очередь не попадал,
+// а повторно его уже не принимали — карточка английская до перезагрузки.
+// Теперь маркер ставится только после того, как элемент реально учтён,
+// а любой сбой на пути его снимает.
+let cached: ShikiCacheRecord<TranslationPayload> | undefined | null = null
+try {
+  cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
+} catch (e) {
+  // Промах кэша не повод бросать элемент: идём в сеть как при Cache MISS.
+  Logger('WARN', `[Cache] ${key}: чтение кэша не удалось, идём в сеть`, e)
+}
+
+try {
+  const list = queue.get(key) ?? []
+  list.push({ el, extra })
+  queue.set(key, list)
 
   if (cached && Date.now() - cached.ts < CACHE_TIME) {
     const ageMin = Math.round((Date.now() - cached.ts) / 60000)
     Logger('QUEUE', `[Cache HIT] ${key} (возраст ${ageMin} мин)`)
-    const list = queue.get(key) ?? []
-    list.push({ el, extra })
-    queue.set(key, list)
+    el.dataset.queued = key
     applyTranslation(kind, id, cached.data)
     return
   }
 
   Logger('QUEUE', `[Cache MISS] ${key} ➜ Помещено в очередь перевода`)
-  const list = queue.get(key) ?? []
-  list.push({ el, extra })
-  queue.set(key, list)
   pending[kind].add(id)
-
+  el.dataset.queued = key
   scheduleDispatch()
+} catch (e) {
+  if (el.dataset.queued === key) delete el.dataset.queued
+  Logger('WARN', `[Queue] ${key}: постановка в очередь не удалась`, e)
+}
 }
 
 /** Основной цикл: пачка за пачкой, пока очередь не опустеет. */
 async function processTransQueue(): Promise<void> {
-  if (isProcessing) return
+  if (isProcessing) {
+    rerunRequested = true
+    return
+  }
   isProcessing = true
+  rerunRequested = false
 
   try {
     while (totalPending() > 0) {
@@ -336,8 +381,15 @@ async function processTransQueue(): Promise<void> {
     }
 
     Logger('QUEUE', '[Process] Очередь пуста. Ожидание новых элементов.')
-  } finally {
+    } finally {
     isProcessing = false
+    // Пока мы работали, кто-то стучался в очередь. Гоняем ещё круг через
+    // общее окно сбора, а не напрямую: рекурсии нет, лишний холостой прогон
+    // стоит один Logger-вызов.
+    if (rerunRequested) {
+      rerunRequested = false
+      scheduleDispatch()
+    }
   }
 }
 

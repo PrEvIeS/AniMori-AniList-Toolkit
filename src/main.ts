@@ -21,7 +21,7 @@ import { ratingsWidget } from './features/media/ratings'
 import { themesWidget } from './features/media/themes'
 import { initScannerUI } from './features/scanner'
 import { initSearch } from './features/search'
-import { initTranslator } from './features/translator'
+import { initTranslator, resetTranslatorRetries } from './features/translator'
 import { initActionBar } from './features/ui/actions'
 import { initLinks } from './features/ui/links'
 import { initLoggerUI } from './features/ui/logger-ui'
@@ -89,7 +89,9 @@ function whenDomReady(): Promise<void> {
  * Мы лишь не даём ему утащить остальные и оставляем след в журнале — раньше следа
  * не было никакого, и разбирать такой старт было нечем.
  */
-async function step(name: string, run: () => void | Promise<void>): Promise<void> {
+// Возврат шага нам не нужен и намеренно отбрасывается: unknown принимает и
+// синхронную функцию, и любой промис (настройки, IDBDatabase, Promise.all).
+async function step(name: string, run: () => unknown): Promise<void> {
   try {
     await run()
   } catch (e) {
@@ -124,6 +126,7 @@ function wireLifecycle(): void {
 
   // 3. Медиа-страница: загрузка данных при смене тайтла и восстановление виджетов.
   registerRouteTask('media', refreshMediaPage)
+  registerRouteTask('translator:retries', resetTranslatorRetries)
 
   // Задачи разбора выполняются в обратном порядке. В браузере не вызываются никогда:
   // вкладку закрывают вместе с документом. Готовим их под Этап 3, где WebView Tauri

@@ -36,6 +36,19 @@
 // Кэш живёт именно здесь, потому что это единственный модуль, которому токен нужен
 // для работы. Панель настроек и окно синхронизации им пользуются, но своей копии
 // не держат — иначе после смены токена в настройках запросы ушли бы со старым.
+//
+// Правка 2 августа 2026: отступ при отказе сервера.
+//
+// В день финального теста AniList выключил свой API целиком и отвечал 403 на любой
+// запрос. Пауза ставилась только на 429, поэтому всё остальное улетало в ошибку
+// без всякого торможения, и система вставала в вечный круг: пачка падала →
+// очередь снимала с элементов маркеры → обход страницы находил их заново →
+// через полсекунды уходила следующая такая же пачка. Счётчик MAX_ATTEMPTS в
+// очереди от этого не спасал: он считает попытки по ключу, а ключ после
+// «отпускания» тут же создавался заново со свежим элементом страницы.
+//
+// Поэтому тормоз живёт здесь, а не в очереди: только клиент видит все запросы к
+// AniList сразу — и от очереди перевода, и от рейтингов, и от виджета франшизы.
 
 import { Bridge, type HttpResponse } from '@/bridge'
 import { IS_ANILIST } from '../core/constants'
@@ -60,11 +73,32 @@ const DEFAULT_RETRY_MS = 5000
  */
 const MAX_RATE_RETRIES = 3
 
+/**
+ * Первая пауза после отказа сервера и потолок роста.
+ *
+ * Каждый следующий отказ подряд удваивает паузу: 30с, минута, две, четыре,
+ * восемь, дальше пятнадцать как потолок. Жёсткое значение не годится обоим
+ * случаям сразу: при минутной аварии долгая пауза зря лишает человека перевода,
+ * а при многочасовом отключении API короткая превращается в долбёжку.
+ */
+const SERVER_FAIL_PAUSE_MS = 30000
+const SERVER_FAIL_MAX_PAUSE_MS = 900000
+
+/**
+ * Порог ожидания внутри запроса. Короткую паузу проще переждать на месте,
+ * длинную — нельзя: висящее по пятнадцать минут обещание держит вызывающий код
+ * и выглядит зависанием. Такой вызов честнее отклонить сразу.
+ */
+const MAX_INLINE_WAIT_MS = 10000
+
 /** Ключ хранилища для токена. Имя сохранено из монолита ради совместимости. */
 const TOKEN_KEY = 'AL_TOKEN'
 
-/** Unix-время, до которого запросы к AniList приостановлены после 429. */
+/** Unix-время, до которого запросы к AniList приостановлены. */
 let alRateLimitPause = 0
+
+/** Сколько отказов сервера подряд. Любой успешный ответ обнуляет. */
+let serverFailStreak = 0
 
 /** Копия токена в памяти: заполняется loadAlToken() до первого запроса. */
 let alTokenCache = ''
@@ -79,6 +113,16 @@ function sleep(ms: number): Promise<void> {
  */
 export function isAniListRateLimited(): boolean {
   return Date.now() < alRateLimitPause
+}
+
+/**
+ * Сколько миллисекунд осталось до конца паузы.
+ *
+ * Очередь перевода спрашивает это, чтобы заснуть ровно до конца паузы, а не
+ * просыпаться каждую секунду ради очередной записи в журнал.
+ */
+export function anilistPauseRemaining(): number {
+  return Math.max(0, alRateLimitPause - Date.now())
 }
 
 /** Ставит паузу вручную. Существующая более долгая пауза не укорачивается. */
@@ -150,6 +194,46 @@ function readRetryAfter(headers: Record<string, string>): number {
 }
 
 /**
+ * Отказ ли это со стороны сервера, после которого надо отступить.
+ *
+ * 403 включён сознательно: именно им AniList отвечал, когда выключал API целиком.
+ * На отдельный запрос этот код означал бы «нет прав», но у нас публичные запросы
+ * без авторизации, так что разницы нет: долбиться в такой ответ бессмысленно в обоих
+ * случаях. 408 и весь пятый десяток — обычные аварии шлюза.
+ */
+function isServerFailure(status: number): boolean {
+  return status === 403 || status === 408 || status >= 500
+}
+
+/**
+ * Ставит растущую паузу после отказа сервера и возвращает её длину.
+ *
+ * Журналится только момент входа в отступ, а не каждый отказ: при лежачем API
+ * первые же секунды давали сотни одинаковых записей и вытесняли из журнала
+ * всё остальное — разбирать багрепорт с таким логом невозможно.
+ */
+function backOffAfterServerFailure(status: number): number {
+  const wasIdle = !isAniListRateLimited()
+
+  serverFailStreak++
+  const pause = Math.min(
+    SERVER_FAIL_PAUSE_MS * Math.pow(2, serverFailStreak - 1),
+    SERVER_FAIL_MAX_PAUSE_MS,
+  )
+  pauseAniList(pause)
+
+  if (wasIdle) {
+    Logger(
+      'ERROR',
+      `AniList отвечает ${status}: запросы приостановлены на ${Math.round(pause / 1000)}с ` +
+        `(отказов подряд: ${serverFailStreak})`,
+    )
+  }
+
+  return pause
+}
+
+/**
  * GraphQL-запрос к AniList с паузой после 429 и ограниченным числом повторов.
  *
  * @param useAuth Добавлять ли заголовок Authorization (см. getAlToken()).
@@ -161,8 +245,15 @@ export async function anilistQuery<T = unknown>(
   useAuth = false,
   attempt = 0,
 ): Promise<GraphQLResponse<T>> {
-  if (Date.now() < alRateLimitPause) {
-    await sleep(alRateLimitPause - Date.now() + Math.floor(Math.random() * 500))
+  const remaining = anilistPauseRemaining()
+  if (remaining > 0) {
+    // Длинную паузу не высиживаем внутри вызова — см. MAX_INLINE_WAIT_MS.
+    if (remaining > MAX_INLINE_WAIT_MS) {
+      throw new Error(
+        `AniList недоступен, повтор через ${Math.ceil(remaining / 1000)}с`,
+      )
+    }
+    await sleep(remaining + Math.floor(Math.random() * 500))
   }
 
   const headers: Record<string, string> = {
@@ -194,6 +285,9 @@ export async function anilistQuery<T = unknown>(
     })
   } catch (e) {
     // Только транспортный сбой, таймаут или отмена — бывший onerror.
+    // Сеть упала — тот же отступ, что и при отказе сервера: без него очередь
+    // перевода крутит пачки вхолостую всё время, пока нет интернета.
+    backOffAfterServerFailure(0)
     Logger('ERROR', 'AniList Network Error', e)
     throw new Error('AniList Network Error')
   }
@@ -219,8 +313,22 @@ export async function anilistQuery<T = unknown>(
   }
 
   if (res.status !== 200) {
+    // Сервер лежит или закрылся — отступаем, а не пробуем снова через полсекунды.
+    if (isServerFailure(res.status)) {
+      const pause = backOffAfterServerFailure(res.status)
+      throw new Error(
+        `AniList недоступен (${res.status}), пауза ${Math.round(pause / 1000)}с`,
+      )
+    }
+
     Logger('ERROR', `AniList API Error HTTP ${res.status}`, res.text)
     throw new Error(`Error ${res.status}`)
+  }
+
+  // Сервер ответил — серия отказов прервана, следующая авария начнёт с 30 секунд.
+  if (serverFailStreak > 0) {
+    Logger('INFO', `AniList снова отвечает (отказов подряд было: ${serverFailStreak})`)
+    serverFailStreak = 0
   }
 
   const timeTaken = Math.round(performance.now() - startTime)

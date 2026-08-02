@@ -1,14 +1,28 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/src-tauri/icons/128x128@2x.png" width="128" alt="AniMori">
+
 # AniMori: AniList Toolkit
 
 **Русификатор и набор инструментов для [AniList](https://anilist.co) — перевод интерфейса, плеер, рейтинги, дерево франшиз, экспорт и сравнение списков с Shikimori.**
 
-[![Greasy Fork](https://img.shields.io/greasyfork/v/572948?label=Greasy%20Fork)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
-[![Installs](https://img.shields.io/greasyfork/dt/572948?label=установки)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Userscript](https://img.shields.io/badge/Tampermonkey-userscript-orange)
-![Desktop](https://img.shields.io/badge/Windows-приложение-blue)
+[![Релиз](https://img.shields.io/github/v/release/foulnike/AniMori-AniList-Toolkit?style=flat-square&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
+[![Загрузки](https://img.shields.io/github/downloads/foulnike/AniMori-AniList-Toolkit/total?style=flat-square&label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases)
+[![Greasy Fork](https://img.shields.io/greasyfork/v/572948?style=flat-square&label=Greasy%20Fork&color=670000)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
+[![Установки скрипта](https://img.shields.io/greasyfork/dt/572948?style=flat-square&label=%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BA%D0%B8&color=670000)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
+[![Лицензия](https://img.shields.io/github/license/foulnike/AniMori-AniList-Toolkit?style=flat-square&label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F&color=green)](LICENSE)
+
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-CE422B?style=flat-square&logo=rust&logoColor=white)
+![Vue 3](https://img.shields.io/badge/Vue%203-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white)
+![Tauri 2](https://img.shields.io/badge/Tauri%202-FFC131?style=flat-square&logo=tauri&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)
+![Sass](https://img.shields.io/badge/Sass-CC6699?style=flat-square&logo=sass&logoColor=white)
+
+![Windows](https://img.shields.io/badge/Windows%2010%2F11-0078D4?style=flat-square&logo=windows&logoColor=white)
+![Tampermonkey](https://img.shields.io/badge/Tampermonkey-00485B?style=flat-square&logo=tampermonkey&logoColor=white)
+
+[Возможности](#возможности) · [Установка](#установка) · [Авторизация](#авторизация-для-экспорта-и-редактирования-списков) · [Сборка](#сборка-из-исходников)
 
 </div>
 

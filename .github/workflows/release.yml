@@ -1,0 +1,117 @@
+# Сборка и выкладка релиза (пункт П.1 из RM4.md).
+#
+# Запуск только по тегу вида v2.0.0. По пушу в ветку сборка не идёт: каждый
+# прогон — это полная компиляция Rust на windows-latest, а смысл она имеет
+# только для выпуска.
+#
+# Что уезжает в релиз:
+#   1. AniMori_<версия>_x64-setup.exe — установщик, на который смотрит апдейтер;
+#   2. его же .sig — подпись, без неё обновление не будет принято;
+#   3. latest.json — манифест обновлений;
+#   4. AniMori_Setup.exe — копия установщика под коротким именем для людей и README;
+#   5. animori.user.js — сборка юзерскрипта для GreasyFork.
+#
+# Почему копия, а не переименование. latest.json ссылается на файл по имени,
+# которое ему дал Tauri. Переименуешь артефакт — манифест покажет на несуществующий
+# адрес, и обновление упадёт у всех сразу. Подпись считается от содержимого,
+# поэтому копия под другим именем ничему не мешает.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Без этого токен прогона только читает, и создание релиза упадёт на 403.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Только Windows: цель сборки одна — nsis, а сетевой блокировщик опирается
+    # на COM-интерфейсы WebView2, которых больше нигде нет.
+    runs-on: windows-latest
+
+    steps:
+      - name: Исходный код
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Окружение Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Компиляция зависимостей Tauri с нуля — это минуты. Кэш привязан к Cargo.lock,
+      # который у нас закоммичен, поэтому попадание будет стабильным.
+      - name: Кэш Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Зависимости npm
+        run: npm ci
+
+      # ПОРЯДОК ЗДЕСЬ ОБЯЗАТЕЛЕН. В vite.config.ts стоит emptyOutDir: !isTauri —
+      # юзерскриптовая сборка чистит dist/, тауриная — нет. Сначала скрипт,
+      # потом приложение. Наоборот — и первая снесёт animori.tauri.js вместе
+      # с CSS, а include_str! в lib.rs упадёт на компиляции.
+      # Сборку режима tauri запускает сам tauri-action через beforeBuildCommand.
+      - name: Сборка юзерскрипта
+        run: npm run build
+
+      # Копия скрипта в отдельную папку: следующим шагом тауриная сборка пишет
+      # в тот же dist/, и держать готовый артефакт в рабочей папке сборщика незачем.
+      - name: Отложить артефакт скрипта
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item dist/animori.user.js artifacts/animori.user.js
+
+      # Собирает приложение, создаёт релиз по тегу, подписывает установщик
+      # и сам генерирует latest.json. Писать манифест вручную не надо.
+      #
+      # Ключ подписи приходит только из секретов репозитория. В исходных файлах
+      # его нет ни в каком виде и быть не может.
+      - name: Сборка приложения и публикация релиза
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: AniMori ${{ github.ref_name }}
+          releaseBody: См. CHANGELOG.md
+          # Черновик и предварительный релиз оба выключены осознанно:
+          # адрес releases/latest/download/... видит только опубликованный
+          # непредварительный релиз, и апдейтер любой другой просто не заметит.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+
+      # Короткое имя для человека. Исходный файл остаётся на месте нетронутым —
+      # именно на него ссылается latest.json.
+      - name: Копия установщика под коротким именем
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *-setup.exe |
+            Select-Object -First 1
+          if (-not $setup) {
+            throw 'Установщик NSIS не найден — сборка что-то положила не туда'
+          }
+          Copy-Item $setup.FullName artifacts/AniMori_Setup.exe
+          Write-Host "Исходный артефакт: $($setup.Name)"
+
+      # Докладывает два файла в уже созданный релиз того же тега.
+      - name: Доложить артефакты в релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            artifacts/animori.user.js
+            artifacts/AniMori_Setup.exe

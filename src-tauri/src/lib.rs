@@ -14,6 +14,10 @@ use tauri::{AppHandle, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 #[cfg(windows)]
 mod adblock;
 
+// Пункт П.2: автообновление. Платформенных ограничений нет: оба плагина есть везде,
+// где есть десктоп, поэтому модуль без cfg.
+mod updater;
+
 // Стартовая страница. Не корень домена: на anilist.co/ стоит лендинг для гостей,
 // а авторизованного пользователя всё равно уносит на /home.
 const ANILIST_URL: &str = "https://anilist.co/home";
@@ -269,6 +273,14 @@ pub fn run() {
                 .with_state_flags(window_state_flags())
                 .build(),
         )
+        // Пункт П.2: автообновление. Подробности и обоснования — в updater.rs.
+        //
+        // Та же логика, что у opener и window-state: оба плагина дёргаются только из Rust,
+        // разрешений в capabilities им не выдано. Для updater это критичнее всего:
+        // updater:default в окне на anilist.co означал бы право чужого скрипта запустить
+        // загрузку и установку исполняемого файла.
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Список команд дублируется в build.rs (AppManifest::commands) и в
         // capabilities/default.json. Так устроен ACL для окна на внешнем URL: разрешено
         // ровно то, что перечислено в capability, а регистрации здесь недостаточно. Пропуск
@@ -352,6 +364,11 @@ pub fn run() {
             // переменной в сборке никому не нужно.
             #[cfg(not(windows))]
             let _ = &main_window;
+
+            // Пункт П.2: проверка обновлений — СТРОГО последним шагом и только фоновой
+            // задачей. Сетевой запрос прямо здесь задержал бы появление окна на время ответа
+            // GitHub, а при мёртвой сети — на весь таймаут соединения.
+            updater::spawn_check(app.handle().clone());
 
             Ok(())
         })

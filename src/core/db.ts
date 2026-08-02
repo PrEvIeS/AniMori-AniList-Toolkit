@@ -12,7 +12,27 @@ import type { CacheRecord, CacheStoreName, DbStats, DbStatsError } from './types
 
 type Migration = (db: IDBDatabase) => void
 
+/**
+ * Потолок ожидания открытия базы (дефект A3, журнал ч.3 §6.6).
+ *
+ * Семь секунд — заведомо больше любого честного открытия, включая миграцию схемы
+ * на медленном диске. Всё, что дольше, — уже не медленное открытие, а зависание.
+ */
+const DB_OPEN_TIMEOUT_MS = 7000
+
 let globalDbInstance: IDBDatabase | null = null
+
+/**
+ * Промис незавершённого открытия.
+ *
+ * Дефект A3, вторая часть. Проверки `if (globalDbInstance)` недостаточно: она
+ * срабатывает только ПОСЛЕ разрешения промиса, а `dbGet`/`dbSet` зовут `openDB()`
+ * на КАЖДОЕ обращение. На холодном старте очередь переводчика выпускает десятки
+ * чтений одновременно, и без этого маркера каждое заводило бы свой `indexedDB.open`.
+ * Несколько параллельных открытий одной базы — это не только лишняя работа,
+ * но и реальный шанс получить `blocked` самому на себе при смене версии схемы.
+ */
+let openInFlight: Promise<IDBDatabase | null> | null = null
 
 /**
  * Миграции схемы. Ключ — версия, значение — мигратор от N-1 к N.
@@ -31,13 +51,97 @@ const DB_MIGRATIONS: Record<number, Migration> = {
   },
 }
 
-/** Открывает базу, прогоняя недостающие миграции. Возвращает null при сбое. */
+/**
+ * Вешает на живое соединение обработчики его собственной смерти.
+ *
+ * `onversionchange` — главная профилактика дефекта A3, а не лечение последствий.
+ * Событие `blocked` в соседней вкладке возникает именно потому, что МЫ держим
+ * соединение со старой версией и не отпускаем его. Закрывая соединение по первому
+ * требованию, мы даём другому окну спокойно мигрировать схему.
+ *
+ * `onclose` — соединение умерло не по нашей воле (браузер освободил место, сбой
+ * хранилища). Без этого обработчика в `globalDbInstance` навсегда оставался бы битый
+ * экземпляр, и все последующие транзакции падали бы до конца сессии.
+ *
+ * Сравнение `globalDbInstance === db` обязательно: к моменту события там может
+ * лежать уже ДРУГОЕ, свежее соединение, и затирать его в null было бы ошибкой.
+ */
+function attachConnectionHandlers(db: IDBDatabase): void {
+  db.onversionchange = () => {
+    Logger('WARN', 'IndexedDB: другое окно обновляет схему — закрываем соединение')
+    try {
+      db.close()
+    } catch (e) {
+      Logger('WARN', 'IndexedDB: сбой при закрытии соединения', e)
+    }
+    if (globalDbInstance === db) globalDbInstance = null
+  }
+
+  db.onclose = () => {
+    Logger('WARN', 'IndexedDB: соединение закрыто извне — следующее обращение переоткроет базу')
+    if (globalDbInstance === db) globalDbInstance = null
+  }
+}
+
+/**
+ * Открывает базу, прогоняя недостающие миграции. Возвращает null при сбое.
+ *
+ * Правка этапа A, дефект A3 (журнал ч.3 §6.6). Раньше здесь обрабатывались два
+ * исхода из трёх: `onsuccess` и `onerror`. Третий — `blocked`, когда другая вкладка
+ * держит соединение со старой версией схемы. В этом случае не срабатывал НИ ОДИН
+ * из двух обработчиков, промис не разрешался никогда, а `await openDB()` в bootstrap
+ * вис вечно. Переводчик, поиск, виджеты и роутер не стартовали вообще, и в журнале
+ * не оставалось ни строчки — ровно то «обращения к API даже не стартуют», о котором
+ * говорила жалоба на стаггер.
+ *
+ * Теперь промис разрешается ВСЕГДА и ровно один раз: либо соединением, либо null
+ * по ошибке, либо null по таймауту. Работа без кэша — это медленно, но работа;
+ * виснувший старт — это мёртвое приложение. Все потребители (`dbGet`, `dbSet`,
+ * `clearCache`, `getDbStats`, `runGarbageCollector`) уже умеют обрабатывать null.
+ */
 export async function openDB(): Promise<IDBDatabase | null> {
   if (globalDbInstance) return globalDbInstance
 
-  return new Promise((resolve) => {
+  // Уже открываем — присоединяемся к тому же ожиданию вместо второго open().
+  if (openInFlight) return openInFlight
+
+  openInFlight = new Promise<IDBDatabase | null>((resolve) => {
+    // Страж однократного завершения: исходов теперь четыре, и сработать
+    // могут два подряд (например, таймаут, а следом запоздалый onsuccess).
+    let settled = false
+    let timer: number | undefined
+
+    const finish = (db: IDBDatabase | null): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+      globalDbInstance = db
+      resolve(db)
+    }
+
     Logger('DB', 'Открытие подключения к IndexedDB...')
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
+
+    let req: IDBOpenDBRequest
+    try {
+      req = indexedDB.open(DB_NAME, DB_VERSION)
+    } catch (e) {
+      // Сам вызов бросает синхронно, например в приватном режиме или при
+      // запрете хранилища для стороннего контекста.
+      Logger('ERROR', 'IndexedDB недоступен: indexedDB.open бросил исключение', e)
+      finish(null)
+      return
+    }
+
+    // Страховка от любого исхода, который мы не предусмотрели: оставшийся
+    // `blocked`, упавший внутри браузера запрос, зависшая миграция. Старт
+    // обязан продолжиться даже там, где мы не понимаем причины.
+    timer = window.setTimeout(() => {
+      Logger(
+        'ERROR',
+        `IndexedDB не открылась за ${DB_OPEN_TIMEOUT_MS} мс — продолжаем без кэша`,
+      )
+      finish(null)
+    }, DB_OPEN_TIMEOUT_MS)
 
     req.onupgradeneeded = (e) => {
       const db = req.result
@@ -56,16 +160,52 @@ export async function openDB(): Promise<IDBDatabase | null> {
       }
     }
 
+    // Третий исход, раньше не обработанный вовсе.
+    //
+    // Здесь НЕ вызывается finish(): `blocked` не отменяет запрос, а приостанавливает
+    // его. Как только соседняя вкладка отпустит соединение (а она его отпустит:
+    // теперь там висит наш onversionchange), придёт нормальный onsuccess. Если не
+    // отпустит за таймаут — старт продолжится без кэша. Важна сама запись
+    // в журнал: без неё эта ситуация была полностью невидимой.
+    req.onblocked = () => {
+      Logger(
+        'WARN',
+        'IndexedDB: открытие заблокировано другой вкладкой со старой версией схемы. ' +
+          'Ждём освобождения; если не дождёмся — продолжим без кэша',
+      )
+    }
+
     req.onsuccess = () => {
-      globalDbInstance = req.result
-      resolve(globalDbInstance)
+      const db = req.result
+      attachConnectionHandlers(db)
+
+      if (settled) {
+        // Запоздалое открытие: промис уже разрешён в null по таймауту.
+        // Соединение всё равно годное — запоминаем его, и следующее обращение
+        // к кэшу уже сработает. Без этой ветки мы бы бросили открытое
+        // соединение висеть и блокировать уже чужие вкладки.
+        globalDbInstance = db
+        Logger('DB', 'IndexedDB открылась после таймаута — кэш снова доступен')
+        return
+      }
+
+      finish(db)
     }
 
     req.onerror = () => {
       Logger('ERROR', 'Ошибка открытия IndexedDB', req.error)
-      resolve(null)
+      finish(null)
     }
   })
+
+  const db = await openInFlight
+
+  // Маркер снимается в любом случае. При успехе дальше работает globalDbInstance,
+  // при неудаче — следующий вызов имеет право попробовать снова. Запоминать
+  // отказ навсегда нельзя: соседняя вкладка закроется и база станет доступной.
+  openInFlight = null
+
+  return db
 }
 
 /**

@@ -1,6 +1,11 @@
 /** AniMori userscript entry point. */
 
 import './style.scss'
+// Пункт 2.10, правка 2 августа: блокировщик и разведка берутся через псевдопуть,
+// а не из features/adblock напрямую. Прямой импорт оставил бы оба модуля в графе
+// юзерскриптной сборки вопреки алиасу; здесь в браузер уезжают заглушки из
+// impl.noop.ts, и весь блокировщик из бандла выпадает.
+import { destroyAdblock, destroyNetProbe, initAdblock, initNetProbe } from '@adblock-impl'
 import { loadInterfaceDictionary } from './api/dictionary'
 import { loadAlToken } from './api/anilist'
 import { amSetAccent } from './core/accent'
@@ -10,8 +15,6 @@ import { openDB, runGarbageCollector } from './core/db'
 import { loadUserDict, rebuildDictionary, setRemoteDict } from './core/dictionary'
 import { initLifecycle, registerRouteTask, registerShutdownTask } from './core/lifecycle'
 import { loadSettings, settings } from './core/settings'
-import { destroyAdblock, initAdblock } from './features/adblock'
-import { destroyNetProbe, initNetProbe } from './features/adblock/net-probe'
 import { initExporter } from './features/exporter'
 import { initMedia, refreshMediaPage, registerMediaWidget } from './features/media'
 import { extLinksWidget } from './features/media/extlinks'
@@ -132,8 +135,10 @@ function wireLifecycle(): void {
   // вкладку закрывают вместе с документом. Готовим их под Этап 3, где WebView Tauri
   // живёт дольше страницы.
   registerShutdownTask('vue:all', unmountAll)
+  // Обе задачи ниже в юзерскриптной сборке попадают на заглушки из impl.noop.ts:
+  // ни блокировщика, ни разведки там нет. Регистрация оставлена безусловной, чтобы
+  // точка входа не знала о платформе.
   registerShutdownTask('adblock', destroyAdblock)
-  // Временная разведка к 4.7 — снимается вместе со всем остальным.
   registerShutdownTask('net-probe', destroyNetProbe)
 
   initLifecycle()
@@ -205,12 +210,17 @@ async function bootstrap(): Promise<void> {
   // смены роута. Его наблюдатель висит на documentElement и обязан переживать переходы:
   // если сносить его вместе с остальным, баннеры вернутся на первой же смене страницы.
   // destroyAdblock() вызывается только при полном разборе и при выключении тумблера.
+  //
+  // Правка 2 августа: в юзерскриптной сборке здесь стоит заглушка. Рекламу в браузере
+  // режет расширение пользователя, и режет лучше нас — оно видит и кадр плеера, куда
+  // наш код заглянуть не вправе.
   await step('адблок', initAdblock)
 
-  // Временная разведка к пункту 4.7: приёмник сводки о том, куда ходят вложенные
-  // фреймы (прежде всего кадр плеера). Ставится сразу за адблоком и до любого UI:
-  // первое сообщение из чужого кадра может прийти в любой момент, а повторять его
-  // некому. В браузерной сборке слушатель просто молчит.
+  // Разведка сетевых источников (пункт 4.7): приёмник сводки о том, куда ходят вложенные
+  // фреймы, прежде всего кадр плеера. Инструмент сопровождения: им пересобирается список
+  // адресов для src-tauri/src/adblock.rs, когда рекламные сетки меняют домены. Ставится
+  // сразу за адблоком и до любого UI: первое сообщение из чужого кадра может прийти
+  // в любой момент, а повторять его некому. В юзерскриптную сборку модуль не попадает.
   await step('сетевая разведка', initNetProbe)
 
   // Без этого вызова amAccentTriple остаётся null и сохранённый пресет

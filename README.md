@@ -1,14 +1,28 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/src-tauri/icons/128x128@2x.png" width="128" alt="AniMori">
+
 # AniMori: AniList Toolkit
 
 **Русификатор и набор инструментов для [AniList](https://anilist.co) — перевод интерфейса, плеер, рейтинги, дерево франшиз, экспорт и сравнение списков с Shikimori.**
 
-[![Greasy Fork](https://img.shields.io/greasyfork/v/572948?label=Greasy%20Fork)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
-[![Installs](https://img.shields.io/greasyfork/dt/572948?label=установки)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Userscript](https://img.shields.io/badge/Tampermonkey-userscript-orange)
-![Desktop](https://img.shields.io/badge/Windows-приложение-blue)
+[![Релиз](https://img.shields.io/github/v/release/foulnike/AniMori-AniList-Toolkit?style=flat-square&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
+[![Загрузки](https://img.shields.io/github/downloads/foulnike/AniMori-AniList-Toolkit/total?style=flat-square&label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases)
+[![Greasy Fork](https://img.shields.io/greasyfork/v/572948?style=flat-square&label=Greasy%20Fork&color=670000)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
+[![Установки скрипта](https://img.shields.io/greasyfork/dt/572948?style=flat-square&label=%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BA%D0%B8&color=670000)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
+[![Лицензия](https://img.shields.io/github/license/foulnike/AniMori-AniList-Toolkit?style=flat-square&label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F&color=green)](LICENSE)
+
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-CE422B?style=flat-square&logo=rust&logoColor=white)
+![Vue 3](https://img.shields.io/badge/Vue%203-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white)
+![Tauri 2](https://img.shields.io/badge/Tauri%202-FFC131?style=flat-square&logo=tauri&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)
+![Sass](https://img.shields.io/badge/Sass-CC6699?style=flat-square&logo=sass&logoColor=white)
+
+![Windows](https://img.shields.io/badge/Windows%2010%2F11-0078D4?style=flat-square&logo=windows&logoColor=white)
+![Tampermonkey](https://img.shields.io/badge/Tampermonkey-00485B?style=flat-square&logo=tampermonkey&logoColor=white)
+
+[Возможности](#возможности) · [Установка](#установка) · [Авторизация](#авторизация-для-экспорта-и-редактирования-списков) · [Сборка](#сборка-из-исходников)
 
 </div>
 
@@ -18,7 +32,7 @@
 
 Начиная с версии **2.0.0** проект существует в двух видах, которые собираются из одной кодовой базы и делят всю логику целиком:
 
-- **Пользовательский скрипт** для Tampermonkey — как и раньше, в вашем браузере.
+- **Пользовательский скрипт** для Tampermonkey — в вашем браузере.
 - **Настольное приложение для Windows** — отдельная программа с окном AniList: ни браузер, ни менеджер скриптов не нужны.
 
 ## Что выбрать
@@ -27,13 +41,10 @@
 | :--- | :---: | :---: |
 | Все возможности тулкита | да | да |
 | Работает в вашем браузере, рядом с остальными вкладками | да | нет |
-| Автообновление | да (Greasy Fork) | да (из релизов GitHub) |
+| Автообновление | да | да |
 | Запросы в обход ограничений браузера | нет | да |
 | Блокировка рекламы в плеере | нет | да |
-| Память размера и положения окна | — | да |
 | Платформы | любой браузер с Tampermonkey | только Windows |
-
-Если всё и так работает — оставайтесь на скрипте, он привычнее. Приложение имеет смысл, если часть источников недоступна из браузера или мешает реклама в плеере.
 
 ## Возможности
 
@@ -41,18 +52,15 @@
 
 - **Перевод интерфейса** — строки сайта переводятся по словарю `dictionary.json`.
 - **Русские тайтлы и описания** — названия и синопсисы подтягиваются с Shikimori или anime365; основной источник и фоллбэк выбираются в настройках.
-- **Перевод персонажей и персонала** — имена с Shikimori, с улучшенным сопоставлением записей с AniList.
+- **Перевод персонажей и персонала** — имена с Shikimori, с сопоставлением записей с AniList.
 - **Аниме-плеер** — встроенный плеер с выбором озвучки и серий (Kodik).
 - **Рейтинги MAL и Shikimori** — оценки MyAnimeList и Shikimori рядом с оценкой AniList.
 - **Дерево франшизы** — хронология связанных тайтлов (включая записи, которых нет на AniList, — со стороны Shikimori).
-- **Музыкальные темы** — опенинги и эндинги с поиском в VK Музыке, YouTube Music, Spotify и SoundCloud (выбор сервиса переключается).
+- **Музыкальные темы** — опенинги и эндинги с поиском в VK Музыке, YouTube Music, Spotify и SoundCloud.
 - **Русский поиск** — поиск по русским названиям для аниме, манги, **персонажей и персонала**.
 - **Внешние ссылки** — быстрый переход на RuTracker, YummyAnime, AnimeGO, MangaLib (домены настраиваются) плюс **свои ссылки** с URL-шаблонами и плейсхолдерами `{ru}` / `{romaji}` / `{query}`.
 - **Сравнение списков Shikimori ⇄ AniList** — сканер расхождений: сводная статистика, поимённые различия по статусу, оценке, прогрессу, пересмотрам и заметкам, сравнение избранного (аниме, манга, персонажи, персонал), детект связанных сезонов и игнор-лист.
-
-### На Shikimori (`shikimori.io`)
-
-- **Экспорт списка Shikimori → AniList** — перенос аниме, манги, избранного и точных дат просмотров в AniList (требуется токен AniList).
+- **Импорт списка Shikimori → AniList** — перенос аниме, манги, избранного и точных дат просмотров в AniList (требуется токен AniList).
 
 ### Только в приложении
 
@@ -60,13 +68,12 @@
 - **Блокировщик рекламы** — один переключатель в настройках закрывает две задачи: баннеры самого AniList прячутся стилями, а рекламные запросы внутри кадра плеера отсекаются на уровне движка окна. Заблокированные домены видны в логгере.
 - **Без всплывающих окон плеера** — клики по видео не открывают рекламные вкладки.
 - **Автообновление** — при запуске программа сверяется с последним релизом и предлагает обновиться; загрузка, установка и перезапуск происходят сами. Пакет проверяется по цифровой подписи.
-- **Память окна** — размер и положение восстанавливаются при следующем запуске.
 - **Нативная навигация** — стрелки «назад/вперёд» и сочетания `Alt+←` / `Alt+→`, перезагрузка страницы, внешние ссылки уходят в браузер по умолчанию.
 
 ### Прочее
 
 - **Локальный словарь** — свои переводы поверх общей базы: добавляются вручную или выделением текста на странице, применяются сразу без перезагрузки; редактор с поиском, импортом/экспортом и отправкой предложений в общую базу.
-- **Цветовые темы тулкита** — выбор акцентного цвета AniMori независимо от темы AniList.
+- **Цветовые темы тулкита** — выбор акцентного цвета AniMori.
 - **Локальный кэш (IndexedDB)** — данные Shikimori/MAL кэшируются на 90 дней, чтобы не дёргать API повторно.
 - **Гибкие настройки** — модули включаются/отключаются во вкладочной панели «⚙» в левом нижнем углу.
 - **Логгер** — встроенный инструмент отладки (по желанию).
@@ -96,7 +103,7 @@
 2. Создайте API-клиент на [anilist.co/settings/developer](https://anilist.co/settings/developer) (в поле redirect укажите `https://anilist.co/api/v2/oauth/pin`).
 3. Вставьте Client ID, сгенерируйте ссылку, получите токен и вставьте его в поле.
 
-В браузерной версии токен хранится в хранилище Tampermonkey, в приложении — в файле настроек программы. Наружу он не уходит ни в том, ни в другом случае.
+В браузерной версии токен хранится в хранилище Tampermonkey, в приложении — в файле настроек программы. Наружу он не утекает ни в том, ни в другом случае.
 
 ## Источники данных
 
@@ -113,7 +120,7 @@
 
 ## Словарь перевода
 
-`dictionary.json` — плоский набор пар `оригинал → перевод` для строк интерфейса AniList:
+`dictionary.json` — набор пар `оригинал → перевод` для строк интерфейса AniList:
 
 ```json
 {
@@ -140,10 +147,6 @@ npm run typecheck     # проверка типов
 Сборка установщика подписывает обновление, поэтому `npm run tauri:build` ждёт переменные окружения `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Свою пару ключей можно создать командой `npm run tauri signer generate`.
 
 Исходный код общий: `src/` — логика и интерфейс на TypeScript и Vue 3, `src-tauri/` — оболочка на Rust. Какая версия собирается, определяет режим сборки.
-
-## Документация
-
-История разработки версии 2.0.0 — журналы всех четырёх этапов, манифест и планы работ — собрана в [`docs/2.0.0/`](docs/2.0.0).
 
 ## Лицензия
 

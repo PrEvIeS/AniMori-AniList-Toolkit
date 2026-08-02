@@ -1,10 +1,25 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import monkey from 'vite-plugin-monkey'
 
+// Единый источник номера версии — package.json.
+//
+// Раньше номер был прописан здесь строкой, и при выпуске его приходилось
+// поднимать в двух местах. Пропуск одного из них стоит дорого: Tauri берёт
+// версию из package.json и приложение обновится, а GreasyFork смотрит только на
+// шапку скрипта — со старым номером он решит, что обновлять нечего, и люди
+// останутся на прежней сборке молча.
+//
+// Чтение файла, а не import его JSON: импорт потребовал бы resolveJsonModule
+// и тянул бы package.json в область проверки типов всего проекта.
+const { version } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+) as { version: string }
+
 // Метаданные ниже перенесены 1:1 из шапки монолита animori.user.js (строки 1-25),
-// кроме version: 2.0.0 — модульная кодовая база вместо монолита 1.9.1.
+// кроме version — он теперь приезжает из package.json.
 // Не добавляй @match/@grant/@connect "на всякий случай": лишние права ломают ревю GreasyFork.
 export default defineConfig(({ mode }) => {
   // Пункт 4.6: два таргета из одного входа src/main.ts.
@@ -80,7 +95,7 @@ export default defineConfig(({ mode }) => {
               userscript: {
                 name: 'AniMori: AniList Toolkit',
                 namespace: 'http://tampermonkey.net/',
-                version: '2.0.0',
+                version,
                 description:
                   'Русский перевод, поиск, плеер, рейтинги Shiki и MAL, дерево хронологии, опенинги/эндинги, музыка, внешние ссылки, экспорт и сравнение списков Shikimori/AniList.',
                 author: 'foulnike',

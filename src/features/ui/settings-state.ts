@@ -36,7 +36,7 @@ import {
 } from '../../core/dictionary'
 import { saveSetting, settings } from '../../core/settings'
 import type { AccentPreset, AniMoriSettings, TitleSource } from '../../core/settings'
-import { syncAdblock } from '../adblock'
+import { syncAdblock } from '@adblock-impl'
 import { amCopy } from '../../utils/dom'
 import { Logger } from '../../utils/logger'
 
@@ -150,7 +150,21 @@ export const enableFranchise = settingRef('enableFranchise', 'set_franchise')
 export const enableThemes = settingRef('enableThemes', 'set_themes')
 
 /**
- * Пункт 2.10 плана: единственный тумблер блокировщика рекламы.
+ * Есть ли в этой сборке блокировщик рекламы.
+ *
+ * Правка 2 августа: в юзерскрипте блокировщика больше нет. Причина не техническая,
+ * а продуктовая: расширение браузера режет и баннеры сайта, и рекламу внутри кадра
+ * плеера, то есть покрывает обе половины нашего тумблера, а не одну, и не ломается
+ * при каждой пересборке вёрстки AniList. В десктопной оболочке расширений нет —
+ * там блокировщик остаётся единственным способом и работает целиком.
+ *
+ * Флаг читает разметка панели: в браузере вместо тумблера показывается пояснение.
+ * Значение константно на всю сессию, поэтому не ref и не computed.
+ */
+export const isAdblockAvailable = Bridge.platform === 'tauri'
+
+/**
+ * Пункт 2.10 плана: единственный тумблер блокировщика рекламы (десктоп).
  *
  * Осознанно сведён в один переключатель «на всё». Пользователю не нужно знать,
  * что баннеры сайта режет DOM-модуль, а рекламу внутри плеера — сетевой блокировщик
@@ -158,10 +172,15 @@ export const enableThemes = settingRef('enableThemes', 'set_themes')
  * Поэтому запись идёт сразу в два ключа: set_hide_ads читает наш модуль,
  * set_block_popups читает десктопный мост.
  *
+ * Правка 2 августа: вторая запись стала условной. В браузере потребителя
+ * у set_block_popups нет и быть не может, а сама модель туда больше не показывается;
+ * писать ключ было бы мусором в хранилище.
+ *
  * В отличие от остальных моделей, здесь есть немедленный потребитель, поэтому
  * после записи дёргаем syncAdblock(): включил — стиль и наблюдатель поднялись,
  * выключил — снялись. Перезагрузка нужна только чтобы увидеть баннеры обратно:
- * выпотрошенные слоты мы не восстанавливаем.
+ * выпотрошенные слоты мы не восстанавливаем. В юзерскриптной сборке syncAdblock —
+ * заглушка из impl.noop.ts.
  */
 export const hideAds = computed<boolean>({
   get: () => {
@@ -170,7 +189,7 @@ export const hideAds = computed<boolean>({
   },
   set: (value) => {
     saveSetting('hideAds', 'set_hide_ads', value)
-    saveSetting('blockPlayerPopups', 'set_block_popups', value)
+    if (isAdblockAvailable) saveSetting('blockPlayerPopups', 'set_block_popups', value)
     settingsVersion.value++
     syncAdblock()
   },

@@ -177,4 +177,3 @@ export async function fetchShiki<T = unknown>(
   Logger('ERROR', `Все зеркала Shikimori недоступны для ${path}`, { mirrorFailures })
   throw new Error(`Все зеркала Shikimori недоступны для ${path}`)
 }
-}

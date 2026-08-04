@@ -22,15 +22,28 @@
 // Промис никогда не отклоняется: без словаря переводчик всё равно умеет даты,
 // счётчики и русские названия тайтлов, поэтому сбой загрузки не должен ронять
 // bootstrap(). Отсутствие данных сигнализируется через null.
+//
+// Итерация 5.1: исход запроса отдаётся в core/net-health. Учёт ни на что здесь
+// не влияет — он только запоминает, что источник ответил или не ответил.
 
 import { Bridge } from '@/bridge'
 import { DICT_URL } from '../core/constants'
 import { dbGet, dbSet } from '../core/db'
+import { reportError, reportStatus } from '../core/net-health'
 import type { ShikiCacheRecord } from '../core/types'
 import { Logger } from '../utils/logger'
 
 /** Словарь интерфейса: оригинал — перевод. */
 export type InterfaceDictionary = Record<string, string>
+
+/**
+ * Идентификатор источника в учёте состояния сети.
+ *
+ * Словарь лежит на raw.githubusercontent.com — том же хосте, что и ничто другое
+ * в проекте, поэтому источник отдельный и его отказ ни с чем не смешивается.
+ */
+export const NET_SOURCE_DICT = 'dictionary'
+export const NET_LABEL_DICT = 'Словарь (GitHub)'
 
 /**
  * Ключ записи в shikiCache.
@@ -68,12 +81,14 @@ interface CachedDictionary {
  * @returns Объект { "Original": "Перевод" } либо null, если словарь не получен.
  */
 export async function fetchInterfaceDictionary(): Promise<InterfaceDictionary | null> {
+  const startedAt = Date.now()
   try {
     const res = await Bridge.http.request({
       method: 'GET',
       url: DICT_URL,
       credentials: 'omit',
     })
+    reportStatus(NET_SOURCE_DICT, NET_LABEL_DICT, res.status, Date.now() - startedAt)
     if (!res.ok) {
       Logger('ERROR', 'Словарь интерфейса не отдался', { status: res.status, url: res.url })
       return null
@@ -82,6 +97,10 @@ export async function fetchInterfaceDictionary(): Promise<InterfaceDictionary | 
   } catch (e) {
     // Сюда попадают и сетевые сбои (BridgeHttpError), и битый JSON. Реакция одна:
     // работаем без общего словаря, а не падаем на старте.
+    //
+    // В учёт уходит тот же случай: сетевую ошибку net-health разберёт по её типу,
+    // а разбор JSON состояние источника не меняет — хост-то ответил.
+    reportError(NET_SOURCE_DICT, NET_LABEL_DICT, e, Date.now() - startedAt)
     Logger('ERROR', 'Не удалось загрузить словарь интерфейса', e)
     return null
   }

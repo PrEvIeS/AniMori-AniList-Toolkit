@@ -34,6 +34,16 @@ const PROBE_TIMEOUT_MS = 8000
 /** Минимальный интервал между прогонами: проверка бьёт по чужим API. */
 const MIN_INTERVAL_MS = 30000
 
+/**
+ * Домены, которые остаются в списках резерва, но не проверяются вручную.
+ *
+ * anime365.ru жив, но из России не отвечает ни без VPN, ни через туннель (три прогона
+ * подряд, каждый раз таймаут). Проба только добавляла к прогону восемь секунд и одну
+ * предсказуемую красную строку. Из резерва (ANIME365_DOMAINS) домен не убираем: там он
+ * нужен на случай, если основной домен отвалится, а этот окажется доступен.
+ */
+const PROBE_SKIP_DOMAINS = ['anime365.ru']
+
 /** Публичный токен Kodik. Тот же, что в features/media/player.ts (там не экспортирован). */
 const KODIK_TOKEN = '16f20d024a6fa20700b389c44d9ab159'
 
@@ -95,6 +105,7 @@ function buildProbes(): NetProbe[] {
   ]
 
   for (const domain of SHIKI_DOMAINS) {
+    if (PROBE_SKIP_DOMAINS.includes(domain)) continue
     probes.push({
       id: 'shikimori:' + domain,
       label: 'Shikimori (' + domain + ')',
@@ -106,6 +117,7 @@ function buildProbes(): NetProbe[] {
   }
 
   for (const domain of ANIME365_DOMAINS) {
+    if (PROBE_SKIP_DOMAINS.includes(domain)) continue
     probes.push({
       id: 'anime365:' + domain,
       label: 'anime365 (' + domain + ')',

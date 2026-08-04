@@ -29,9 +29,15 @@
 // Домен берётся из SHIKI_DOMAINS, а не из window.location: со страницы AniList своего
 // origin Shikimori просто нет. Зеркала перебираются только при транспортном сбое —
 // коды ответа возвращаются как есть, потому что 404 и 403 здесь осмысленны.
+//
+// Итерация 5.1: исход каждой попытки отдаётся в core/net-health под тем же
+// идентификатором, что и в публичном клиенте: за двумя файлами стоит один и тот
+// же хост, и разводить его состояние по виду эндпоинта было бы враньём. 401 и 403
+// в учёте разведены самим net-health: первый означает вопрос к доступу, а не к сети.
 
 import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 
 /**
@@ -43,6 +49,13 @@ const TIMEOUT_MS = 20000
 
 /** Предупреждение об анонимном доступе показывается один раз за сессию. */
 let anonymousNoticeShown = false
+
+/**
+ * Идентификатор зеркала в учёте состояния сети. Совпадает с api/shikimori.ts намеренно.
+ */
+function netId(domain: string): string {
+  return `shikimori:${domain}`
+}
 
 /**
  * Уходят ли запросы без куки сессии.
@@ -102,6 +115,8 @@ export async function shikiUserGet<T>(path: string): Promise<ShikiUserResponse<T
 
   for (const domain of SHIKI_DOMAINS) {
     const url = 'https://' + domain + path
+    const label = `Shikimori (${domain})`
+    const startedAt = Date.now()
 
     let status: number
     let ok: boolean
@@ -118,10 +133,12 @@ export async function shikiUserGet<T>(path: string): Promise<ShikiUserResponse<T
       status = res.status
       ok = res.ok
       text = res.text
+      reportStatus(netId(domain), label, status, Date.now() - startedAt)
     } catch (e) {
       // Сюда попадает только транспорт: сеть, таймаут, отмена. Пробуем следующее
       // зеркало — на нём может не быть блокировки провайдера. Куки у зеркал разные,
       // поэтому смена домена способна дать 403 вместо данных, и это честнее обрыва.
+      reportError(netId(domain), label, e, Date.now() - startedAt)
       lastError = e
       Logger('WARN', 'Shikimori: домен ' + domain + ' не ответил, пробую следующее зеркало', e)
       continue

@@ -67,6 +67,8 @@ function openExternal(url: string): void {
 
 // ==== Видимость панели и активная вкладка ====
 
+// Итерация 5.1: добавлена вкладка 'dev' («Разработчик») — логгер и проверка сети.
+// Порядок ключей здесь роли не играет, порядок вкладок задаёт TABS в SettingsModal.vue.
 export type TabKey =
   | 'translate'
   | 'dict'
@@ -75,6 +77,7 @@ export type TabKey =
   | 'links'
   | 'account'
   | 'misc'
+  | 'dev'
   | 'support'
 
 export const isSettingsOpen = ref(false)
@@ -214,9 +217,13 @@ export function normalizeDomain(value: string): string {
     .replace(/\/$/, '')
 }
 
-// ==== Вкладка «Прочее» ====
+// ==== Вкладка «Разработчик» ====
 
+// Итерация 5.1: тумблер переехал из «Прочего» во вкладку «Разработчик».
+// Ключ хранилища не менялся (set_logger), поэтому у пользователей ничего не сбросилось.
 export const enableLogger = settingRef('enableLogger', 'set_logger')
+
+// ==== Вкладка «Прочее» ====
 
 /**
  * Пункт 3.7.2: видимость кнопок переноса и сравнения в панели действий.

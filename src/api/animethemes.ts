@@ -19,6 +19,11 @@
 //      без счётчика: при устойчивом лимите вечный цикл по полторы секунды на виток,
 //      причём молчаливый: виджет просто никогда не показывал темы.
 //
+// Этап 5, итерация 5.1: каждый исход сообщается в core/net-health.ts. Прикладная
+// логика снова не тронута: те же возвраты, тот же кэш, те же записи в журнал.
+// Отчёт нужен ровно для того, чтобы виджет музыки мог объяснить человеку свою
+// пустоту вместо того, чтобы просто не появиться.
+//
 // Контракт функции сохранён дословно: она НИКОГДА не отклоняется, а сообщает о любой
 // неудаче значением null. На это опирается виджет тем (features/media/themes.ts):
 // при null он оставляет свой блок скрытым и не запрашивает темы повторно.
@@ -32,12 +37,21 @@
 import { Bridge, type HttpResponse } from '@/bridge'
 import { CACHE_TIME } from '../core/constants'
 import { dbGet, dbSet } from '../core/db'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 import type { ShikiCacheRecord } from '../core/types'
 import { MAX_RATE_RETRIES, animeThemesLimiter } from './rate-limit'
 
 /** Базовый адрес собран конкатенацией: литерал схемы в шаблонной строке ломался при отправке. */
 const API_BASE = 'https://api.animethemes.moe/anime'
+
+/**
+ * Имя источника для учёта доступности. Именно имя, а не адрес: net-health
+ * по замыслу не знает ни одного хоста, иначе со временем превратится в список
+ * заблокированного, требующий сопровождения.
+ */
+export const NET_SOURCE_ANIMETHEMES = 'animethemes'
+export const NET_LABEL_ANIMETHEMES = 'AnimeThemes'
 
 /** Пауза перед повтором после 429. Джиттер разводит одновременные повторы. */
 const RETRY_DELAY_MS = 1500
@@ -108,6 +122,9 @@ export async function fetchMalThemes(
   Logger('API', `Запрос AnimeThemes.moe для MAL ID: ${malId}`)
 
   let res: HttpResponse
+  // Замер идёт вместе с ожиданием слота: для таблицы важно, сколько ждал
+  // виджет, а не сколько думал сервер.
+  const startedAt = Date.now()
   try {
     // Слот берём перед каждой реальной отправкой, включая повторы после 429:
     // повтор — такой же запрос для счётчика окна, как и первая попытка.
@@ -124,8 +141,18 @@ export async function fetchMalThemes(
     // Сюда приходит только транспортный сбой, таймаут или отмена (BridgeHttpError).
     // Раньше эту ветку закрывал коллбэк onerror.
     Logger('ERROR', 'AnimeThemes Network Error', e)
+    reportError(NET_SOURCE_ANIMETHEMES, NET_LABEL_ANIMETHEMES, e, Date.now() - startedAt)
     return null
   }
+
+  // Отчёт идёт до разбора статусов ниже: net-health сам игнорирует 429 и 401,
+  // а дублировать вызов в трёх ветках значит рано или поздно забыть одну.
+  reportStatus(
+    NET_SOURCE_ANIMETHEMES,
+    NET_LABEL_ANIMETHEMES,
+    res.status,
+    Date.now() - startedAt,
+  )
 
   // Код вне 2xx мост исключением не считает, поэтому статусы разбираем сами —
   // ровно теми же тремя ветками, что были в onload.

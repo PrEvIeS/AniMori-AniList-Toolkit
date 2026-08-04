@@ -29,12 +29,21 @@
 //   3. Повтор после 429 ограничен MAX_RATE_RETRIES. Раньше было `return fetchShiki(path)`
 //      без счётчика: при устойчивом лимите это вечный цикл по пять секунд на виток.
 //
+// Этап 5, итерация 5.1: каждое зеркало учтено в core/net-health.ts ОТДЕЛЬНО. Именно
+// отдельно, потому что весь смысл резервного домена — в том, что он может быть жив
+// когда первый мёртв, и обратно. Сведённое состояние «Shikimori вообще» эту разницу
+// стёрло бы, и в проверке сети невозможно было бы понять, какой адрес менять.
+// Прикладная логика не тронута: порядок перебора, трактовка 404 и возвраты те же.
+// Состояние ни на выбор зеркала, ни на его порядок здесь пока НЕ влияет: выбор
+// рабочего адреса по факту запланирован на итерацию 5.2.
+//
 // Куки не шлём (credentials: 'omit'). Публичным карточкам они не нужны, а дефолтный
 // 'include' у моста уже один раз привёл к HTTP 400 Request Header Or Cookie Too Large
 // на graphql.anilist.co. Приватные запросы живут в shikimori-user.ts и сюда не ходят.
 
 import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 import { MAX_RATE_RETRIES, RateLimitError, shikiLimiter } from './rate-limit'
 
@@ -42,6 +51,19 @@ import { MAX_RATE_RETRIES, RateLimitError, shikiLimiter } from './rate-limit'
 const RATE_PAUSE_MS = 5000
 /** Таймаут одного зеркала: дольше ждать нет смысла, лучше уйти на следующее. */
 const MIRROR_TIMEOUT_MS = 5000
+
+/**
+ * Имя источника для учёта доступности конкретного зеркала.
+ * Имя собирается здесь, а не в net-health: тот модуль по замыслу не знает адресов.
+ */
+function netId(domain: string): string {
+  return `shikimori:${domain}`
+}
+
+/** Собирает абсолютный адрес для конкретного зеркала. */
+function mirrorUrl(domain: string, path: string): string {
+  return 'https://' + domain + path
+}
 
 /**
  * Активна ли сейчас пауза по лимиту Shikimori.
@@ -54,11 +76,6 @@ export function isShikimoriRateLimited(): boolean {
 /** Ставит паузу вручную (например, 429 увидел поиск персон). */
 export function pauseShikimori(ms: number): void {
   shikiLimiter.pause(ms)
-}
-
-/** Собирает абсолютный адрес для конкретного зеркала. */
-function mirrorUrl(domain: string, path: string): string {
-  return 'https://' + domain + path
 }
 
 export interface ShikiResponse<T = unknown> {
@@ -82,6 +99,10 @@ export async function fetchShiki<T = unknown>(
   let mirrorFailures = 0
 
   for (const domain of SHIKI_DOMAINS) {
+    // Замер на каждое зеркало свой и включает ожидание слота: в таблице важно,
+    // сколько ждала очередь перевода, а не чистое время сервера.
+    const startedAt = Date.now()
+
     try {
       // Слот берём перед каждой реальной отправкой, включая перебор зеркал:
       // зеркала делят один бюджет, а не имеют по своему.
@@ -93,6 +114,10 @@ export async function fetchShiki<T = unknown>(
         timeoutMs: MIRROR_TIMEOUT_MS,
         credentials: 'omit',
       })
+
+      // Отчёт до разбора кодов: net-health сам игнорирует 429, а 404 трактует как
+      // «связь есть» — что для зеркала, удалившего тайтл по РКН, и есть правда.
+      reportStatus(netId(domain), `Shikimori (${domain})`, r.status, Date.now() - startedAt)
 
       if (r.status === 429) {
         // Паузу ставим всегда: она притормозит и поиск персон, и очередь перевода.
@@ -134,6 +159,10 @@ export async function fetchShiki<T = unknown>(
       // Сеть, таймаут (BridgeHttpError), неизвестный код или битый JSON — следующее зеркало.
       // Это WARN, а не ERROR: второе зеркало ещё может отдать данные.
       mirrorFailures++
+      // Битый JSON и неизвестный код сюда тоже приходят, но состояние менять им нечем:
+      // reportError учитывает только транспортный сбой и таймаут, остальное пропускает,
+      // а ответ со статусом уже учтён выше вызовом reportStatus.
+      reportError(netId(domain), `Shikimori (${domain})`, e, Date.now() - startedAt)
       Logger('WARN', `Shikimori: зеркало ${domain} не ответило по ${path}`, e)
     }
   }
@@ -147,4 +176,5 @@ export async function fetchShiki<T = unknown>(
 
   Logger('ERROR', `Все зеркала Shikimori недоступны для ${path}`, { mirrorFailures })
   throw new Error(`Все зеркала Shikimori недоступны для ${path}`)
+}
 }

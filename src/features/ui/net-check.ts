@@ -13,6 +13,9 @@
 //   отказа в момент проверки: сегодняшняя доступность ничего не говорит о завтрашней.
 // - Часть адресов проверяется только в десктопной сборке: в юзерскрипте разрешён ровно
 //   тот список @connect, что задан в vite.config.ts, и расширять его нельзя.
+// - В десктопе адрес должен быть ещё и в списке http из capabilities/default.json,
+//   иначе запрос отклоняет сама оболочка за единицы миллисекунд, и проба начинает
+//   врать про недоступность. Соблюдать оба списка при добавлении пробы.
 //
 // Идентификаторы источников заданы здесь литералами намеренно, а не импортом из
 // клиентов: формат обязан совпадать со строками, которые пишут сами клиенты
@@ -113,6 +116,8 @@ function buildProbes(): NetProbe[] {
     })
   }
 
+  // Адрес видео v.animethemes.moe не проверяется: из AnimeThemes берём только названия
+  // тем, сами файлы не тянем.
   probes.push(
     {
       id: 'animethemes',
@@ -122,14 +127,6 @@ function buildProbes(): NetProbe[] {
       method: 'GET',
       credentials: 'omit',
       limiter: 'animethemes',
-    },
-    {
-      id: 'animethemes:video',
-      label: 'Видео AnimeThemes',
-      url: 'https://v.animethemes.moe/',
-      method: 'GET',
-      credentials: 'omit',
-      desktopOnly: true,
     },
     {
       id: 'kodik:api',
@@ -175,13 +172,30 @@ async function acquire(limiter: LimiterKey | undefined): Promise<void> {
 /** Человеческая расшифровка кода ответа для строки отчёта. */
 function describeStatus(status: number): string {
   if (status >= 200 && status < 400) return 'отвечает'
-  // 404 у graphql.anilist.co и v.animethemes.moe — нормальный ответ живого сервиса.
-  if (status === 404) return 'отвечает (404 — адрес без содержимого)'
+  // 404 у graphql.anilist.co — нормальный ответ живого сервиса.
+  if (status === 404) return 'отвечает, адрес пустой'
   if (status === 401) return 'нужна авторизация'
-  if (status === 403 || status === 451) return 'не пускает (' + String(status) + ')'
+  if (status === 403 || status === 451) return 'не пускает'
   if (status === 429) return 'лимит запросов'
-  if (status >= 500) return 'сбой на стороне сервиса (' + String(status) + ')'
-  return 'ответ ' + String(status)
+  if (status >= 500) return 'сбой на стороне сервиса'
+  return 'неожиданный ответ'
+}
+
+/**
+ * Короткая причина провала без адреса и служебного текста: в строке отчёта и так видно,
+ * о каком источнике речь, а полный адрес растягивал строку на три экрана.
+ * Полный текст ошибки остаётся в журнале — его пишет net-health.
+ *
+ * Вид ошибки берётся через поле kind, а не через instanceof: тип ошибки моста
+ * живёт в слое bridge, и тянуть его сюда ради одной проверки нет смысла.
+ */
+function describeFailure(error: unknown): string {
+  const kind = (error as { kind?: string } | null | undefined)?.kind
+  if (kind === 'timeout') return 'не ответил за ' + String(PROBE_TIMEOUT_MS / 1000) + ' с'
+  if (kind === 'abort') return 'запрос прерван'
+  if (kind === 'network') return 'соединение не установлено'
+  const message = error instanceof Error ? error.message : String(error)
+  return message.length > 48 ? message.slice(0, 45) + '…' : message
 }
 
 function isGoodStatus(status: number): boolean {
@@ -249,14 +263,13 @@ export async function runNetCheck(onRow?: (row: NetCheckRow) => void): Promise<N
       } catch (e) {
         const latencyMs = Date.now() - startedAt
         reportError(probe.id, probe.label, e, latencyMs)
-        const kind = e instanceof Error ? e.message : String(e)
         row = {
           id: probe.id,
           label: probe.label,
           status: 0,
           latencyMs,
           ok: false,
-          detail: 'не отвечает (' + kind + ')',
+          detail: describeFailure(e),
         }
       }
 

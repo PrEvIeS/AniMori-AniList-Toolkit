@@ -29,6 +29,7 @@ import { initActionBar } from './features/ui/actions'
 import { initLinks } from './features/ui/links'
 import { initLoggerUI } from './features/ui/logger-ui'
 import { initNavPanel } from './features/ui/nav'
+import { initNetToast } from './features/ui/net-toast'
 import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
 import { sweepPhantomRoots, unmountAll, unmountPageScoped } from './utils/vue-mounter'
@@ -241,6 +242,14 @@ async function bootstrap(): Promise<void> {
   await step('сканер', initScannerUI)
   await step('перенос списка', initExporter)
   await step('панель действий', initActionBar)
+
+  // Итерация 5.2: тост о недоступности источников. Ставится СРАЗУ ПОСЛЕ панели
+  // действий и ДО всего, что ходит в сеть (словарь, переводчик, виджеты): подписка на учёт
+  // доступности ничего не знает о прошлых событиях, и отказы, случившиеся до монтирования,
+  // тост увидел бы только через одноразовую сверку при старте. Плашка молчит до тех пор,
+  // пока два разных источника не откажут по два раза подряд, поэтому раннее монтирование
+  // лишних срабатываний не даёт.
+  await step('предупреждение о сети', initNetToast)
 
   // Пункт 4.5: блок навигации — замена тулбара в десктопной сборке: назад,
   // вперёд, обновить, плюс F5 / Ctrl+R / Alt+стрелки. Стоит после панели действий

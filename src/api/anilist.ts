@@ -49,13 +49,23 @@
 //
 // Поэтому тормоз живёт здесь, а не в очереди: только клиент видит все запросы к
 // AniList сразу — и от очереди перевода, и от рейтингов, и от виджета франшизы.
+//
+// Итерация 5.1: исход запроса отдаётся в core/net-health. Отступ и трактовка кодов
+// остались как были: учёт ничем не управляет и только запоминает состояние
+// источника. Обрати внимание: 401 и 429 net-health игнорирует сам — первый говорит
+// о токене, второй о темпе, и ни тот ни другой не значат проблем с доступностью.
 
 import { Bridge, type HttpResponse } from '@/bridge'
 import { IS_ANILIST } from '../core/constants'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 
 /** Адрес GraphQL-точки AniList. */
 const GRAPHQL_URL = 'https://graphql.anilist.co'
+
+/** Идентификатор и ярлык источника в учёте состояния сети. */
+export const NET_SOURCE_ANILIST = 'anilist:graphql'
+export const NET_LABEL_ANILIST = 'AniList API'
 
 /** Пауза по умолчанию, если сервер не прислал retry-after. */
 const DEFAULT_RETRY_MS = 5000
@@ -272,6 +282,7 @@ export async function anilistQuery<T = unknown>(
   })
 
   const startTime = performance.now()
+  const startedAt = Date.now()
 
   let res: HttpResponse
   try {
@@ -287,10 +298,15 @@ export async function anilistQuery<T = unknown>(
     // Только транспортный сбой, таймаут или отмена — бывший onerror.
     // Сеть упала — тот же отступ, что и при отказе сервера: без него очередь
     // перевода крутит пачки вхолостую всё время, пока нет интернета.
+    reportError(NET_SOURCE_ANILIST, NET_LABEL_ANILIST, e, Date.now() - startedAt)
     backOffAfterServerFailure(0)
     Logger('ERROR', 'AniList Network Error', e)
     throw new Error('AniList Network Error')
   }
+
+  // Учёт состояния — до разбора кодов: сам факт ответа важен независимо от того,
+  // устроил он вызывающий код или нет.
+  reportStatus(NET_SOURCE_ANILIST, NET_LABEL_ANILIST, res.status, Date.now() - startedAt)
 
   if (res.status === 429) {
     const waitTime = readRetryAfter(res.headers)

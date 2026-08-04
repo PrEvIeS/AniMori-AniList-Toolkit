@@ -16,27 +16,27 @@
 //
 // Пункт 3.8, три изменения:
 //
-//   1. Собственный троттлинг (sleep после каждого запроса плюс ручная пауза) заменён
-//      общим ограничителем из rate-limit.ts. Режим теперь тот же, что у Shikimori:
-//      источники стоят в одной цепочке резолва названий, и разная скорость означала
-//      бы, что фоллбэк обгоняет основной источник и первым ловит блокировку. Оба зеркала
+//   1. Собственный троттлинг заменён общим ограничителем из rate-limit.ts. Оба зеркала
 //      делят один бюджет: уход на anime365.ru не даёт права на второй темп.
 //
 //   2. Повтор после 429 ограничен MAX_RATE_RETRIES. Раньше была рекурсия без счётчика,
-//      да ещё с двойным ожиданием: сначала sleep на пять секунд, потом повторный вызов
-//      снова ждал ту же паузу — десять секунд на ровном месте.
+//      да ещё с двойным ожиданием паузы.
 //
-//   3. Куки не шлём (credentials: 'omit'): API анонимный, а дефолтный 'include' у моста
-//      уже один раз привёл к HTTP 400 Request Header Or Cookie Too Large на другом источнике.
+//   3. Куки не шлём (credentials: 'omit'): API анонимный.
 //
-// Уровни логов здесь были правильными изначально, поэтому в 3.8 под них подгонялся
-// shikimori.ts, а не наоборот: WARN — источник жив, но сейчас не отвечает; ERROR —
-// источник потерян совсем. Добавлен лишь явный лог на исход «ответил, но данных нет»:
-// раньше 404 и пустой ответ возвращали null молча, и в журнале это было неотличимо
-// от «запрос вообще не делался».
+// Этап 5, итерация 5.1: каждое зеркало учтено в core/net-health.ts ОТДЕЛЬНО: смысл
+// резервного адреса ровно в том, что он может быть жив когда первый мёртв, и обратно.
+// Прикладная логика не тронута: те же статусы soft-block, тот же бэкофф, тот же
+// счётчик сбоев и те же возвраты. Собственный счётчик anime365FailStreak НЕ заменён
+// на net-health: он управляет отключением источника на сессию, а net-health ничем
+// не управляет и только наблюдает.
+//
+// Уровни логов: WARN — источник жив, но сейчас не отвечает; ERROR — источник потерян
+// совсем. Исход «ответил, но данных нет» тоже пишется явно.
 
 import { Bridge } from '@/bridge'
 import { ANIME365_DOMAINS, ANIME365_FAIL_LIMIT } from '../core/constants'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 import { MAX_RATE_RETRIES, anime365Limiter } from './rate-limit'
 import type { MediaType } from '../core/types'
@@ -57,6 +57,14 @@ let anime365Disabled = false
 /** Собирает абсолютный адрес для конкретного зеркала. */
 function mirrorUrl(domain: string, path: string): string {
   return 'https://' + domain + path
+}
+
+/**
+ * Имя источника для учёта доступности конкретного зеркала.
+ * Собирается здесь, а не в net-health: тот модуль по замыслу не знает адресов.
+ */
+function netId(domain: string): string {
+  return `anime365:${domain}`
 }
 
 /** Отключён ли источник до конца сессии (для отображения в настройках). */
@@ -117,6 +125,9 @@ export async function fetchAnime365ByMal(
   Logger('API', `Запрос к anime365 API: myAnimeListId=${malId}`)
 
   for (const domain of ANIME365_DOMAINS) {
+    // Замер на каждое зеркало свой и включает ожидание слота.
+    const startedAt = Date.now()
+
     try {
       // Слот берём перед каждой отправкой: ограничитель сам учтёт и интервал,
       // и окно, и действующую паузу после 429 или бэкоффа.
@@ -128,6 +139,10 @@ export async function fetchAnime365ByMal(
         timeoutMs: MIRROR_TIMEOUT_MS,
         credentials: 'omit',
       })
+
+      // Отчёт до разбора кодов, одним вызовом на все ветки: 403 и 5xx net-health
+      // различит сам, 429 пропустит, 404 сочтёт признаком живой связи.
+      reportStatus(netId(domain), `anime365 (${domain})`, res.status, Date.now() - startedAt)
 
       if (res.status === 429) {
         anime365Limiter.pause(RATE_PAUSE_MS)
@@ -197,6 +212,9 @@ export async function fetchAnime365ByMal(
     } catch (e) {
       // Сеть, таймаут (BridgeHttpError), неизвестный код или битый JSON.
       anime365FailStreak++
+      // Состояние меняют только транспортный сбой и таймаут; ответ со статусом
+      // уже учтён выше, а битый JSON net-health пропустит сам.
+      reportError(netId(domain), `anime365 (${domain})`, e, Date.now() - startedAt)
       Logger(
         'WARN',
         `Сбой запроса к зеркалу anime365: ${domain} (${String(e)}). ` +

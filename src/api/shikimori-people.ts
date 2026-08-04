@@ -29,9 +29,15 @@
 // Там же выровнены уровни логов. Раньше было наоборот: битый JSON одного из трёх
 // поисков кричал ERROR, хотя остальные два ещё могли найти персону, а полный
 // транспортный сбой глотался молча через `catch { return { status: 0 } }`.
+//
+// Итерация 5.1: исход каждого запроса отдаётся в core/net-health внутри того же
+// request(): это единственное горлышко файла, поэтому стратегия поиска о учёте
+// не знает вообще. Идентификатор тот же, что у публичного клиента: за всеми тремя
+// файлами стоят те же два зеркала.
 
 import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 import { scoreNameMatch } from '../utils/name-match'
 import type { NameCandidate, NameTarget } from '../utils/name-match'
@@ -64,6 +70,11 @@ function mirrorUrl(domain: string, path: string): string {
   return 'https://' + domain + path
 }
 
+/** Идентификатор зеркала в учёте состояния сети. Совпадает с shikimori.ts намеренно. */
+function netId(domain: string): string {
+  return `shikimori:${domain}`
+}
+
 interface RawResponse {
   status: number
   responseText: string
@@ -77,15 +88,25 @@ interface RawResponse {
  * Пункт 3.8: слот у общего ограничителя, куки не шлём, транспортный сбой больше
  * не пропадает из лога, а 429 сразу тормозит весь источник, а не только текущую
  * ветку поиска: соседние запросы пачки уже стоят в очереди шлюза.
+ *
+ * Итерация 5.1: зеркало берётся аргументом, а не выковыривается из адреса:
+ * вызывающий код и так строит адрес от конкретного домена.
  */
 async function request(opts: {
   method: 'GET' | 'POST'
   url: string
+  domain: string
   headers?: Record<string, string>
   data?: string
 }): Promise<RawResponse> {
+  const label = `Shikimori (${opts.domain})`
+  let startedAt = Date.now()
   try {
     await shikiLimiter.acquireSlot()
+
+    // Время считается после ожидания в очереди шлюза: иначе в замер попадала бы
+    // наша же пауза и источник выглядел бы медленным без своей вины.
+    startedAt = Date.now()
 
     const r = await Bridge.http.request({
       method: opts.method,
@@ -94,6 +115,8 @@ async function request(opts: {
       body: opts.data,
       credentials: 'omit',
     })
+
+    reportStatus(netId(opts.domain), label, r.status, Date.now() - startedAt)
 
     if (r.status === 429) {
       shikiLimiter.pause(PERSON_RATE_PAUSE_MS)
@@ -106,6 +129,7 @@ async function request(opts: {
   } catch (e) {
     // Транспортный сбой (BridgeHttpError). Поиск персон не должен ронять перевод
     // страницы, поэтому отдаём status 0 — но теперь хотя бы с записью в журнал.
+    reportError(netId(opts.domain), label, e, Date.now() - startedAt)
     Logger('WARN', `Shikimori: запрос поиска персоны не ушёл: ${opts.url}`, e)
     return { status: 0, responseText: '' }
   }
@@ -219,7 +243,7 @@ export async function fetchShikiPersonREST(
       ]
 
       for (const url of searchUrls) {
-        const r = await request({ method: 'GET', url })
+        const r = await request({ method: 'GET', url, domain })
         if (r.status === 429) {
           rateLimited = true
           break
@@ -253,6 +277,7 @@ export async function fetchShikiPersonREST(
         const r = await request({
           method: 'POST',
           url: mirrorUrl(domain, '/api/graphql'),
+          domain,
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           data: JSON.stringify({ query: gqlQuery, variables: { search: cleanStr } }),
         })
@@ -280,6 +305,7 @@ export async function fetchShikiPersonREST(
         const rDetails = await request({
           method: 'GET',
           url: mirrorUrl(domain, `/api/${endpointStr}/${item.id}`),
+          domain,
         })
         if (rDetails.status === 429) return { status: 429, data: null }
         if (rDetails.status === 0) transportFailures++

@@ -10,6 +10,10 @@
 
   Строки добавляются по ходу прогона (onRow), потому что полный круг с мёртвыми адресами
   может занять десятки секунд, и молчащая кнопка всё это время читалась бы как зависание.
+
+  Верстка строки отчёта: слева название и причина (сжимается и переносится), справа
+  код и время в колонке фиксированной ширины без переноса. Без min-width: 0 левая
+  колонка во флексе не сжимается меньше своего текста и наезжает на правую.
 -->
 <template>
   <div class="amk-card">
@@ -39,18 +43,27 @@
     >
       {{ busy ? 'Проверяем…' : 'Проверить источники' }}
     </button>
-    <div v-if="hint" class="amk-row-hint" style="padding: 8px 2px 0">{{ hint }}</div>
+    <div v-if="hint" class="amk-row-hint" style="padding: 8px 2px 0; line-height: 1.5">
+      {{ hint }}
+    </div>
     <div
       v-if="rows.length > 0"
       id="am-net-rows"
       style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px"
     >
-      <div v-for="row in rows" :key="row.id" class="amk-row" style="gap: 8px">
-        <span class="amk-row-label"
-          ><b>{{ row.label }}</b><span class="amk-row-hint">{{ row.detail }}</span></span
+      <div
+        v-for="row in rows"
+        :key="row.id"
+        class="amk-row"
+        style="gap: 10px; align-items: flex-start"
+      >
+        <span class="amk-row-label" style="min-width: 0; flex: 1 1 auto"
+          ><b style="overflow-wrap: anywhere">{{ row.label }}</b
+          ><span class="amk-row-hint" style="overflow-wrap: anywhere">{{ row.detail }}</span></span
         >
         <span
           class="amk-row-hint amk-mono"
+          style="flex: 0 0 auto; white-space: nowrap; text-align: right; padding-top: 1px"
           :style="{ color: row.ok ? 'rgb(var(--color-green, 166,227,161))' : 'rgb(var(--color-red, 243,139,168))' }"
           >{{ row.status > 0 ? row.status : '—' }} · {{ row.latencyMs }} мс</span
         >

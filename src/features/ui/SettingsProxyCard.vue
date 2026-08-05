@@ -51,7 +51,8 @@
         class="amk-input amk-mono"
         id="set_proxy_host"
         style="flex: 1"
-        placeholder="адрес, например 127.0.0.1"
+        placeholder="127.0.0.1"
+        title="Адрес прокси без схемы: 127.0.0.1 или proxy.local"
         :value="host"
         @change="onHostChange($event)"
       />
@@ -70,7 +71,7 @@
         class="amk-input amk-mono"
         id="set_proxy_login"
         style="flex: 1"
-        placeholder="логин, если нужен"
+        placeholder="логин"
         :value="login"
         @change="onLoginChange($event)"
       />

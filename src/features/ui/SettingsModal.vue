@@ -29,6 +29,16 @@
      разметки. Причина — размер: файл дорос до 38 КБ, и каждая правка в нём стала рискованной.
      Здесь остались каркас модалки, навигация и простые вкладки.
 
+  Исправление после итерации 5.2: кнопка «Очистить кэш» снова спрашивает подтверждение.
+  При переносе панели на Vue потерялся вопрос из монолита, и сброс шёл по первому же
+  клику — рядом с безобидной кнопкой «Применить и перезагрузить» это прямой путь к случайному
+  сбросу всего кэша с полной перезаливкой сотен записей по сети.
+
+  Подтверждение сделано двумя кликами по самой кнопке, а не через confirm(): системные
+  диалоги в окне WebView2 выглядят чужеродно и блокируют поток, а отключить их может и
+  сама оболочка, и пользователь галочкой «больше не показывать диалоги» в браузере.
+  В обоих случаях confirm() молча вернёт false или true, а защита окажется фиктивной.
+
   Динамический import() здесь запрещён: сборка — однофайльный userscript, любой чанк ломает его.
 -->
 <template>
@@ -317,18 +327,37 @@
         <button class="amk-btn amk-btn-primary amk-btn-block" id="am-apply" @click="onApply()">
           Применить и перезагрузить
         </button>
-        <button class="amk-btn amk-btn-danger" id="am-clear" @click="onClearCache()">Очистить кэш</button>
+        <button
+          class="amk-btn amk-btn-danger"
+          id="am-clear"
+          :title="clearTitle"
+          :disabled="clearBusy"
+          @click="onClearCache()"
+        >
+          {{ clearLabel }}
+        </button>
+      </div>
+      <div
+        v-if="clearArmed"
+        class="amk-row-hint"
+        id="am-clear-note"
+        style="padding: 0 14px 10px; line-height: 1.5; text-align: right"
+      >
+        Будут удалены все сохранённые названия, персонажи, франшизы и темы. Настройки, токен и свой словарь
+        останутся. После очистки страница перезагрузится, а данные поедут с серверов заново.
+        Нажмите ещё раз для подтверждения.
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { AM_ACCENTS } from '../../core/accent'
 import { clearCache } from '../../core/db'
 import type { TitleSource } from '../../core/settings'
+import { Logger } from '../../utils/logger'
 import SettingsDevTab from './SettingsDevTab.vue'
 import SettingsDictTab from './SettingsDictTab.vue'
 import SettingsLinksTab from './SettingsLinksTab.vue'
@@ -370,6 +399,14 @@ import {
   translateStaff,
 } from './settings-state'
 import type { TabKey } from './settings-state'
+
+/**
+ * Сколько держать кнопку сброса «на взводе».
+ *
+ * Восьми секунд хватает, чтобы прочитать предупреждение и нажать второй раз, но мало,
+ * чтобы взвод дожил до случайного клика по тому же месту позже.
+ */
+const CLEAR_ARM_MS = 8000
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'translate', label: 'Перевод' },
@@ -438,11 +475,73 @@ function onApply(): void {
   void reloadPage()
 }
 
+// ==== Очистка кэша ====
+
+/** Первый клик взвёл кнопку и показал предупреждение. */
+const clearArmed = ref(false)
+/** Очистка идёт или уже завершилась и ждёт перезагрузки: повторный клик бессмыслен. */
+const clearBusy = ref(false)
+const clearLabel = ref('Очистить кэш')
+const clearTitle = ref('Удалить сохранённые данные и перезагрузить страницу')
+
+let clearTimer: number | undefined
+
+/** Снять взвод и вернуть кнопке исходный вид. */
+function disarmClear(): void {
+  if (clearTimer !== undefined) {
+    window.clearTimeout(clearTimer)
+    clearTimer = undefined
+  }
+  if (clearBusy.value) return
+  clearArmed.value = false
+  clearLabel.value = 'Очистить кэш'
+  clearTitle.value = 'Удалить сохранённые данные и перезагрузить страницу'
+}
+
+/**
+ * Сброс кэша в два шага.
+ *
+ * Второй клик требуется именно потому, что действие необратимое и дорогое: после
+ * сброса весь перевод собирается заново и по сети едет сотни запросов к Shikimori
+ * под ограничителем скорости. Цена случайного клика — долгая работа вполсилы.
+ *
+ * clearCache() наружу не бросает и всегда разрешается (см. core/db.ts), поэтому
+ * перезагрузка вызывается безусловно: она полезна и при частичной очистке. catch
+ * всё равно есть: молчаливый промис без обработчика запрещён правилами проекта.
+ *
+ * alert('Кэш сброшен!') из монолита убран: о результате теперь говорит сама кнопка,
+ * и это одинаково работает в браузере и в окне оболочки.
+ */
 function onClearCache(): void {
-  void clearCache().then(() => {
-    alert('Кэш сброшен!')
-    void reloadPage()
-  })
+  if (clearBusy.value) return
+
+  if (!clearArmed.value) {
+    clearArmed.value = true
+    clearLabel.value = 'Точно очистить?'
+    clearTitle.value = 'Нажмите ещё раз, чтобы подтвердить очистку'
+    clearTimer = window.setTimeout(disarmClear, CLEAR_ARM_MS)
+    return
+  }
+
+  if (clearTimer !== undefined) {
+    window.clearTimeout(clearTimer)
+    clearTimer = undefined
+  }
+
+  clearBusy.value = true
+  clearArmed.value = false
+  clearLabel.value = 'Очистка...'
+  clearTitle.value = 'Идёт очистка кэша'
+
+  void clearCache()
+    .catch((e: unknown) => {
+      Logger('ERROR', 'Сброс кэша: неожиданный сбой', e)
+    })
+    .then(() => {
+      clearLabel.value = 'Кэш сброшен'
+      clearTitle.value = 'Перезагрузка...'
+      void reloadPage()
+    })
 }
 
 // ==== Жизненный цикл ====
@@ -453,9 +552,16 @@ onMounted(() => {
   syncTitleSources()
 })
 
+onBeforeUnmount(() => {
+  if (clearTimer !== undefined) window.clearTimeout(clearTimer)
+})
+
 // Словарь и свои ссылки могут меняться извне (захват выделения на странице),
 // поэтому перечитываем их при каждом открытии панели.
+// Взвод кнопки сброса снимается и при закрытии, и при открытии: панель не должна
+// открываться с кнопкой, готовой стереть кэш по одному клику.
 watch(isSettingsOpen, (open) => {
+  disarmClear()
   if (!open) return
   refreshDict()
   reloadCustomLinks()

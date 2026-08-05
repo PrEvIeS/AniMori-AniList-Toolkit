@@ -112,9 +112,9 @@ fn is_reachable(host: &str, port: u16) -> bool {
 
     // Имя может развернуться в несколько адресов (IPv6 и IPv4): достаточно любого
     // ответившего, именно так поступит и сам движок.
-    addrs
-        .iter()
-        .any(|addr| TcpStream::connect_timeout(addr, Duration::from_millis(PROBE_TIMEOUT_MS)).is_ok())
+    addrs.iter().any(|addr| {
+        TcpStream::connect_timeout(addr, Duration::from_millis(PROBE_TIMEOUT_MS)).is_ok()
+    })
 }
 
 /// Читает настройку прокси из файла настроек.
@@ -226,5 +226,4 @@ pub fn apply_to_webview(app: &AppHandle) {
         let _ = &value;
         log::warn!("Прокси для окна на этой платформе пока не поддержан — страница идёт напрямую");
     }
-}
 }

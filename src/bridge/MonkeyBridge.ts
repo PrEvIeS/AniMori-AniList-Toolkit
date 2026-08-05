@@ -11,8 +11,11 @@ import {
   type IBridge,
   type IClipboard,
   type IHttp,
+  type IProxyDiagnostics,
   type IShell,
   type IStorage,
+  type ProxyProbe,
+  type ProxyStatus,
 } from './IBridge'
 
 // ==== storage ====
@@ -191,6 +194,30 @@ const monkeyShell: IShell = {
   },
 }
 
+// ==== proxy diagnostics ====
+
+/**
+ * Пункт 5.3.6. В браузерной сборке диагностировать нечего, и это не недоделка.
+ *
+ * Настройки прокси AniMori управляют только окном десктопного приложения. В браузере
+ * прокси задаёт сам браузер или система, а запросы уходят через GM_xmlhttpRequest,
+ * у которого своего прокси нет вовсе. Спросить браузер, через что он ходит,
+ * со стороны страницы нельзя в принципе.
+ *
+ * Карточка прокси в юзерскрипте не рисуется, так что вызвать это сегодня некому,
+ * но заглушка обязана быть честной: ответ `off` — это правда об этой платформе,
+ * а не вежливый отказ.
+ */
+const monkeyProxyDiagnostics: IProxyDiagnostics = {
+  status(): Promise<ProxyStatus> {
+    return Promise.resolve({ outcome: 'off', server: '', hasCredentials: false })
+  },
+
+  probe(): Promise<ProxyProbe> {
+    return Promise.resolve({ outcome: 'off', server: '', reachable: false, latencyMs: 0 })
+  },
+}
+
 // ==== сборка ====
 
 export const monkeyBridge: IBridge = {
@@ -199,6 +226,7 @@ export const monkeyBridge: IBridge = {
   http: monkeyHttp,
   clipboard: monkeyClipboard,
   shell: monkeyShell,
+  proxyDiagnostics: monkeyProxyDiagnostics,
 }
 
 // Пункт 3.4: общее для обеих реализаций имя экспорта.

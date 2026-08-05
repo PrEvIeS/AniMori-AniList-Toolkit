@@ -265,6 +265,23 @@ async function loadProxyOption(): Promise<TauriProxyOption> {
 
 // ==== http ====
 
+/**
+ * Как представляется наш канал.
+ *
+ * Пункт 5.3.5, по живому случаю. tauri-plugin-http не выставляет User-Agent вовсе,
+ * и reqwest подписывается своим именем. Для AnimeThemes этого достаточно, чтобы
+ * ответить 403, а Shikimori своими правилами API прямо просит присылать название
+ * приложения.
+ *
+ * В юзерскрипте вопроса нет и не было: GM_xmlhttpRequest уходит с заголовком самого
+ * браузера, и подменить его менеджер всё равно не даст. То есть до этой правки две
+ * сборки ходили в сеть по-разному, и хуже вела себя именно десктопная.
+ *
+ * Номер версии приезжает из package.json через define в vite.config.ts: второй
+ * источник номера заводить нельзя — обоснование там же, в шапке конфига.
+ */
+const DEFAULT_USER_AGENT = `AniMori/${__ANIMORI_VERSION__} (+https://github.com/foulnike/AniMori-AniList-Toolkit)`
+
 const tauriHttp: IHttp = {
   async request(options: HttpRequestOptions): Promise<HttpResponse> {
     const { url, method = 'GET', headers, body, timeoutMs, credentials = 'include' } = options
@@ -290,7 +307,10 @@ const tauriHttp: IHttp = {
     try {
       const res = await tauriFetch(url, {
         method,
-        headers,
+        // Свой заголовок идёт ПОД заголовками вызывающего: клиент, которому нужно
+        // особое представление (например браузерное для AnimeThemes), обязан иметь
+        // возможность перебить умолчание, не трогая мост.
+        headers: { 'User-Agent': DEFAULT_USER_AGENT, ...headers },
         body,
         credentials,
         signal: controller.signal,

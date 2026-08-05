@@ -3,6 +3,10 @@
 // Платформа сборки (см. define в vite.config.ts).
 declare const __ANIMORI_PLATFORM__: 'userscript' | 'tauri'
 
+// Номер версии из package.json (см. define в vite.config.ts).
+// Пункт 5.3.5: нужен рантайму для заголовка User-Agent нашего канала.
+declare const __ANIMORI_VERSION__: string
+
 // ==== GM_* API ====
 // @types/greasemonkey описывает только GM.* (GM4), а монолит использует GM_*.
 // Этап 3 прячет эти вызовы за Bridge; до тех пор описываем ровно то, что есть в @grant.

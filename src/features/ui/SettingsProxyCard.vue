@@ -19,6 +19,11 @@
   Поля работают по @change, а не v-model — та же схема, что у остальных текстовых полей
   панели: записывать адрес прокси на каждое нажатие клавиши — это десятки записей
   в файл на одну строку.
+
+  Пункт 5.3.6 добавил сюда две вещи: строку состояния и кнопку проверки. До них
+  единственным способом узнать, работает ли прокси, было перезапустить приложение
+  и посмотреть, загрузится ли страница — а если не загрузится, то вместе с ней пропадала
+  и эта панель, ибо она живёт внутри страницы.
 -->
 <template>
   <div class="amk-card" v-if="isDesktop">
@@ -120,6 +125,31 @@
       Изменения сохранены и заработают после перезапуска приложения — кнопка «Применить
       и перезагрузить» здесь не поможет и обновит только страницу.
     </div>
+
+    <!--
+      Состояние и проверка. Две разные строки, потому что отвечают на разные вопросы:
+      первая — «что произошло при запуске», вторая — «жив ли адрес сейчас».
+    -->
+    <div class="amk-row" style="padding-top: 10px">
+      <span class="amk-row-label"
+        ><b>Состояние</b><span class="amk-row-hint">{{ statusText }}</span></span
+      >
+    </div>
+
+    <div class="amk-row" style="border-top: none; padding-top: 0">
+      <button class="amk-btn amk-btn-block" id="am-proxy-check" :disabled="checking" @click="check()">
+        {{ checking ? 'Проверяем…' : 'Проверить сейчас' }}
+      </button>
+    </div>
+
+    <div
+      v-if="checkText"
+      class="amk-row-hint"
+      style="padding: 8px 2px 0; line-height: 1.5"
+      :style="{ color: checkOk ? 'rgb(var(--color-green, 166,227,161))' : 'rgb(var(--color-red, 243,139,168))' }"
+    >
+      {{ checkText }}
+    </div>
   </div>
 </template>
 
@@ -127,6 +157,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { Bridge } from '@/bridge'
+import type { ProxyStatus } from '@/bridge'
 import {
   DEFAULT_PROXY,
   PROXY_KEYS,
@@ -143,6 +174,18 @@ import { Logger } from '../../utils/logger'
  */
 const isDesktop = Bridge.platform === 'tauri'
 
+/**
+ * Куда стучимся боевым запросом при проверке.
+ *
+ * Адрес взят из того же списка разрешённых в capabilities/default.json, что и у проверки
+ * сети: новый домен потребовал бы правки ACL ради одной кнопки. Файл крошечный
+ * и отдаётся без авторизации.
+ */
+const PROBE_URL = 'https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/README.md'
+
+/** Предел ожидания боевого запроса. Дольше человек всᑑ равно считает кнопку зависшей. */
+const CHECK_TIMEOUT_MS = 8000
+
 const enabled = ref(DEFAULT_PROXY.enabled)
 const kind = ref<ProxyKind>(DEFAULT_PROXY.kind)
 const host = ref(DEFAULT_PROXY.host)
@@ -152,12 +195,19 @@ const bypass = ref(DEFAULT_PROXY.bypass)
 
 /**
  * Порт держим строкой, а число пишем в хранилище. Иначе любая опечатка в поле
- * мгновенно превратилась бы в ноль и затёрла уже набранное человеком.
+ * мгновенно превратилась бы в ноль и затᑑрла уже набранное человеком.
  */
 const portDraft = ref(String(DEFAULT_PROXY.port))
 
 /** Была ли хотя бы одна запись за время жизни панели. */
 const needsRestart = ref(false)
+
+/** Что произошло с прокси при запуске приложения. Наполняется со стороны Rust. */
+const status = ref<ProxyStatus | null>(null)
+
+const checking = ref(false)
+const checkText = ref('')
+const checkOk = ref(false)
 
 const showBadConfig = computed(
   () =>
@@ -174,6 +224,105 @@ const showBadConfig = computed(
 )
 
 const showPasswordNote = computed(() => password.value.length > 0)
+
+/**
+ * Строка состояния.
+ *
+ * Говорит только о прошедшем запуске, а не о том, что набрано в полях сейчас: это
+ * разные вещи, пока приложение не перезапущено. Путать их нельзя: человек, видя
+ * «применён» рядом с только что введённым адресом, решил бы, что тот уже работает.
+ */
+const statusText = computed(() => {
+  const s = status.value
+  if (!s) return 'читаем…'
+
+  if (s.outcome === 'off') return 'при запуске прокси был выключен — трафик идёт напрямую'
+  if (s.outcome === 'invalid')
+    return 'при запуске прокси был включён, но адрес негоден — трафик идёт напрямую'
+  if (s.outcome === 'unreachable')
+    return `при запуске ${s.server} не ответил — трафик идёт напрямую`
+
+  return `при запуске применён ${s.server}${s.hasCredentials ? ' (с логином)' : ''}`
+})
+
+/**
+ * Проверка по кнопке.
+ *
+ * Два шага, потому что они ловят разные беды:
+ *
+ *   1. Щуп со стороны Rust — простое TCP-соединение с адресом из файла настроек.
+ *      Отвечает на вопрос «а он вообще там есть?».
+ *   2. Боевой запрос через мост — проходит тем же пуᑑм, что и все наши запросы
+ *      к API. Отвечает на вопрос «а он пускает наружу?».
+ *
+ * Именно расхождение этих двух ответов — самый полезный случай: живой прокси,
+ * который принимает соединение, но не выпускает в сеть, одним только щупом не ловится.
+ *
+ * Ограничителя темпа тут нет осознанно (в отличие от проверки сети): запрос один,
+ * идёт на статику GitHub, а человек, подбирающий рабочий прокси, будет жать кнопку
+ * подряд — и это нормальное поведение, а не злоупотребление.
+ */
+async function check(): Promise<void> {
+  if (checking.value) return
+
+  checking.value = true
+  checkText.value = ''
+
+  try {
+    const probe = await Bridge.proxyDiagnostics.probe()
+
+    // Прокси выключен или настроен негодно — проверять нечего, и боевой запрос
+    // только запутал бы: он ушёл бы напрямую и успешно.
+    if (probe.outcome === 'off') {
+      checkOk.value = false
+      checkText.value = 'Прокси выключен — проверять нечего.'
+      return
+    }
+
+    if (probe.outcome === 'invalid') {
+      checkOk.value = false
+      checkText.value = 'Адрес или порт заданы неверно — проверять нечего.'
+      return
+    }
+
+    // Боевой запрос делаем в любом случае, даже когда щуп молчит: прокси может
+    // отказывать в голом TCP-соединении без запроса, но работать.
+    let reached = false
+    try {
+      const res = await Bridge.http.request({
+        url: PROBE_URL,
+        method: 'GET',
+        timeoutMs: CHECK_TIMEOUT_MS,
+        credentials: 'omit',
+      })
+      reached = res.ok
+    } catch (e) {
+      Logger('WARN', 'Проверка прокси: боевой запрос не прошёл', e)
+    }
+
+    // Четыре сочетания. Каждое описано словами, а не галочкой: человеку нужно знать
+    // не «хорошо/плохо», а что именно чинить.
+    if (probe.reachable && reached) {
+      checkOk.value = true
+      checkText.value = `Прокси ${probe.server} ответил за ${probe.latencyMs} мс, запрос через него прошёл.`
+    } else if (probe.reachable && !reached) {
+      checkOk.value = false
+      checkText.value = `Прокси ${probe.server} ответил, но наружу не пустил: проверьте логин, пароль и вид прокси.`
+    } else if (!probe.reachable && reached) {
+      checkOk.value = false
+      checkText.value = `Прокси ${probe.server} не отвечает, а запрос всᑑ равно прошᑑл — значит, он ушᑑл напрямую, мимо прокси.`
+    } else {
+      checkOk.value = false
+      checkText.value = `Прокси ${probe.server} не отвечает, и запрос не прошᑑл.`
+    }
+  } catch (e) {
+    checkOk.value = false
+    checkText.value = 'Не удалось выполнить проверку — подробности в журнале.'
+    Logger('ERROR', 'Не удалось проверить прокси', e)
+  } finally {
+    checking.value = false
+  }
+}
 
 /**
  * Запись одного ключа.
@@ -275,8 +424,20 @@ async function load(): Promise<void> {
   }
 }
 
+/**
+ * Состояние запуска. Читается из памяти процесса оболочки, сеть не трогается.
+ */
+async function loadStatus(): Promise<void> {
+  try {
+    status.value = await Bridge.proxyDiagnostics.status()
+  } catch (e) {
+    Logger('ERROR', 'Не удалось прочитать состояние прокси', e)
+  }
+}
+
 onMounted(() => {
   if (!isDesktop) return
   void load()
+  void loadStatus()
 })
 </script>

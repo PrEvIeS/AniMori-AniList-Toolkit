@@ -1,5 +1,15 @@
 // Этап 1 п.1.10 (часть 3/3): виджет рейтингов Shikimori/MAL/AniList (строки 3257-3320 монолита).
+//
+// Этап 5, итерация 5.2: без данных Shikimori виджет раньше просто не появлялся,
+// и для человека это было неотличимо от поломки расширения. Теперь, если все зеркала
+// молчат устойчиво (shikimoriTrouble()), блок всё равно строится: оценка AniList
+// у нас есть всегда, а вместо остального идёт одна строка причины.
+//
+// Совета про VPN здесь нет намеренно. Отказ одного источника ещё ничего не говорит
+// про сеть в целом, и разговор про туннель — дело общего тоста, который встаёт только
+// при двух и более молчащих источниках. Здесь только факт.
 
+import { shikimoriTrouble } from '../../api/shikimori'
 import { amApplyAccentToDom } from '../../core/accent'
 import { settings } from '../../core/settings'
 import { getPlural } from '../../utils/dom'
@@ -51,6 +61,17 @@ function createRatingItem(options: RatingItemOptions): HTMLElement {
 
   item.append(star, label, value)
   return item
+}
+
+/** Строка отказа под бейджами. Один стиль для всех виджетов этапа 5. */
+function createTroubleNote(text: string): HTMLElement {
+  const note = document.createElement('div')
+  note.className = 'am-net-note'
+  note.textContent = text
+  note.style.cssText =
+    'margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 0.85em; line-height: 1.35;' +
+    ' color: rgb(var(--color-text-light)); background: rgba(var(--color-red, 252,129,129), 0.10);'
+  return note
 }
 
 /** Средняя оценка Shikimori, посчитанная из распределения голосов. */
@@ -142,10 +163,57 @@ function myAnimeListUrl(ctx: MediaContext): string | undefined {
   return 'https://myanimelist.net/' + section + '/' + String(malId)
 }
 
+/** Оценка AniList в виде текста. Есть всегда, когда открыта сама страница. */
+function anilistScoreText(ctx: MediaContext): string {
+  const averageScore = ctx.malData?.averageScore
+  return typeof averageScore === 'number' && averageScore > 0
+    ? (averageScore / 10).toFixed(2)
+    : NO_VALUE
+}
+
+/**
+ * Урезанный блок на случай молчания Shikimori: только оценка AniList и причина.
+ *
+ * Бейджи Shikimori и MyAnimeList не рисуются вовсе, а не ставятся с N/A: адреса
+ * для них берутся из ответа Shikimori, а пустой бейдж без ссылки выглядит поломкой.
+ */
+function mountTrouble(ctx: MediaContext, sidebar: HTMLElement, reason: string): void {
+  const box = document.createElement('div')
+  box.className = 'animori-ratings am-accent-scope'
+
+  box.appendChild(
+    createRatingItem({
+      className: 'al-badge',
+      label: 'ANILIST',
+      value: anilistScoreText(ctx),
+      title: 'Официальная средняя оценка AniList',
+    }),
+  )
+  box.appendChild(
+    createTroubleNote(
+      `Shikimori ${reason}: оценки и распределение голосов сейчас недоступны. ` +
+        `Подробности — в настройках, вкладка «Разработчик».`,
+    ),
+  )
+
+  sidebar.prepend(box)
+  amApplyAccentToDom()
+}
+
 function mount(ctx: MediaContext): void {
   if (!settings.enableRatings) return
-  if (!ctx.sidebar || !ctx.shikiData) return
+
+  const sidebar = ctx.sidebar
+  if (!sidebar) return
   if (document.querySelector('.animori-ratings')) return
+
+  // Данных нет. Если причина известна — говорим о ней, иначе молчим как раньше:
+  // у тайтла может не быть карточки на Shikimori, и это не повод для сообщения.
+  if (!ctx.shikiData) {
+    const reason = shikimoriTrouble()
+    if (reason) mountTrouble(ctx, sidebar, reason)
+    return
+  }
 
   const box = document.createElement('div')
   box.className = 'animori-ratings am-accent-scope'
@@ -156,9 +224,7 @@ function mount(ctx: MediaContext): void {
   const malScore = ctx.shikiData.score
   const malScoreText = malScore ? String(malScore) : NO_VALUE
 
-  const averageScore = ctx.malData?.averageScore
-  const alScoreText =
-    typeof averageScore === 'number' && averageScore > 0 ? (averageScore / 10).toFixed(2) : NO_VALUE
+  const alScoreText = anilistScoreText(ctx)
 
   const shikiBadge = createRatingItem({
     className: 'shiki-badge',
@@ -183,7 +249,7 @@ function mount(ctx: MediaContext): void {
   if (alValue) alValue.classList.add('al-score-val')
 
   box.append(shikiBadge, malBadge, alBadge)
-  ctx.sidebar.prepend(box)
+  sidebar.prepend(box)
 
   try {
     const histo = buildHistogram('SHIKIMORI', scoreMap)

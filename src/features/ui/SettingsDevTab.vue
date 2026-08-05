@@ -14,6 +14,11 @@
   Верстка строки отчёта: слева название и причина (сжимается и переносится), справа
   код и время в колонке фиксированной ширины без переноса. Без min-width: 0 левая
   колонка во флексе не сжимается меньше своего текста и наезжает на правую.
+
+  Итерация 5.3, часть третья: сюда же встала карточка прокси (SettingsProxyCard.vue).
+  Место выбрано по соседству с проверкой сети: прокси включают именно тогда, когда
+  проверка показала недоступные источники, и два элемента читаются как один сценарий.
+  Карточка сама скрывает себя в юзерскриптной сборке, поэтому здесь проверки платформы нет.
 -->
 <template>
   <div class="amk-card">
@@ -70,11 +75,14 @@
       </div>
     </div>
   </div>
+
+  <SettingsProxyCard />
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
 
+import SettingsProxyCard from './SettingsProxyCard.vue'
 import { canRunNetCheck, netCheckCooldownRemaining, runNetCheck } from './net-check'
 import type { NetCheckRow } from './net-check'
 import { enableLogger } from './settings-state'

@@ -12,6 +12,15 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { LazyStore } from '@tauri-apps/plugin-store'
 
 import {
+  DEFAULT_PROXY,
+  PROXY_KEYS,
+  normalizeProxyKind,
+  proxyBypassList,
+  proxyUrl,
+  type ProxyConfig,
+} from '@/core/proxy'
+
+import {
   BridgeHttpError,
   type HttpRequestOptions,
   type HttpResponse,
@@ -157,11 +166,112 @@ const tauriStorage: IStorage = {
   },
 }
 
+// ==== прокси ====
+
+/**
+ * Пункт 5.3, часть первая: НАШ канал через прокси.
+ *
+ * В десктопной сборке трафик разделён на два независимых потока, и это главное, что надо
+ * понимать про прокси здесь:
+ *
+ *   1. Запросы самого сайта — страница, картинки, кадр плеера — идут из WebView2
+ *      и настройкой отсюда не управляются вовсе: там нужен аргумент командной строки
+ *      при запуске процесса (часть вторая, src-tauri/src/lib.rs).
+ *   2. Наши собственные запросы к API идут мимо WebView2 — из процесса оболочки
+ *      через tauri-plugin-http. Именно они настраиваются здесь.
+ *
+ * Следствие для живой проверки: после этой правки через прокси пойдёт перевод,
+ * оценки, франшиза, музыка и словарь, а сама страница AniList — пока напрямую.
+ * Так и задумано на этом шаге.
+ *
+ * Тип настройки выведён из самого fetch плагина, а не импортирован по имени:
+ * имя экспорта менялось между версиями плагина, а форма второго аргумента — нет.
+ */
+type TauriFetchOptions = NonNullable<Parameters<typeof tauriFetch>[1]>
+type TauriProxyOption = TauriFetchOptions['proxy']
+
+/**
+ * Разобранная настройка прокси. Читается ОДИН раз за сеанс и больше не пересматривается.
+ *
+ * Почему без подписки на изменения: второй канал (WebView2) всё равно требует
+ * перезапуска приложения. Если бы наш канал подхватывал новый адрес сразу, а страница —
+ * только после перезапуска, приложение жило бы в двух разных сетях одновременно:
+ * часть данных из одной страны, часть из другой. Один адрес на весь сеанс — предсказуемо.
+ */
+let proxyOption: TauriProxyOption
+let proxyReady = false
+
+async function loadProxyOption(): Promise<TauriProxyOption> {
+  if (proxyReady) return proxyOption
+
+  try {
+    const [enabled, kind, host, port, login, password, bypass] = await Promise.all([
+      storageGet(PROXY_KEYS.enabled, DEFAULT_PROXY.enabled),
+      storageGet(PROXY_KEYS.kind, DEFAULT_PROXY.kind),
+      storageGet(PROXY_KEYS.host, DEFAULT_PROXY.host),
+      storageGet(PROXY_KEYS.port, DEFAULT_PROXY.port),
+      storageGet(PROXY_KEYS.login, DEFAULT_PROXY.login),
+      storageGet(PROXY_KEYS.password, DEFAULT_PROXY.password),
+      storageGet(PROXY_KEYS.bypass, DEFAULT_PROXY.bypass),
+    ])
+
+    const config: ProxyConfig = {
+      enabled,
+      kind: normalizeProxyKind(kind),
+      host: String(host ?? ''),
+      port,
+      login: String(login ?? ''),
+      password: String(password ?? ''),
+      bypass: String(bypass ?? ''),
+    }
+
+    const url = proxyUrl(config)
+
+    if (config.enabled && !url) {
+      // Включён, но настроен негодно. Молчать нельзя (инвариант 4): иначе человек
+      // видит включённый тумблер и думает, что идёт через прокси, а трафик идёт напрямую.
+      // Логгер здесь недоступен по той же причине, что и в core/settings.ts: он сам
+      // читает мост, и импорт дал бы цикл.
+      console.warn(
+        '[AniMori] Прокси включён, но адрес или порт заданы неверно — запросы идут напрямую',
+      )
+    }
+
+    if (url) {
+      const noProxy = proxyBypassList(config).join(',')
+      const trimmedLogin = config.login.trim()
+
+      proxyOption = {
+        all: {
+          url,
+          // Учётные данные передаются отдельно, а не в составе адреса: пароль с
+          // двоеточием или собакой сломал бы склейку user:pass@host.
+          ...(trimmedLogin ? { basicAuth: { username: trimmedLogin, password: config.password } } : {}),
+          ...(noProxy ? { noProxy } : {}),
+        },
+      }
+    } else {
+      proxyOption = undefined
+    }
+  } catch (e) {
+    console.error('[AniMori] Не удалось прочитать настройки прокси, запросы идут напрямую', e)
+    proxyOption = undefined
+  } finally {
+    proxyReady = true
+  }
+
+  return proxyOption
+}
+
 // ==== http ====
 
 const tauriHttp: IHttp = {
   async request(options: HttpRequestOptions): Promise<HttpResponse> {
     const { url, method = 'GET', headers, body, timeoutMs, credentials = 'include' } = options
+
+    // Настройка прокси берётся ДО запуска таймера: первое чтение идёт в оболочку,
+    // и съедать им таймаут запроса (у зеркал Shikimori — 5000 мс) было бы неверно.
+    const proxy = await loadProxyOption()
 
     // У fetch плагина есть connectTimeout, но он ограничивает только фазу установки соединения.
     // GM_xmlhttpRequest считает таймаут на весь запрос целиком, и именно на это опирается
@@ -184,6 +294,10 @@ const tauriHttp: IHttp = {
         body,
         credentials,
         signal: controller.signal,
+        // Ключ добавляется только когда прокси настроен: явный proxy: undefined
+        // плагин принимает, но пустой ключ в параметрах — лишний повод для вопросов
+        // при разборе сетевых сбоев.
+        ...(proxy ? { proxy } : {}),
       })
 
       const text = await res.text()
@@ -205,6 +319,12 @@ const tauriHttp: IHttp = {
       }
     } catch (e) {
       // Код вне 2xx сюда не попадает: fetch отклоняется только на транспортных сбоях.
+      //
+      // Пункт 5.3: мёртвый или неверно указанный прокси приходит сюда же и выглядит
+      // как обычный сетевой сбой — то есть как недоступность ВСЕГО сразу. Разделить
+      // одно от другого по ответу reqwest невозможно, поэтому разбор оставлен
+      // проверке сети во вкладке «Разработчик»: если лежат все источники без
+      // исключения, виноват канал, а не службы.
       if (timedOut) throw new BridgeHttpError('timeout', url)
 
       const name = e instanceof Error ? e.name : ''

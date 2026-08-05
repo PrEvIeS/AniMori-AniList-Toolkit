@@ -463,4 +463,19 @@ pub async fn animori_proxy_probe(app: AppHandle) -> Result<ProxyProbe, String> {
             Config::On(args) => args,
         };
 
-        let (reachable, latency_ms) = probe(&args.host, args.port, PROBE_TIMEO
+        let (reachable, latency_ms) = probe(&args.host, args.port, PROBE_TIMEOUT_MANUAL_MS);
+
+        ProxyProbe {
+            outcome: if reachable {
+                ProxyOutcome::Applied
+            } else {
+                ProxyOutcome::Unreachable
+            },
+            server: args.server,
+            has_credentials: args.has_credentials,
+            latency_ms,
+        }
+    })
+    .await
+    .map_err(|e| format!("Проверка прокси не завершилась: {e}"))
+}

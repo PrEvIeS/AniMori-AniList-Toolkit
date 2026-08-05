@@ -213,6 +213,12 @@ const monkeyProxyDiagnostics: IProxyDiagnostics = {
     return Promise.resolve({ outcome: 'off', server: '', hasCredentials: false })
   },
 
+  markPageReady(): Promise<void> {
+  // Сторожа страницы в браузере нет и быть не может: вкладку открывает и закрывает
+  // пользователь, прокси задаёт браузер, а настройки доступны и без нашей страницы.
+    return Promise.resolve()
+  },
+
   probe(): Promise<ProxyProbe> {
     return Promise.resolve({ outcome: 'off', server: '', reachable: false, latencyMs: 0 })
   },

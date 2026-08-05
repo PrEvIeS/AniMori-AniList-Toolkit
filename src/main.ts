@@ -33,6 +33,7 @@ import { initNetToast } from './features/ui/net-toast'
 import { initSettingsUI } from './features/ui/settings'
 import { installGlobalErrorHandlers, Logger } from './utils/logger'
 import { sweepPhantomRoots, unmountAll, unmountPageScoped } from './utils/vue-mounter'
+import { Bridge } from './bridge'
 
 /**
  * Задержка перед запуском сборщика мусора кэша (строка 4653 монолита).
@@ -326,6 +327,34 @@ async function bootstrap(): Promise<void> {
 // не ловил никто. Шаги уже изолированы через step(), но этот catch остаётся
 // последней сеткой: сбой в самом каркасе старта обязан оставить след в журнале,
 // а не исчезать в необработанном отказе промиса.
+
+// Сторож страницы (5.3.7). Отметка ставится ВНЕ bootstrap() и до него: упавший старт
+// и штатный ранний выход на чужом домене не должны выглядеть как отказ прокси.
+//
+// Почему опрос корня, а не голая отметка на верхнем уровне: бандл инжектится как
+// initialization_script и выполняется в том числе на странице ошибки WebView2 —
+// безусловная отметка отключила бы сторожа именно тогда, когда он нужен. Риск смены
+// разметки AniList принят осознанно: худшее последствие — лишний диалог, который
+// можно отклонить.
+const ANILIST_ROOT_SELECTOR = '#app'
+const ALIVE_POLL_MS = 250
+const ALIVE_ATTEMPTS = 32 // ~8 секунд, заведомо меньше 12 секунд сторожа
+
+function reportPageAlive(): void {
+  let left = ALIVE_ATTEMPTS
+  const tick = (): void => {
+    if (document.querySelector(ANILIST_ROOT_SELECTOR)) {
+      void Bridge.proxyDiagnostics.markPageReady()
+      return
+    }
+    if (--left <= 0) return
+    window.setTimeout(tick, ALIVE_POLL_MS)
+  }
+  tick()
+}
+
+reportPageAlive()
+
 void bootstrap().catch((e) => {
   Logger('ERROR', 'Старт AniMori оборвался', e)
 })

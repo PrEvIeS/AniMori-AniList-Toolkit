@@ -1,8 +1,22 @@
 // Этап 1 п.1.10 (часть 3/3): виджет музыкальных тем OP/ED (строки 3340-3456 монолита).
+//
+// Этап 5, итерация 5.2: разведены два исхода, которые раньше выглядели одинаково —
+// пустым местом в сайдбаре. Пустой список — штатный случай (у тайтла нет тем в базе),
+// блок по-прежнему остаётся скрытым. А вот отказ источника теперь пишется строкой:
+// клиент AnimeThemes по своему контракту никогда не отклоняется и о любой беде
+// сообщает null, поэтому само по себе null причины не несёт — её даёт учёт из
+// core/net-health.ts. Если учёт о беде не знает (битый JSON, лимит 429), блок остаётся
+// скрытым как раньше: лучше ничего, чем ложное объяснение.
 
 import { Bridge } from '@/bridge'
-import { fetchMalThemes, type MalThemes, type ThemeItem } from '../../api/animethemes'
+import {
+  NET_SOURCE_ANIMETHEMES,
+  fetchMalThemes,
+  type MalThemes,
+  type ThemeItem,
+} from '../../api/animethemes'
 import { amApplyAccentToDom } from '../../core/accent'
+import { describeState, getHealth, isTroubled } from '../../core/net-health'
 import { settings } from '../../core/settings'
 import { amCopy, applyMarquee } from '../../utils/dom'
 import { Logger } from '../../utils/logger'
@@ -222,6 +236,38 @@ function fillBox(box: HTMLElement, themes: MalThemes): void {
   box.style.display = 'block'
 }
 
+/**
+ * Причина отказа AnimeThemes или null, если учёт считает источник живым.
+ *
+ * Замеры 4 августа: без туннеля источник отвечает 403 от Cloudflare, через туннель — 200.
+ * Поэтому текст берётся из состояния, а не зашит строкой: «не отвечает» и «отклонил
+ * запрос» — разные беды, и лечатся они тоже по-разному.
+ */
+function themesTrouble(): string | null {
+  if (!isTroubled(NET_SOURCE_ANIMETHEMES)) return null
+  const state = getHealth(NET_SOURCE_ANIMETHEMES)?.state
+  return state ? describeState(state) : null
+}
+
+/** Строка отказа вместо списка треков. Стиль тот же, что у виджета рейтингов. */
+function fillTrouble(box: HTMLElement, reason: string): void {
+  const heading = document.createElement('h2')
+  heading.textContent = 'Музыкальные темы'
+  heading.style.cssText = 'margin: 0 0 8px; width: 100%; text-align: center;'
+
+  const note = document.createElement('div')
+  note.className = 'am-net-note'
+  note.textContent =
+    `AnimeThemes ${reason}: список опенингов и эндингов сейчас недоступен. ` +
+    `Подробности — в настройках, вкладка «Разработчик».`
+  note.style.cssText =
+    'padding: 8px 10px; border-radius: 6px; font-size: 0.85em; line-height: 1.35;' +
+    ' color: rgb(var(--color-text-light)); background: rgba(var(--color-red, 252,129,129), 0.10);'
+
+  box.append(heading, note)
+  box.style.display = 'block'
+}
+
 async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<void> {
   // Блок создаём сразу скрытым: он занимает место в DOM и не даёт повторно дёргать API.
   const box = document.createElement('div')
@@ -235,8 +281,17 @@ async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<voi
   // ответа и ничего не задерживает, но к моменту сборки ссылок значение уже в памяти.
   const [themes] = await Promise.all([fetchMalThemes(ctx.malData.idMal), loadService()])
   if (!isStillOnPage(ctx.aniId)) return
-  // Тем нет — блок остаётся скрытым, а не удаляется: иначе виджет запросит их снова.
-  if (!themes || (themes.openings.length === 0 && themes.endings.length === 0)) return
+
+  // null — источник не отдал данные. Если учёт знает причину — пишем её человеку,
+  // иначе оставляем блок скрытым, как было до этапа 5.
+  if (!themes) {
+    const reason = themesTrouble()
+    if (reason) fillTrouble(box, reason)
+    return
+  }
+
+  // Тем нет в базе — блок остаётся скрытым, а не удаляется: иначе виджет запросит их снова.
+  if (themes.openings.length === 0 && themes.endings.length === 0) return
 
   fillBox(box, themes)
   amApplyAccentToDom()

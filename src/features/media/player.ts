@@ -12,10 +12,21 @@
 // Итерация 3.5.3: запрос к Kodik ушёл с GM_xmlhttpRequest на Bridge.http, а список
 // любимых озвучек — на Bridge.storage с кэшем в памяти. Кэш обязателен: сердечко
 // рядом с озвучкой перерисовывает список синхронно, и ждать там нечего.
+//
+// Этап 5, итерация 5.2: запрос к Kodik теперь отчитывается в core/net-health.ts. До этого
+// плеер был единственным клиентом без учёта: проба kodik:api в проверке сети была,
+// а реальные отказы при запуске мимо учёта проходили, и общий тост о падении
+// источников про Kodik ничего не знал. Имя источника совпадает с пробой (kodik:api),
+// иначе в таблице было бы две строки про одну и ту же службу.
+//
+// Подпись резервного плеера тоже стала конкретнее. «Сетевая ошибка» ничего не говорила
+// человеку о том, что делать: теперь видно, что отказала база озвучек, а сам плеер
+// при этом обычно работает — именно поэтому резерв вообще имеет смысл.
 
 import { Bridge } from '@/bridge'
 import { anilistQuery } from '../../api/anilist'
 import { amApplyAccentToDom } from '../../core/accent'
+import { reportError, reportStatus } from '../../core/net-health'
 import { settings } from '../../core/settings'
 import { Logger } from '../../utils/logger'
 import { hidePlayerButton, showPlayerButton } from '../ui/action-panel-state'
@@ -23,6 +34,10 @@ import type { MediaContext, MediaWidget } from './types'
 
 /** Публичный токен Kodik из монолита. */
 const KODIK_TOKEN = '16f20d024a6fa20700b389c44d9ab159'
+
+/** Имя и подпись источника в учёте доступности. Совпадают с пробой из net-check.ts. */
+export const NET_SOURCE_KODIK = 'kodik:api'
+export const NET_LABEL_KODIK = 'Kodik API'
 
 const FAV_STORAGE_KEY = 'am_fav_translations'
 
@@ -251,6 +266,9 @@ async function openPlayer(ctx: MediaContext): Promise<void> {
   ])
 
   let payload: KodikSearchResponse
+  // Замер включает только сам запрос: ожидание прогресса выше — забота AniList,
+  // и примешивать его к времени ответа Kodik было бы неправдой в таблице проверки.
+  const startedAt = Date.now()
   try {
     const res = await Bridge.http.request({
       method: 'GET',
@@ -258,17 +276,21 @@ async function openPlayer(ctx: MediaContext): Promise<void> {
         'https://kodik-api.com/search?token=' + KODIK_TOKEN + '&shikimori_id=' + String(malId ?? ''),
       credentials: 'omit',
     })
+    reportStatus(NET_SOURCE_KODIK, NET_LABEL_KODIK, res.status, Date.now() - startedAt)
+
     if (!res.ok) {
       Logger('ERROR', '[Player] Kodik API ответил ошибкой', { status: res.status })
-      fallbackPlayer('Ошибка API')
+      fallbackPlayer(`база озвучек ответила ${res.status}`)
       return
     }
     payload = JSON.parse(res.text) as KodikSearchResponse
   } catch (e) {
     // Сюда попадают и сетевые сбои, и битый JSON. В обоих случаях показываем
     // резервный плеер, а не оставляем пользователя с надписью «Подключение к базе...».
+    // Битый JSON в учёте не отразится: reportError берёт только транспортные сбои.
+    reportError(NET_SOURCE_KODIK, NET_LABEL_KODIK, e, Date.now() - startedAt)
     Logger('ERROR', '[Player] Kodik API: запрос не удался', e)
-    fallbackPlayer('Сетевая ошибка')
+    fallbackPlayer('база озвучек недоступна')
     return
   }
 

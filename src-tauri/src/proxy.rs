@@ -417,6 +417,21 @@ pub fn animori_proxy_status(state: State<'_, ProxyState>) -> ProxyStatus {
     guard.clone()
 }
 
+/// Исход и адрес прокси для сторожа страницы (пункт 5.3.7, proxy_guard.rs).
+///
+/// Отдельная функция, а не публичные поля ProxyStatus: наружу нужны ровно два
+/// значения, а структура целиком — это ответ команде, и её форма подчинена
+/// сериализации для страницы, а не удобству соседнего модуля.
+///
+/// None означает, что состояние ещё не заведено. В штатном порядке такого не бывает:
+/// apply_to_webview() отрабатывает в начале setup(), задолго до создания окна. Но
+/// падать из-за перестановки вызовов в lib.rs сторож не вправе — его дело второстепенное.
+pub fn current_status(app: &AppHandle) -> Option<(ProxyOutcome, String)> {
+    let state = app.try_state::<ProxyState>()?;
+    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    Some((guard.outcome, guard.server.clone()))
+}
+
 /// Проверить прокси прямо сейчас.
 ///
 /// Перечитывает файл настроек ЗАНОВО, а не берёт снимок: смысл кнопки как раз в том,
@@ -448,19 +463,4 @@ pub async fn animori_proxy_probe(app: AppHandle) -> Result<ProxyProbe, String> {
             Config::On(args) => args,
         };
 
-        let (reachable, latency_ms) = probe(&args.host, args.port, PROBE_TIMEOUT_MANUAL_MS);
-
-        ProxyProbe {
-            outcome: if reachable {
-                ProxyOutcome::Applied
-            } else {
-                ProxyOutcome::Unreachable
-            },
-            server: args.server,
-            has_credentials: args.has_credentials,
-            latency_ms,
-        }
-    })
-    .await
-    .map_err(|e| format!("Проверка прокси не завершилась: {e}"))
-}
+        let (reachable, latency_ms) = probe(&args.host, args.port, PROBE_TIMEO

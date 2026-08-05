@@ -135,11 +135,7 @@ function patchWindowOpen(): void {
   if (nativeOpen) return
   nativeOpen = window.open.bind(window)
 
-  window.open = ((
-    url?: string | URL,
-    windowTarget?: string,
-    features?: string,
-  ): Window | null => {
+  window.open = ((url?: string | URL, windowTarget?: string, features?: string): Window | null => {
     if (url !== undefined && url !== '') {
       const parsed = parseUrl(String(url))
 

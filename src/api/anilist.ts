@@ -259,9 +259,7 @@ export async function anilistQuery<T = unknown>(
   if (remaining > 0) {
     // Длинную паузу не высиживаем внутри вызова — см. MAX_INLINE_WAIT_MS.
     if (remaining > MAX_INLINE_WAIT_MS) {
-      throw new Error(
-        `AniList недоступен, повтор через ${Math.ceil(remaining / 1000)}с`,
-      )
+      throw new Error(`AniList недоступен, повтор через ${Math.ceil(remaining / 1000)}с`)
     }
     await sleep(remaining + Math.floor(Math.random() * 500))
   }
@@ -332,9 +330,7 @@ export async function anilistQuery<T = unknown>(
     // Сервер лежит или закрылся — отступаем, а не пробуем снова через полсекунды.
     if (isServerFailure(res.status)) {
       const pause = backOffAfterServerFailure(res.status)
-      throw new Error(
-        `AniList недоступен (${res.status}), пауза ${Math.round(pause / 1000)}с`,
-      )
+      throw new Error(`AniList недоступен (${res.status}), пауза ${Math.round(pause / 1000)}с`)
     }
 
     Logger('ERROR', `AniList API Error HTTP ${res.status}`, res.text)

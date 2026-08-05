@@ -297,7 +297,7 @@ pub fn run() {
         // указаны с путём: generate_handler! разворачивается в обращение к функции по имени,
         // и без префикса модуля сборка просто не нашла бы их.
         .invoke_handler(tauri::generate_handler![
-            animori_page_ready,
+            proxy_guard::animori_page_ready,
             animori_reload,
             animori_open_external,
             proxy::animori_proxy_status,

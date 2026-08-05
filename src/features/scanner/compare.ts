@@ -175,7 +175,10 @@ export function cmpFmtScore(v: number): string {
   return v > 0 ? (Math.round(v * 10) / 10).toString() : '—'
 }
 
-export function cmpFmtProg(e: { progress: number; volumes: number }, type: 'anime' | 'manga'): string {
+export function cmpFmtProg(
+  e: { progress: number; volumes: number },
+  type: 'anime' | 'manga',
+): string {
   return type === 'manga' ? `${e.progress} гл. / ${e.volumes} т.` : `${e.progress} эп.`
 }
 

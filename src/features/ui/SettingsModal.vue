@@ -54,7 +54,9 @@
         <h2 class="amk-title">
           <span class="amk-dot"></span>AniMori <span class="amk-sub">настройки</span>
         </h2>
-        <button class="amk-close" id="am-set-close" title="Закрыть" @click="closeSettings()">✕</button>
+        <button class="amk-close" id="am-set-close" title="Закрыть" @click="closeSettings()">
+          ✕
+        </button>
       </div>
 
       <div class="amk-body amk-tabbed">
@@ -82,15 +84,23 @@
               ></svg>
             </span>
             {{ tab.label }}
-            <span v-if="tab.key === 'dict'" class="amk-tab-count" id="am-dict-count" :hidden="dictTotal === 0">{{
-              dictTotal
-            }}</span>
+            <span
+              v-if="tab.key === 'dict'"
+              class="amk-tab-count"
+              id="am-dict-count"
+              :hidden="dictTotal === 0"
+              >{{ dictTotal }}</span
+            >
           </button>
         </nav>
 
         <div class="amk-tabpanes">
           <!-- ==== Перевод ==== -->
-          <div class="amk-pane" :class="{ active: activeTab === 'translate' }" data-pane="translate">
+          <div
+            class="amk-pane"
+            :class="{ active: activeTab === 'translate' }"
+            data-pane="translate"
+          >
             <div class="amk-card">
               <div class="amk-card-title">Перевод</div>
               <div class="amk-row">
@@ -102,7 +112,8 @@
               </div>
               <div class="amk-row">
                 <span class="amk-row-label"
-                  ><b>Тайтлы и описания</b><span class="amk-row-hint">основной источник · фоллбэк</span></span
+                  ><b>Тайтлы и описания</b
+                  ><span class="amk-row-hint">основной источник · фоллбэк</span></span
                 >
               </div>
               <div class="amk-row" style="gap: 8px; border-top: none; padding-top: 0">
@@ -126,19 +137,27 @@
                   @change="onFallbackChange($event)"
                 >
                   <option value="none">Без фоллбэка</option>
-                  <option value="shikimori" :disabled="isFallbackOptionDisabled('shikimori')">Shikimori</option>
-                  <option value="anime365" :disabled="isFallbackOptionDisabled('anime365')">anime365</option>
+                  <option value="shikimori" :disabled="isFallbackOptionDisabled('shikimori')">
+                    Shikimori
+                  </option>
+                  <option value="anime365" :disabled="isFallbackOptionDisabled('anime365')">
+                    anime365
+                  </option>
                 </select>
               </div>
               <div class="amk-row">
-                <span class="amk-row-label"><b>Персонажи</b><span class="amk-row-hint">с Shikimori</span></span>
+                <span class="amk-row-label"
+                  ><b>Персонажи</b><span class="amk-row-hint">с Shikimori</span></span
+                >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_chars" v-model="translateCharacters" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
               </div>
               <div class="amk-row">
-                <span class="amk-row-label"><b>Персонал</b><span class="amk-row-hint">с Shikimori</span></span>
+                <span class="amk-row-label"
+                  ><b>Персонал</b><span class="amk-row-hint">с Shikimori</span></span
+                >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_staff" v-model="translateStaff" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
@@ -188,7 +207,11 @@
           </div>
 
           <!-- ==== Оформление ==== -->
-          <div class="amk-pane" :class="{ active: activeTab === 'appearance' }" data-pane="appearance">
+          <div
+            class="amk-pane"
+            :class="{ active: activeTab === 'appearance' }"
+            data-pane="appearance"
+          >
             <div class="amk-card">
               <div class="amk-card-title">Оформление</div>
               <div class="amk-row-hint" style="padding: 2px 2px 8px">
@@ -204,9 +227,8 @@
                   :data-key="key"
                   @click="selectAccent(key)"
                 >
-                  <span class="am-accent-dot" :style="{ background: AM_ACCENTS[key].dot }"></span>{{
-                    AM_ACCENTS[key].name
-                  }}
+                  <span class="am-accent-dot" :style="{ background: AM_ACCENTS[key].dot }"></span
+                  >{{ AM_ACCENTS[key].name }}
                 </button>
               </div>
             </div>
@@ -230,9 +252,14 @@
                   style="color: rgb(var(--color-blue)); text-decoration: none"
                   >здесь</a
                 >, redirect URL:
-                <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px">{{
-                  AL_PIN_REDIRECT
-                }}</code>
+                <code
+                  style="
+                    background: rgba(var(--color-text-light), 0.12);
+                    padding: 1px 5px;
+                    border-radius: 4px;
+                  "
+                  >{{ AL_PIN_REDIRECT }}</code
+                >
               </div>
               <input
                 class="amk-input amk-mono"
@@ -244,8 +271,19 @@
                 @change="onTokenChange($event)"
               />
               <div style="display: flex; gap: 8px; margin-bottom: 6px">
-                <input class="amk-input amk-mono" id="set_al_client" placeholder="Client ID" style="flex: 1" v-model="alClientId" />
-                <button class="amk-btn amk-btn-ghost" id="set_al_gen" title="Создать ссылку авторизации" @click="onGenerateAuthLink()">
+                <input
+                  class="amk-input amk-mono"
+                  id="set_al_client"
+                  placeholder="Client ID"
+                  style="flex: 1"
+                  v-model="alClientId"
+                />
+                <button
+                  class="amk-btn amk-btn-ghost"
+                  id="set_al_gen"
+                  title="Создать ссылку авторизации"
+                  @click="onGenerateAuthLink()"
+                >
                   Ссылка
                 </button>
               </div>
@@ -292,7 +330,8 @@
               </div>
               <div class="amk-row">
                 <span class="amk-row-label"
-                  ><b>Кнопка переноса</b><span class="amk-row-hint">перенос списков Shikimori → AniList</span></span
+                  ><b>Кнопка переноса</b
+                  ><span class="amk-row-hint">перенос списков Shikimori → AniList</span></span
                 >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_btn_sync" v-model="showSyncButton" />
@@ -301,7 +340,8 @@
               </div>
               <div class="amk-row">
                 <span class="amk-row-label"
-                  ><b>Кнопка сравнения</b><span class="amk-row-hint">сверка списков двух сайтов</span></span
+                  ><b>Кнопка сравнения</b
+                  ><span class="amk-row-hint">сверка списков двух сайтов</span></span
                 >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_btn_compare" v-model="showCompareButton" />
@@ -343,8 +383,8 @@
         id="am-clear-note"
         style="padding: 0 14px 10px; line-height: 1.5; text-align: right"
       >
-        Будут удалены все сохранённые названия, персонажи, франшизы и темы. Настройки, токен и свой словарь
-        останутся. После очистки страница перезагрузится, а данные поедут с серверов заново.
+        Будут удалены все сохранённые названия, персонажи, франшизы и темы. Настройки, токен и свой
+        словарь останутся. После очистки страница перезагрузится, а данные поедут с серверов заново.
         Нажмите ещё раз для подтверждения.
       </div>
     </div>

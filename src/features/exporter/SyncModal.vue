@@ -94,12 +94,12 @@ const AUTH_LINK_STYLE =
         >
           <template v-if="anonymous">
             ⚠️ Списки читаются без входа в аккаунт, поэтому ваш профиль на Shikimori должен быть
-            открыт (публичен) на время переноса. Если профиль скрыт настройками приватности,
-            сервер откажет в доступе.
+            открыт (публичен) на время переноса. Если профиль скрыт настройками приватности, сервер
+            откажет в доступе.
           </template>
           <template v-else>
-            ℹ️ Списки читаются с Shikimori под вашей сессией в этом же браузере. Если вы не вошли
-            в аккаунт, скрытый профиль будет недоступен.
+            ℹ️ Списки читаются с Shikimori под вашей сессией в этом же браузере. Если вы не вошли в
+            аккаунт, скрытый профиль будет недоступен.
           </template>
         </div>
 
@@ -186,7 +186,13 @@ const AUTH_LINK_STYLE =
             </button>
           </div>
           <div id="se-gen-url" style="margin-top: 10px; text-align: center; font-size: 12px">
-            <a v-if="authUrl" :href="authUrl" target="_blank" rel="noopener" :style="AUTH_LINK_STYLE">
+            <a
+              v-if="authUrl"
+              :href="authUrl"
+              target="_blank"
+              rel="noopener"
+              :style="AUTH_LINK_STYLE"
+            >
               👉 Клик для авторизации
             </a>
           </div>

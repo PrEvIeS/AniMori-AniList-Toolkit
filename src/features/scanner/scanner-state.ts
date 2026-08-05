@@ -243,9 +243,7 @@ function buildSections(diff: CmpDiffResult, sign: 1 | -1, type: 'anime' | 'manga
 /** Фильтрация игнора и выбрасывание пустых блоков — дешёвая часть цепочки. */
 function visible(sections: DiffSection[]): DiffSection[] {
   return sections
-    .map((s) =>
-      s.ignorable ? { ...s, rows: s.rows.filter((r) => !isIgnored(r.id, s.sign)) } : s,
-    )
+    .map((s) => (s.ignorable ? { ...s, rows: s.rows.filter((r) => !isIgnored(r.id, s.sign)) } : s))
     .filter((s) => s.rows.length > 0)
 }
 

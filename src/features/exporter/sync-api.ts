@@ -33,18 +33,8 @@ export type ShikiStatus =
   | 'rewatching'
   | 'rereading'
 export type AniListStatus =
-  | 'PLANNING'
-  | 'CURRENT'
-  | 'COMPLETED'
-  | 'PAUSED'
-  | 'DROPPED'
-  | 'REPEATING'
-export type ScoreFormat =
-  | 'POINT_100'
-  | 'POINT_10_DECIMAL'
-  | 'POINT_10'
-  | 'POINT_5'
-  | 'POINT_3'
+  'PLANNING' | 'CURRENT' | 'COMPLETED' | 'PAUSED' | 'DROPPED' | 'REPEATING'
+export type ScoreFormat = 'POINT_100' | 'POINT_10_DECIMAL' | 'POINT_10' | 'POINT_5' | 'POINT_3'
 export type MediaType = 'anime' | 'manga'
 export type AniListMediaType = 'ANIME' | 'MANGA'
 

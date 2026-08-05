@@ -8,12 +8,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 
-import type {
-  IProxyDiagnostics,
-  ProxyOutcome,
-  ProxyProbe,
-  ProxyStatus,
-} from './IBridge'
+import type { IProxyDiagnostics, ProxyOutcome, ProxyProbe, ProxyStatus } from './IBridge'
 
 /**
  * Что отдаёт Rust.

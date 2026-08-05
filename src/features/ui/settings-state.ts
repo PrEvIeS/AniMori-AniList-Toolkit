@@ -70,15 +70,7 @@ function openExternal(url: string): void {
 // Итерация 5.1: добавлена вкладка 'dev' («Разработчик») — логгер и проверка сети.
 // Порядок ключей здесь роли не играет, порядок вкладок задаёт TABS в SettingsModal.vue.
 export type TabKey =
-  | 'translate'
-  | 'dict'
-  | 'modules'
-  | 'appearance'
-  | 'links'
-  | 'account'
-  | 'misc'
-  | 'dev'
-  | 'support'
+  'translate' | 'dict' | 'modules' | 'appearance' | 'links' | 'account' | 'misc' | 'dev' | 'support'
 
 export const isSettingsOpen = ref(false)
 export const activeTab = ref<TabKey>('translate')
@@ -319,8 +311,7 @@ export const filteredDictEntries = computed<DictEntry[]>(() => {
   const query = normDictKey(dictSearch.value).toLowerCase()
   if (!query) return dictEntries.value
   return dictEntries.value.filter(
-    (entry) =>
-      entry.key.toLowerCase().includes(query) || entry.value.toLowerCase().includes(query),
+    (entry) => entry.key.toLowerCase().includes(query) || entry.value.toLowerCase().includes(query),
   )
 })
 
@@ -501,6 +492,7 @@ export function generateAuthLink(): boolean {
   }
   // В монолите адрес собирался шаблонной строкой и получал лишние фигурные скобки,
   // то есть ссылка вела в никуда. Здесь — только конкатенация.
-  alAuthLink.value = AL_AUTHORIZE + '?client_id=' + encodeURIComponent(clientId) + '&response_type=token'
+  alAuthLink.value =
+    AL_AUTHORIZE + '?client_id=' + encodeURIComponent(clientId) + '&response_type=token'
   return true
 }

@@ -107,7 +107,8 @@ function generateCol(
   if (items.length === 0) return ''
 
   let colHtml = html`<div class="result-col animori-custom-result-col">
-    <h3 class="title">${title}</h3>`
+    <h3 class="title">${title}</h3>
+  </div>`
 
   for (const item of items) {
     const alItem = alMap[`${typeStr.toUpperCase()}_${item.id}`]
@@ -147,7 +148,8 @@ function generatePersonCol(
   if (items.length === 0) return ''
 
   let colHtml = html`<div class="result-col animori-custom-result-col">
-    <h3 class="title">${title}</h3>`
+    <h3 class="title">${title}</h3>
+  </div>`
 
   items.forEach((item, i) => {
     const page = alData[`${aliasPrefix}${i}`] as Record<string, AlPersonNode[] | null> | undefined
@@ -252,7 +254,7 @@ async function performRussianSearch(query: string): Promise<void> {
       shikiChars.length === 0 &&
       shikiStaff.length === 0
     ) {
-      cachedHtml = html`<div class="am-ru-empty">Ничего не найдено ¯\_(ツ)_/¯</div>`
+      cachedHtml = html`<div class="am-ru-empty">Ничего не найдено ¯_(ツ)_/¯</div>`
       renderCustomResults(cachedHtml)
       return
     }

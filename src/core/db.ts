@@ -136,10 +136,7 @@ export async function openDB(): Promise<IDBDatabase | null> {
     // `blocked`, упавший внутри браузера запрос, зависшая миграция. Старт
     // обязан продолжиться даже там, где мы не понимаем причины.
     timer = window.setTimeout(() => {
-      Logger(
-        'ERROR',
-        `IndexedDB не открылась за ${DB_OPEN_TIMEOUT_MS} мс — продолжаем без кэша`,
-      )
+      Logger('ERROR', `IndexedDB не открылась за ${DB_OPEN_TIMEOUT_MS} мс — продолжаем без кэша`)
       finish(null)
     }, DB_OPEN_TIMEOUT_MS)
 

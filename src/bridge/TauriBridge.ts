@@ -253,7 +253,9 @@ async function loadProxyOption(): Promise<TauriProxyOption> {
           url,
           // Учётные данные передаются отдельно, а не в составе адреса: пароль с
           // двоеточием или собакой сломал бы склейку user:pass@host.
-          ...(trimmedLogin ? { basicAuth: { username: trimmedLogin, password: config.password } } : {}),
+          ...(trimmedLogin
+            ? { basicAuth: { username: trimmedLogin, password: config.password } }
+            : {}),
           ...(noProxy ? { noProxy } : {}),
         },
       }

@@ -29,8 +29,8 @@
   <div class="amk-card" v-if="isDesktop">
     <div class="amk-card-title">Прокси</div>
     <div class="amk-row-hint" style="padding: 2px 2px 8px; line-height: 1.5">
-      Через прокси пойдут и запросы AniMori к источникам, и трафик самого сайта.
-      Настройка вступает в силу после перезапуска приложения.
+      Через прокси пойдут и запросы AniMori к источникам, и трафик самого сайта. Настройка вступает
+      в силу после перезапуска приложения.
     </div>
 
     <div class="amk-row">
@@ -111,19 +111,19 @@
     <div
       v-if="showBadConfig"
       class="amk-row-hint"
-      style="padding: 8px 2px 0; line-height: 1.5; color: rgb(var(--color-red, 243,139,168))"
+      style="padding: 8px 2px 0; line-height: 1.5; color: rgb(var(--color-red, 243, 139, 168))"
     >
       Прокси включён, но адрес или порт заданы неверно — трафик пойдёт напрямую.
     </div>
 
     <div v-if="showPasswordNote" class="amk-row-hint" style="padding: 8px 2px 0; line-height: 1.5">
-      Пароль хранится в файле настроек в открытом виде. Прокси с паролем примут запросы
-      AniMori, а сам сайт спросит авторизацию отдельным окошком.
+      Пароль хранится в файле настроек в открытом виде. Прокси с паролем примут запросы AniMori, а
+      сам сайт спросит авторизацию отдельным окошком.
     </div>
 
     <div v-if="needsRestart" class="amk-row-hint" style="padding: 8px 2px 0; line-height: 1.5">
-      Изменения сохранены и заработают после перезапуска приложения — кнопка «Применить
-      и перезагрузить» здесь не поможет и обновит только страницу.
+      Изменения сохранены и заработают после перезапуска приложения — кнопка «Применить и
+      перезагрузить» здесь не поможет и обновит только страницу.
     </div>
 
     <!--
@@ -137,7 +137,12 @@
     </div>
 
     <div class="amk-row" style="border-top: none; padding-top: 0">
-      <button class="amk-btn amk-btn-block" id="am-proxy-check" :disabled="checking" @click="check()">
+      <button
+        class="amk-btn amk-btn-block"
+        id="am-proxy-check"
+        :disabled="checking"
+        @click="check()"
+      >
         {{ checking ? 'Проверяем…' : 'Проверить сейчас' }}
       </button>
     </div>
@@ -146,7 +151,11 @@
       v-if="checkText"
       class="amk-row-hint"
       style="padding: 8px 2px 0; line-height: 1.5"
-      :style="{ color: checkOk ? 'rgb(var(--color-green, 166,227,161))' : 'rgb(var(--color-red, 243,139,168))' }"
+      :style="{
+        color: checkOk
+          ? 'rgb(var(--color-green, 166,227,161))'
+          : 'rgb(var(--color-red, 243,139,168))',
+      }"
     >
       {{ checkText }}
     </div>
@@ -181,7 +190,8 @@ const isDesktop = Bridge.platform === 'tauri'
  * сети: новый домен потребовал бы правки ACL ради одной кнопки. Файл крошечный
  * и отдаётся без авторизации.
  */
-const PROBE_URL = 'https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/README.md'
+const PROBE_URL =
+  'https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/README.md'
 
 /** Предел ожидания боевого запроса. Дольше человек всё равно считает кнопку зависшей. */
 const CHECK_TIMEOUT_MS = 8000

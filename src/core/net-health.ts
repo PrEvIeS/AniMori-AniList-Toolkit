@@ -181,12 +181,7 @@ export function describeState(state: NetState): string {
  *
  * Последние два случая не меняют состояние вовсе: вызов просто игнорируется.
  */
-export function reportStatus(
-  id: string,
-  label: string,
-  status: number,
-  latencyMs?: number,
-): void {
+export function reportStatus(id: string, label: string, status: number, latencyMs?: number): void {
   if (status === 401 || status === 429) return
 
   if (status === 403 || status === 451) {
@@ -246,7 +241,11 @@ export function listHealth(): NetSourceHealth[] {
 export function isTroubled(id: string): boolean {
   const record = sources.get(id)
   if (!record) return false
-  return record.state !== 'ok' && record.state !== 'unknown' && record.failStreak >= FAIL_STREAK_THRESHOLD
+  return (
+    record.state !== 'ok' &&
+    record.state !== 'unknown' &&
+    record.failStreak >= FAIL_STREAK_THRESHOLD
+  )
 }
 
 /**

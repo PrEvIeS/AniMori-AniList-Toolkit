@@ -273,7 +273,10 @@ async function openPlayer(ctx: MediaContext): Promise<void> {
     const res = await Bridge.http.request({
       method: 'GET',
       url:
-        'https://kodik-api.com/search?token=' + KODIK_TOKEN + '&shikimori_id=' + String(malId ?? ''),
+        'https://kodik-api.com/search?token=' +
+        KODIK_TOKEN +
+        '&shikimori_id=' +
+        String(malId ?? ''),
       credentials: 'omit',
     })
     reportStatus(NET_SOURCE_KODIK, NET_LABEL_KODIK, res.status, Date.now() - startedAt)
@@ -428,9 +431,7 @@ async function openPlayer(ctx: MediaContext): Promise<void> {
   if (kodikSyncListener) window.removeEventListener('message', kodikSyncListener)
   kodikSyncListener = (event: MessageEvent) => {
     const data = event.data as
-      | { key?: string; value?: { episode?: number | string } }
-      | null
-      | undefined
+      { key?: string; value?: { episode?: number | string } } | null | undefined
     if (!data || data.key !== 'kodik_player_current_episode' || !data.value) return
 
     const ep = Number(data.value.episode)

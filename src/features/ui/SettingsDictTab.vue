@@ -38,7 +38,10 @@
       style="margin-bottom: 8px"
       v-model="dictSearch"
     />
-    <div id="am-dict-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto">
+    <div
+      id="am-dict-list"
+      style="display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto"
+    >
       <div v-for="entry in filteredDictEntries" :key="entry.key" class="am-dict-row">
         <input
           class="amk-input"
@@ -52,7 +55,11 @@
           :value="entry.value"
           @change="onDictValueChange(entry.key, $event)"
         />
-        <button class="amk-btn amk-btn-ghost am-dict-del" title="Удалить" @click="deleteDictEntry(entry.key)">
+        <button
+          class="amk-btn amk-btn-ghost am-dict-del"
+          title="Удалить"
+          @click="deleteDictEntry(entry.key)"
+        >
           ✕
         </button>
       </div>
@@ -69,10 +76,20 @@
   <div class="amk-card">
     <div class="amk-card-title">Импорт / Экспорт</div>
     <div style="display: flex; gap: 8px; flex-wrap: wrap">
-      <button class="amk-btn amk-btn-ghost" id="am-dict-export" style="flex: 1" @click="exportDict()">
+      <button
+        class="amk-btn amk-btn-ghost"
+        id="am-dict-export"
+        style="flex: 1"
+        @click="exportDict()"
+      >
         Экспорт
       </button>
-      <button class="amk-btn amk-btn-ghost" id="am-dict-import" style="flex: 1" @click="importDictFromFile()">
+      <button
+        class="amk-btn amk-btn-ghost"
+        id="am-dict-import"
+        style="flex: 1"
+        @click="importDictFromFile()"
+      >
         Импорт
       </button>
       <button class="amk-btn amk-btn-ghost" id="am-dict-copy" style="flex: 1" @click="onDictCopy()">
@@ -82,7 +99,13 @@
     <button
       class="amk-btn amk-btn-primary amk-btn-block"
       id="am-dict-share"
-      style="margin-top: 8px; display: inline-flex; align-items: center; justify-content: center; gap: 8px"
+      style="
+        margin-top: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      "
       @click="shareDict()"
     >
       <svg
@@ -104,8 +127,8 @@
       Предложить в общую базу
     </button>
     <div class="amk-row-hint" style="padding: 8px 2px 2px; line-height: 1.5">
-      Экспорт скачивает JSON, «Копировать» кладёт его в буфер для отправки другим. Импорт объединяет с
-      текущими записями.
+      Экспорт скачивает JSON, «Копировать» кладёт его в буфер для отправки другим. Импорт объединяет
+      с текущими записями.
     </div>
   </div>
 </template>

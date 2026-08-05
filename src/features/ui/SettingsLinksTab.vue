@@ -81,7 +81,11 @@
             :value="link.name"
             @change="onLinkFieldChange(index, 'name', $event)"
           />
-          <button class="amk-btn amk-btn-ghost am-cl-del" title="Удалить" @click="removeCustomLink(index)">
+          <button
+            class="amk-btn amk-btn-ghost am-cl-del"
+            title="Удалить"
+            @click="removeCustomLink(index)"
+          >
             ✕
           </button>
         </div>
@@ -104,16 +108,42 @@
         </div>
       </div>
     </div>
-    <button class="amk-btn amk-btn-ghost" id="am-custom-add" style="width: 100%; margin-top: 10px" @click="addCustomLink()">
+    <button
+      class="amk-btn amk-btn-ghost"
+      id="am-custom-add"
+      style="width: 100%; margin-top: 10px"
+      @click="addCustomLink()"
+    >
       ＋ Добавить свою ссылку
     </button>
     <div class="amk-row-hint" style="padding: 10px 2px 2px; line-height: 1.5">
       В URL-шаблоне подставляются:
-      <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px">{ru}</code>
+      <code
+        style="
+          background: rgba(var(--color-text-light), 0.12);
+          padding: 1px 5px;
+          border-radius: 4px;
+        "
+        >{ru}</code
+      >
       — русское название,
-      <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px">{romaji}</code>
+      <code
+        style="
+          background: rgba(var(--color-text-light), 0.12);
+          padding: 1px 5px;
+          border-radius: 4px;
+        "
+        >{romaji}</code
+      >
       — ромадзи,
-      <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px">{query}</code>
+      <code
+        style="
+          background: rgba(var(--color-text-light), 0.12);
+          padding: 1px 5px;
+          border-radius: 4px;
+        "
+        >{query}</code
+      >
       — авто (ru → romaji). Всё кодируется автоматически.
     </div>
   </div>

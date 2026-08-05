@@ -25,7 +25,8 @@
     <div class="amk-card-title">Отладка</div>
     <div class="amk-row">
       <span class="amk-row-label"
-        ><b>Логгер</b><span class="amk-row-hint">отслеживание действий скрипта (для отладки)</span></span
+        ><b>Логгер</b
+        ><span class="amk-row-hint">отслеживание действий скрипта (для отладки)</span></span
       >
       <label class="amk-switch">
         <input type="checkbox" id="set_logger" v-model="enableLogger" />
@@ -69,7 +70,11 @@
         <span
           class="amk-row-hint amk-mono"
           style="flex: 0 0 auto; white-space: nowrap; text-align: right; padding-top: 1px"
-          :style="{ color: row.ok ? 'rgb(var(--color-green, 166,227,161))' : 'rgb(var(--color-red, 243,139,168))' }"
+          :style="{
+            color: row.ok
+              ? 'rgb(var(--color-green, 166,227,161))'
+              : 'rgb(var(--color-red, 243,139,168))',
+          }"
           >{{ row.status > 0 ? row.status : '—' }} · {{ row.latencyMs }} мс</span
         >
       </div>

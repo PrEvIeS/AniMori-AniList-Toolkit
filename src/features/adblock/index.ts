@@ -135,11 +135,9 @@ function stripPlacement(el: Element): void {
   blockedCount++
 
   if (seen + 1 === MAX_CLEANUPS) {
-    Logger(
-      'INFO',
-      'Адблок: место пересоздаётся слишком часто, дальше только скрытие через CSS',
-      { selector: el.className || el.tagName },
-    )
+    Logger('INFO', 'Адблок: место пересоздаётся слишком часто, дальше только скрытие через CSS', {
+      selector: el.className || el.tagName,
+    })
   }
 }
 

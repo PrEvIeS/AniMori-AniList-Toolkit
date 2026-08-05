@@ -109,10 +109,7 @@ function formatThemes(themes: AnimeThemesEntry[]): MalThemes {
  * @param malId Идентификатор MyAnimeList или null, если его не удалось разрешить.
  * @param attempt Номер попытки после 429, считая с нуля. Служебный параметр рекурсии.
  */
-export async function fetchMalThemes(
-  malId: number | null,
-  attempt = 0,
-): Promise<MalThemes | null> {
+export async function fetchMalThemes(malId: number | null, attempt = 0): Promise<MalThemes | null> {
   if (!malId) return null
 
   const cacheKey = `THEMES2_${malId}`
@@ -147,12 +144,7 @@ export async function fetchMalThemes(
 
   // Отчёт идёт до разбора статусов ниже: net-health сам игнорирует 429 и 401,
   // а дублировать вызов в трёх ветках значит рано или поздно забыть одну.
-  reportStatus(
-    NET_SOURCE_ANIMETHEMES,
-    NET_LABEL_ANIMETHEMES,
-    res.status,
-    Date.now() - startedAt,
-  )
+  reportStatus(NET_SOURCE_ANIMETHEMES, NET_LABEL_ANIMETHEMES, res.status, Date.now() - startedAt)
 
   // Код вне 2xx мост исключением не считает, поэтому статусы разбираем сами —
   // ровно теми же тремя ветками, что были в onload.

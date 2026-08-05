@@ -426,43 +426,43 @@ async function queueContent(
   force = false,
 ): Promise<void> {
   const key = `${kind}_${id}`
-if (el.dataset.queued === key && !extra && !force) return
+  if (el.dataset.queued === key && !extra && !force) return
 
-// Дефект A6 (журнал ч.3 §6.9). Маркер dataset.queued раньше ставился ЗДЕСЬ,
-// до await dbGet. Вызывают нас как void queueContent(...), то есть отказ
-// IndexedDB никто не ловил: элемент оставался помеченным, в очередь не попадал,
-// а повторно его уже не принимали — карточка английская до перезагрузки.
-// Теперь маркер ставится только после того, как элемент реально учтён,
-// а любой сбой на пути его снимает.
-let cached: ShikiCacheRecord<TranslationPayload> | undefined | null = null
-try {
-  cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
-} catch (e) {
-  // Промах кэша не повод бросать элемент: идём в сеть как при Cache MISS.
-  Logger('WARN', `[Cache] ${key}: чтение кэша не удалось, идём в сеть`, e)
-}
-
-try {
-  const list = queue.get(key) ?? []
-  list.push({ el, extra })
-  queue.set(key, list)
-
-  if (cached && Date.now() - cached.ts < CACHE_TIME) {
-    const ageMin = Math.round((Date.now() - cached.ts) / 60000)
-    Logger('QUEUE', `[Cache HIT] ${key} (возраст ${ageMin} мин)`)
-    el.dataset.queued = key
-    applyTranslation(kind, id, cached.data)
-    return
+  // Дефект A6 (журнал ч.3 §6.9). Маркер dataset.queued раньше ставился ЗДЕСЬ,
+  // до await dbGet. Вызывают нас как void queueContent(...), то есть отказ
+  // IndexedDB никто не ловил: элемент оставался помеченным, в очередь не попадал,
+  // а повторно его уже не принимали — карточка английская до перезагрузки.
+  // Теперь маркер ставится только после того, как элемент реально учтён,
+  // а любой сбой на пути его снимает.
+  let cached: ShikiCacheRecord<TranslationPayload> | undefined | null = null
+  try {
+    cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
+  } catch (e) {
+    // Промах кэша не повод бросать элемент: идём в сеть как при Cache MISS.
+    Logger('WARN', `[Cache] ${key}: чтение кэша не удалось, идём в сеть`, e)
   }
 
-  Logger('QUEUE', `[Cache MISS] ${key} ➜ Помещено в очередь перевода`)
-  pending[kind].add(id)
-  el.dataset.queued = key
-  scheduleDispatch()
-} catch (e) {
-  if (el.dataset.queued === key) delete el.dataset.queued
-  Logger('WARN', `[Queue] ${key}: постановка в очередь не удалась`, e)
-}
+  try {
+    const list = queue.get(key) ?? []
+    list.push({ el, extra })
+    queue.set(key, list)
+
+    if (cached && Date.now() - cached.ts < CACHE_TIME) {
+      const ageMin = Math.round((Date.now() - cached.ts) / 60000)
+      Logger('QUEUE', `[Cache HIT] ${key} (возраст ${ageMin} мин)`)
+      el.dataset.queued = key
+      applyTranslation(kind, id, cached.data)
+      return
+    }
+
+    Logger('QUEUE', `[Cache MISS] ${key} ➜ Помещено в очередь перевода`)
+    pending[kind].add(id)
+    el.dataset.queued = key
+    scheduleDispatch()
+  } catch (e) {
+    if (el.dataset.queued === key) delete el.dataset.queued
+    Logger('WARN', `[Queue] ${key}: постановка в очередь не удалась`, e)
+  }
 }
 
 /** Основной цикл: пачка за пачкой, пока очередь не опустеет. */
@@ -500,7 +500,7 @@ async function processTransQueue(): Promise<void> {
     }
 
     Logger('QUEUE', '[Process] Очередь пуста. Ожидание новых элементов.')
-    } finally {
+  } finally {
     isProcessing = false
     // Пока мы работали, кто-то стучался в очередь. Гоняем ещё круг через
     // общее окно сбора, а не напрямую: рекурсии нет, лишний холостой прогон

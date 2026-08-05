@@ -116,9 +116,10 @@ function onOverlayClick(e: MouseEvent): void {
           :disabled="isScanning"
           @click="startScan"
         >
-          Сканировать
-        </button
-        ><button v-if="isScanning" class="amk-btn amk-btn-ghost" @click="cancelScan">Отменить</button>
+          Сканировать</button
+        ><button v-if="isScanning" class="amk-btn amk-btn-ghost" @click="cancelScan">
+          Отменить
+        </button>
       </div>
 
       <div

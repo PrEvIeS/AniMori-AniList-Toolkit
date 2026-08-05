@@ -42,7 +42,9 @@ export function clearLogEntries(): void {
   scriptLogs.length = 0
   try {
     sessionStorage.removeItem('animori_logs')
-  } catch { /* квота */ }
+  } catch {
+    /* квота */
+  }
   logEntries.value = []
 }
 
@@ -77,7 +79,9 @@ export const displayItems = computed<DisplayItem[]>(() => {
     let detStr = ''
     try {
       detStr = JSON.stringify(entry.details ?? {}).toLowerCase()
-    } catch { /* циклическая структура */ }
+    } catch {
+      /* циклическая структура */
+    }
     return (
       entry.message.toLowerCase().includes(q) ||
       entry.path.toLowerCase().includes(q) ||

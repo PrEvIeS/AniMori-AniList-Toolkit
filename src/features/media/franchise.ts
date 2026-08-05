@@ -10,9 +10,16 @@
 // на одной странице. Кэша у fetchShiki нет, каждый вызов — реальная сеть.
 // Решение: settledAniId — отметка «сетевая работа по этому тайтлу уже сделана», каков бы
 // ни был исход. Соседний виджет тем решает то же самое скрытым блоком в DOM.
+//
+// Этап 5, итерация 5.2: у сбоя появилось видимое лицо. Самый частый случай здесь —
+// карточка тайтла уже лежит в кэше IndexedDB, а сеть недоступна: страница выглядит
+// работоспособной, а хронология просто не появляется. Теперь вместо пустоты ставится
+// одна строка с причиной — но только когда молчат все зеркала сразу (shikimoriTrouble()).
+// Когда данных Shikimori нет вовсе, виджет по-прежнему молчит: об этом уже сказал
+// виджет рейтингов выше в том же сайдбаре, а две одинаковые плашки подряд — шум.
 
 import { anilistQuery } from '../../api/anilist'
-import { fetchShiki } from '../../api/shikimori'
+import { fetchShiki, shikimoriTrouble } from '../../api/shikimori'
 import { amApplyAccentToDom } from '../../core/accent'
 import { settings } from '../../core/settings'
 import type { MediaType } from '../../core/types'
@@ -141,6 +148,35 @@ function placeBox(box: HTMLElement, ctx: MediaContext): void {
     relations.before(existing)
     window.setTimeout(() => scrollToActive(existing), 100)
   }
+}
+
+/**
+ * Блок с одной строкой причины вместо хронологии.
+ *
+ * Класс тот же, что у настоящего блока, и это сделано нарочно: его снимает тот же
+ * cleanupSelectors при смене тайтла, и тот же placeBox возвращает его на место после
+ * перерисовки React — без отдельного учёта для заглушки.
+ */
+function buildTroubleBox(reason: string): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'animori-franchise am-accent-scope'
+
+  const heading = document.createElement('h2')
+  heading.textContent = 'Хронология Франшизы'
+  box.appendChild(heading)
+
+  const note = document.createElement('div')
+  note.className = 'am-net-note'
+  note.textContent =
+    `Shikimori ${reason}: хронологию сейчас не у кого запросить. ` +
+    `Она появится сама, когда источник снова ответит. ` +
+    `Подробности — в настройках, вкладка «Разработчик».`
+  note.style.cssText =
+    'padding: 8px 10px; border-radius: 6px; font-size: 0.85em; line-height: 1.35;' +
+    ' color: rgb(var(--color-text-light)); background: rgba(var(--color-red, 252,129,129), 0.10);'
+  box.appendChild(note)
+
+  return box
 }
 
 /** Строка списка: год, название, статус и тип тайтла. */
@@ -342,7 +378,20 @@ async function buildFranchise(ctx: MediaContext): Promise<void> {
   } catch (e) {
     // Сбой тоже считается отработанным исходом: иначе при недоступных зеркалах
     // виджет уйдёт в бесконечный цикл повторов. Повторная попытка — после смены тайтла.
-    if (isStillOnPage(aniId)) settledAniId = aniId
+    if (isStillOnPage(aniId)) {
+      settledAniId = aniId
+
+      // Заглушка ставится только при устойчивом молчании всего источника. Одиночный
+      // сбой и битый JSON остаются как были — в журнале и без следа на странице:
+      // в этих случаях вторая попытка после перехода чаще всего срабатывает.
+      const reason = shikimoriTrouble()
+      if (reason && !document.querySelector(BOX_SELECTOR)) {
+        const box = buildTroubleBox(reason)
+        builtAniId = aniId
+        builtBox = box
+        placeBox(box, ctx)
+      }
+    }
     Logger('ERROR', '[Franchise] Не удалось построить хронологию франшизы', e)
   } finally {
     if (loadingAniId === aniId) loadingAniId = null

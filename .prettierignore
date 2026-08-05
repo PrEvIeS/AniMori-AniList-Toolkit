@@ -10,6 +10,9 @@ src-tauri/target/
 # и сравнение с main.
 animori.user.js
 
+README.md
+CHANGELOG.md
+
 # Данные, а не код: словарь тянется с raw.githubusercontent.com и должен
 # оставаться байт-в-байт таким, какой его ждёт релизная версия.
 dictionary.json

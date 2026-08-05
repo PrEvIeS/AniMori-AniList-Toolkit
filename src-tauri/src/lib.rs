@@ -89,8 +89,8 @@ fn css_injection_script() -> String {
 /// реклама вернётся, охоту надо будет повторить тем же Ctrl+Shift+S. Спящий разведчик
 /// не стоит ничего: без команды он не подписывается даже на события.
 ///
-/// Скрипт вешается на ВСЕ фреймы (initialization_script_for_all_frames), потому что
-/// обычный initialization_script попадает только в главный фрейм, а весь интерес
+/// Скрипт вешается на ВСЕ фреймы (initialization_script_for_all_frames), потому
+/// что обычный initialization_script попадает только в главный фрейм, а весь интерес
 /// как раз во вложенных. Бандл туда не идёт и идти не должен: это полтора сотни
 /// килобайт и целый Vue в каждом рекламном iframe.
 ///
@@ -291,7 +291,16 @@ pub fn run() {
         // capabilities/default.json. Так устроен ACL для окна на внешнем URL: разрешено
         // ровно то, что перечислено в capability, а регистрации здесь недостаточно. Пропуск
         // любого из трёх мест даёт отказ вида "... not allowed. Plugin not found".
-        .invoke_handler(tauri::generate_handler![animori_reload, animori_open_external])
+        //
+        // Пункт 5.3.6: две команды диагностики прокси живут в модуле proxy и потому
+        // указаны с путём: generate_handler! разворачивается в обращение к функции по имени,
+        // и без префикса модуля сборка просто не нашла бы их.
+        .invoke_handler(tauri::generate_handler![
+            animori_reload,
+            animori_open_external,
+            proxy::animori_proxy_status,
+            proxy::animori_proxy_probe
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -309,6 +318,10 @@ pub fn run() {
             //
             // Настройка читается из того же файла, что и у моста на стороне JS, поэтому
             // плагин store обязан быть зарегистрирован выше в цепочке Builder — он и зарегистрирован.
+            //
+            // Пункт 5.3.6: здесь же заводится состояние с исходом применения, без которого
+            // команда animori_proxy_status ответить не сможет. Порядок важен и тут: состояние
+            // должно появиться до того, как страница успеет спросить статус.
             proxy::apply_to_webview(app.handle());
 
             // Копия дескриптора приложения для замыкания on_navigation: сам app взят
@@ -376,7 +389,7 @@ pub fn run() {
             #[cfg(windows)]
             adblock::install(&main_window);
 
-            // На не-Windows окно больше нигде не нужно, а предупреждение о неиспользованной
+            // На не-Windows окно больше нигде не нужно, а предупреждение о неиспользуемой
             // переменной в сборке никому не нужно.
             #[cfg(not(windows))]
             let _ = &main_window;

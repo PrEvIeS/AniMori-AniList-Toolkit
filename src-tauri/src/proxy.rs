@@ -319,6 +319,11 @@ fn read_config(app: &AppHandle) -> Config {
 /// в шапке модуля. Состояние кладётся здесь же: так его нельзя забыть завести, а
 /// команда status гарантированно найдёт готовый ответ.
 pub fn apply_to_webview(app: &AppHandle) {
+    // app.restart() отдаёт потомку окружение родителя: без сноса старый --proxy-server
+    // переживает выключение прокси.
+    #[cfg(windows)]
+    std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+
     let status = decide(app);
     app.manage(ProxyState(Mutex::new(status)));
 }

@@ -12,6 +12,7 @@
 //   animori_open_external -> allow-animori-open-external
 //   animori_proxy_status  -> allow-animori-proxy-status
 //   animori_proxy_probe   -> allow-animori-proxy-probe
+//   animori_page_ready    -> allow-animori-page-ready
 // Именно эти имена перечисляются в capabilities/default.json.
 //
 // Правило на будущее: новая команда — три места.
@@ -29,6 +30,10 @@ const COMMANDS: &[&str] = &[
     // чужого сайта получил бы сканер портов местной сети чужими руками.
     "animori_proxy_status",
     "animori_proxy_probe",
+    // Пункт 5.3.7: отметка «страница ожила» для сторожа прокси. Ничего не читает,
+    // ничего не возвращает и параметров не принимает — только поднимает флаг, по
+    // которому сторож понимает, что вмешиваться не нужно.
+    "animori_page_ready",
 ];
 
 fn main() {

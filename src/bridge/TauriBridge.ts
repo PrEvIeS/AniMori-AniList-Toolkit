@@ -30,6 +30,7 @@ import {
   type IShell,
   type IStorage,
 } from './IBridge'
+import { tauriProxyDiagnostics } from './TauriProxyDiagnostics'
 
 // ==== storage ====
 
@@ -197,6 +198,12 @@ type TauriProxyOption = TauriFetchOptions['proxy']
  * перезапуска приложения. Если бы наш канал подхватывал новый адрес сразу, а страница —
  * только после перезапуска, приложение жило бы в двух разных сетях одновременно:
  * часть данных из одной страны, часть из другой. Один адрес на весь сеанс — предсказуемо.
+ *
+ * Пункт 5.3.6, важное для карточки настроек: кнопка «Проверить сейчас» щупает адрес,
+ * СОХРАНЁННЫЙ в файле, а не тот, что уже действует в этом сеансе. Пока приложение не
+ * перезапущено, оба канала продолжают работать по старому адресу — поэтому карточка
+ * обязана говорить об этом словами, иначе успешная проверка нового прокси будет
+ * прочитана как «уже работает».
  */
 let proxyOption: TauriProxyOption
 let proxyReady = false
@@ -426,6 +433,9 @@ export const tauriBridge: IBridge = {
   http: tauriHttp,
   clipboard: tauriClipboard,
   shell: tauriShell,
+  // Пункт 5.3.6. Реализация вынесена в TauriProxyDiagnostics.ts: этот файл и так самый
+  // толстый в проекте, а диагностика ни от чего здесь не зависит.
+  proxyDiagnostics: tauriProxyDiagnostics,
 }
 
 // Пункт 3.4: общее для обеих реализаций имя экспорта — см. хвост MonkeyBridge.ts.

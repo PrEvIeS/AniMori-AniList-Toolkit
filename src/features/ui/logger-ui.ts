@@ -22,7 +22,7 @@ export function openLoggerModal(): void {
 export function initLoggerUI(): void {
   if (!settings.enableLogger) return
 
-  // Записи копятся в буфер и при закрытой модалке: при открытии она синхронизуется сама.
+  // Записи копятся в буфер и при закрытой модалке: при открытии она синхронизируется сама.
   registerLogSink((entry) => {
     pushLogEntry(entry)
   })

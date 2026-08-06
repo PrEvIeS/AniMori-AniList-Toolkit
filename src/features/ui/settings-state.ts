@@ -23,8 +23,7 @@ import { syncAdblock } from '@adblock-impl'
 import { amCopy } from '../../utils/dom'
 import { Logger } from '../../utils/logger'
 
-// ==== Адреса: только конкатенацией, никогда шаблонной строкой ====
-
+// Адреса собираются только конкатенацией, никогда шаблонной строкой.
 const HTTPS = 'https://'
 export const SUP_GITHUB = HTTPS + 'github.com/foulnike/AniMori-AniList-Toolkit'
 export const SUP_GREASY = HTTPS + 'greasyfork.org/scripts/572948'
@@ -45,8 +44,6 @@ function openExternal(url: string): void {
   })
 }
 
-// ==== Видимость панели и активная вкладка ====
-
 // Порядок вкладок задаёт TABS в SettingsModal.vue, здесь он роли не играет.
 export type TabKey =
   'translate' | 'dict' | 'modules' | 'appearance' | 'links' | 'account' | 'misc' | 'dev' | 'support'
@@ -65,8 +62,6 @@ export function closeSettings(): void {
 export function toggleSettings(): void {
   isSettingsOpen.value = !isSettingsOpen.value
 }
-
-// ==== Мост между reactive-моделями и core/settings ====
 
 /**
  * Версия настроек: `settings` — обычный объект, мутацию computed не видит.
@@ -90,8 +85,6 @@ function settingRef<K extends keyof AniMoriSettings>(
   })
 }
 
-// ==== Вкладка «Перевод» ====
-
 export const translateInterface = settingRef('translateInterface', 'set_interface')
 export const translateCharacters = settingRef('translateCharacters', 'set_chars')
 export const translateStaff = settingRef('translateStaff', 'set_staff')
@@ -112,8 +105,6 @@ export function syncTitleSources(): void {
   if (invalid && titleFallback.value !== 'none') titleFallback.value = 'none'
 }
 
-// ==== Вкладка «Модули» ====
-
 export const enablePlayer = settingRef('enablePlayer', 'set_player')
 export const enableRatings = settingRef('enableRatings', 'set_ratings')
 export const enableFranchise = settingRef('enableFranchise', 'set_franchise')
@@ -127,7 +118,7 @@ export const isAdblockAvailable = Bridge.platform === 'tauri'
 
 /**
  * Единственный тумблер блокировщика: пишет в два ключа и дёргает syncAdblock().
- * Почему один переключатель и почему вторая запись условная — SETTINGS-UI.md.
+ * Второй ключ только в десктопе: в юзерскрипте блокировать попапы плеера нечем.
  */
 export const hideAds = computed<boolean>({
   get: () => {
@@ -141,8 +132,6 @@ export const hideAds = computed<boolean>({
     syncAdblock()
   },
 })
-
-// ==== Вкладка «Ссылки» ====
 
 export const enableExtLinks = settingRef('enableExtLinks', 'set_extlinks')
 export const enableLinkRutracker = settingRef('enableLinkRutracker', 'set_link_rutracker')
@@ -161,11 +150,7 @@ export function normalizeDomain(value: string): string {
     .replace(/\/$/, '')
 }
 
-// ==== Вкладка «Разработчик» ====
-
 export const enableLogger = settingRef('enableLogger', 'set_logger')
-
-// ==== Вкладка «Прочее» ====
 
 /**
  * Видимость кнопок переноса и сравнения в панели действий.
@@ -174,8 +159,6 @@ export const enableLogger = settingRef('enableLogger', 'set_logger')
 export const showSyncButton = settingRef('showSyncButton', 'set_btn_sync')
 export const showCompareButton = settingRef('showCompareButton', 'set_btn_compare')
 
-// ==== Вкладка «Оформление» ====
-
 export const accentPreset = settingRef('accentPreset', 'am_accent')
 export const ACCENT_KEYS = Object.keys(AM_ACCENTS) as AccentPreset[]
 
@@ -183,8 +166,6 @@ export function selectAccent(key: AccentPreset): void {
   accentPreset.value = key
   amSetAccent(key)
 }
-
-// ==== Свои ссылки ====
 
 export const customLinks = ref<CustomLink[]>([])
 
@@ -221,8 +202,6 @@ export function setCustomLinkColor(index: number, color: string): void {
   link.color = color
   persistCustomLinks()
 }
-
-// ==== Локальный словарь ====
 
 export interface DictEntry {
   key: string
@@ -403,11 +382,7 @@ export function shareDict(): void {
   openExternal(url)
 }
 
-// ==== Авторизация AniList ====
-
-// AL_TOKEN живёт в api/anilist.ts, здесь только поле ввода.
-// Показываем сохранённый токен, а не чужой сессионный из Vuex сайта.
-
+// Поле ввода показывает токен из api/anilist.ts, а не сессионный из Vuex сайта.
 export const alToken = ref('')
 export const alClientId = ref('')
 export const alAuthLink = ref('')

@@ -10,28 +10,28 @@
 
 ## Сделано
 
-| Партия | Файл                                      | Было     | Стало    | Коммит               | Правило      |
-| ------ | ----------------------------------------- | -------- | -------- | -------------------- | ------------ |
-| 1      | `src/bridge/TauriBridge.ts`               | ~25 КБ   | 11 617 б | `c1ab4ac`            | до `dc20194` |
-| 1      | `src/bridge/IBridge.ts`                   | ~16 КБ   | 8693 б   | `11561da`            | до `dc20194` |
-| 1      | `src/main.ts`                             | ~23,5 КБ | 12 560 б | `d1e4c09`            | до `dc20194` |
-| 2      | `src/bridge/MonkeyBridge.ts`              | 11 563 б | 8516 б   | `80f5c28`, `b577a84` | до `dc20194` |
-| 2      | `src/bridge/TauriProxyDiagnostics.ts`     | 4173 б   | 2544 б   | `595c9bf`            | до `dc20194` |
-| 2      | `src/bridge/index.ts`                     | 2634 б   | 1726 б   | `da8e65c`            | до `dc20194` |
-| 3      | `src-tauri/src/lib.rs`                    | 27 098 б | 17 717 б | `876fa5a`            | до `dc20194` |
-| 4      | `src-tauri/src/proxy.rs`                  | 28 659 б | 16 664 б | `59d2d7b`            | по новым     |
-| 5      | `src-tauri/src/adblock.rs`                | 19 467 б | 13 245 б | `4045d89`            | по новым     |
-| 5      | `src-tauri/src/proxy_guard.rs`            | 10 992 б | 6025 б   | `5a3ea87`            | по новым     |
-| 6      | `src/features/translator/index.ts`        | 47 065 б | 34 677 б | `8488822`            | по новым     |
-| 7      | `src/style.scss`                          | 46 173 б | 45 448 б | `da4823a`            | по новым     |
-| 8      | `src/features/ui/SettingsProxyCard.vue`   | 20 925 б | 14 786 б | `b34cbb0`, `f70d026` | по новым     |
-| 8      | `src/features/ui/SettingsModal.vue`       | 26 930 б | 21 630 б | `6faa006`            | по новым     |
-| 8      | `src/features/ui/LoggerModal.vue`         | 17 021 б | 16 804 б | `e77cea6`            | по новым     |
-| 9      | `src/features/ui/reload.ts`               | 10 120 б | 3584 б   | `d53d4c4`            | по новым     |
-| 9      | `src/features/ui/settings-state.ts`       | 22 600 б | 15 869 б | `7a65b10`            | по новым     |
-| 9      | `src/features/ui/net-check.ts`            | 13 233 б | 10 016 б | `5c31645`            | по новым     |
-| 9      | `src/features/ui/links.ts`                | 9716 б   | 5365 б   | `c6ac3d3`            | по новым     |
-| 9      | `src/features/ui/action-panel-state.ts`   | 7862 б   | 4249 б   | `2d6e4f6`            | по новым     |
+| Партия | Файл                                    | Было     | Стало    | Коммит               | Правило      |
+| ------ | --------------------------------------- | -------- | -------- | -------------------- | ------------ |
+| 1      | `src/bridge/TauriBridge.ts`             | ~25 КБ   | 11 617 б | `c1ab4ac`            | до `dc20194` |
+| 1      | `src/bridge/IBridge.ts`                 | ~16 КБ   | 8693 б   | `11561da`            | до `dc20194` |
+| 1      | `src/main.ts`                           | ~23,5 КБ | 12 560 б | `d1e4c09`            | до `dc20194` |
+| 2      | `src/bridge/MonkeyBridge.ts`            | 11 563 б | 8516 б   | `80f5c28`, `b577a84` | до `dc20194` |
+| 2      | `src/bridge/TauriProxyDiagnostics.ts`   | 4173 б   | 2544 б   | `595c9bf`            | до `dc20194` |
+| 2      | `src/bridge/index.ts`                   | 2634 б   | 1726 б   | `da8e65c`            | до `dc20194` |
+| 3      | `src-tauri/src/lib.rs`                  | 27 098 б | 17 717 б | `876fa5a`            | до `dc20194` |
+| 4      | `src-tauri/src/proxy.rs`                | 28 659 б | 16 664 б | `59d2d7b`            | по новым     |
+| 5      | `src-tauri/src/adblock.rs`              | 19 467 б | 13 245 б | `4045d89`            | по новым     |
+| 5      | `src-tauri/src/proxy_guard.rs`          | 10 992 б | 6025 б   | `5a3ea87`            | по новым     |
+| 6      | `src/features/translator/index.ts`      | 47 065 б | 34 677 б | `8488822`            | по новым     |
+| 7      | `src/style.scss`                        | 46 173 б | 45 448 б | `da4823a`            | по новым     |
+| 8      | `src/features/ui/SettingsProxyCard.vue` | 20 925 б | 14 786 б | `b34cbb0`, `f70d026` | по новым     |
+| 8      | `src/features/ui/SettingsModal.vue`     | 26 930 б | 21 630 б | `6faa006`            | по новым     |
+| 8      | `src/features/ui/LoggerModal.vue`       | 17 021 б | 16 804 б | `e77cea6`            | по новым     |
+| 9      | `src/features/ui/reload.ts`             | 10 120 б | 3584 б   | `d53d4c4`            | по новым     |
+| 9      | `src/features/ui/settings-state.ts`     | 22 600 б | 15 869 б | `7a65b10`            | по новым     |
+| 9      | `src/features/ui/net-check.ts`          | 13 233 б | 10 016 б | `5c31645`            | по новым     |
+| 9      | `src/features/ui/links.ts`              | 9716 б   | 5365 б   | `c6ac3d3`            | по новым     |
+| 9      | `src/features/ui/action-panel-state.ts` | 7862 б   | 4249 б   | `2d6e4f9`            | по новым     |
 
 Итого: 390 731 → 271 735 б, снято 118 996 б (−30%).
 
@@ -46,13 +46,13 @@
 
 ## Документы, порождённые чисткой
 
-| Документ                       | О чём                                                  |
-| ------------------------------ | ------------------------------------------------------ |
-| `docs/2.0.1/TRANSLATOR.md`     | `translator/index.ts`                                   |
-| `docs/2.0.1/SETTINGS-UI.md`    | модалки настроек, логгер, `reload.ts`               |
-| `docs/2.0.1/SETTINGS-STATE.md` | `settings-state.ts`                                     |
-| `docs/2.0.1/UI-MODULES.md`     | `net-check.ts`, `links.ts`, `action-panel-state.ts`     |
-| `docs/2.0.1/CLEANUP-PROCESS.md`| правила и процедуры самой чистки                     |
+| Документ                        | О чём                                               |
+| ------------------------------- | --------------------------------------------------- |
+| `docs/2.0.1/TRANSLATOR.md`      | `translator/index.ts`                               |
+| `docs/2.0.1/SETTINGS-UI.md`     | модалки настроек, логгер, `reload.ts`               |
+| `docs/2.0.1/SETTINGS-STATE.md`  | `settings-state.ts`                                 |
+| `docs/2.0.1/UI-MODULES.md`      | `net-check.ts`, `links.ts`, `action-panel-state.ts` |
+| `docs/2.0.1/CLEANUP-PROCESS.md` | правила и процедуры самой чистки                    |
 
 ## Партия 6: `translator/index.ts`
 
@@ -184,8 +184,8 @@
 | №   | Цель                                                      | Вес       | Файлов |
 | --- | --------------------------------------------------------- | --------- | ------ |
 | 1   | `ui`: остальное (вкладки настроек, панели, мелкие модули) | 58 522 б  | 13     |
-| 2   | `src/api` целиком                                          | 119 074 б | 9      |
-| 3   | `src/core` целиком                                         | 91 364 б  | 10     |
+| 2   | `src/api` целиком                                         | 119 074 б | 9      |
+| 3   | `src/core` целиком                                        | 91 364 б  | 10     |
 | 4   | `src/features/media`                                      | 87 255 б  | 8      |
 | 5   | `src/features/scanner`                                    | 61 928 б  | 6      |
 | 6   | `src/features/exporter`                                   | 52 024 б  | 5      |

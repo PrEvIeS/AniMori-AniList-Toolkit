@@ -121,7 +121,6 @@ async function onDumpState(): Promise<void> {
       settings,
       queueSizes: getPendingQueueSizes(),
       databaseCache: dbStats,
-      // listMountedApps() — новое по сравнению с императивным кодом
       mountedApps: listMountedApps(),
       rateLimits: {
         anilist: isAniListRateLimited() ? 'Пауза' : 'OK',
@@ -196,10 +195,8 @@ function toggleStack(id: number): void {
 }
 
 // ---------- JSON-viewer ----------
-//
-// Возвращает доверенный HTML: все строки и ключи экранируются через escapeHTML.
-// v-html в шаблоне применяется только к результату этой функции.
 
+/** Возвращает доверенный HTML: все строки и ключи экранируются через escapeHTML. */
 function jsonView(obj: unknown, isRoot = true): string {
   if (obj === null) return '<span style="color:#f38ba8">null</span>'
   if (typeof obj === 'undefined') return '<span style="color:#f38ba8">undefined</span>'

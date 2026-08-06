@@ -1,15 +1,5 @@
-// Пункт 2.5: от императивной панели осталась только точка запуска.
-//
-// Разметка теперь в ActionPanel.vue, состояние — в action-panel-state.ts. Файл сохранён
-// ради пути импорта: main.ts берёт отсюда ACTION_ORDER, registerActionButton и
-// initActionBar, и менять bootstrap() в этом пункте не требуется.
-//
-// Реестр кнопок и реактивное состояние сознательно лежат в отдельном модуле:
-// иначе возник бы цикл actions.ts -> ActionPanel.vue -> actions.ts.
-//
-// Пункт 4.5 убрал отсюда вызов initReloadControls(). Кнопка обновления переехала
-// в блок навигации (features/ui/nav.ts и NavPanel.vue), и панель действий снова
-// содержит ровно то, что есть на обеих платформах: функции самого AniMori.
+// Точка запуска панели действий: разметка в ActionPanel.vue, состояние в action-panel-state.ts.
+// Реестр кнопок вынесен в отдельный модуль: иначе цикл через ActionPanel.vue.
 
 import { mountApp, unmountApp } from '../../utils/vue-mounter'
 import ActionPanel from './ActionPanel.vue'
@@ -30,31 +20,24 @@ const CONTAINER_ID = 'animori-actions'
 let isStarted = false
 
 /**
- * Монтирует панель действий.
- *
- * Контейнер создаёт сам компонент, поэтому монтируемся в body, а не в #animori-actions:
- * селектор .am-premium-btn + .am-premium-btn из style.scss работает только пока кнопки —
- * прямые соседи внутри flex-контейнера.
+ * Монтирует панель действий в body: контейнер создаёт сам компонент.
+ * Кнопки обязаны оставаться соседями: на этом держится `.am-premium-btn + .am-premium-btn`.
  */
 export function initActionBar(): void {
   if (isStarted) return
   isStarted = true
 
-  // На этапе 1 контейнер мог создать виджет плеера раньше панели. Сейчас такого пути
-  // нет, но узел может остаться от предыдущей версии скрипта после горячего
-  // обновления в Tampermonkey — тогда пилюль отрисовалась бы дважды.
+  // Узел мог остаться от прежней версии после горячего обновления — тогда панелей две.
   document.getElementById(CONTAINER_ID)?.remove()
 
-  // watchContainer: false — наблюдатель на childList у body был бы пустая трата:
-  // AniList дёргает детей body постоянно (модалки, тултипы), а панель за весь этап 1
-  // ни разу не пропала: она fixed и лежит вне дерева React.
+  // Наблюдатель не нужен: панель fixed и лежит вне дерева React, а дети body меняются постоянно.
   mountApp(ACTION_PANEL_APP_KEY, ActionPanel, {
     container: document.body,
     watchContainer: false,
   })
 }
 
-/** Снимает панель. Нужно для LifecycleManager из п.2.9. */
+/** Снимает панель. Нужно для LifecycleManager. */
 export function destroyActionBar(): void {
   unmountApp(ACTION_PANEL_APP_KEY)
   isStarted = false

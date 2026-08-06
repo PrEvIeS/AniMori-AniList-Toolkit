@@ -276,7 +276,7 @@ export async function fetchShikiPersonREST(
           }
         }
 
-        // Гард тёзок: при неточном совпадении требуем общий тайтл: иначе однофамильцы подменяли описания.
+        // Гард тёзок: неточное совпадение требует общего тайтла, иначе подменялись однофамильцы.
         if (targetMalIds.length && itemScore < 90 && detailsRes) {
           const candMal = collectCandidateMalIds(detailsRes)
           if (candMal.length && !candMal.some((id) => targetMalIds.includes(id))) {

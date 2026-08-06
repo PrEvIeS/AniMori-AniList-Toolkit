@@ -7,7 +7,7 @@ import { Logger } from '@/utils/logger'
 
 /**
  * Пометка «клик по этому элементу — не переход по ссылке».
- * Ставится на свои кнопки-действия внутри ссылки; почему — SETTINGS-UI.md.
+ * Ставится на свои кнопки-действия внутри ссылки: AniList вкладывает их в карточки.
  */
 const NO_NAV_ATTR = 'data-am-no-nav'
 
@@ -45,7 +45,6 @@ function openExternal(url: string): void {
  * stopPropagation не вызывается: если мы не вмешались, событие должно дойти до сайта.
  */
 function onClick(e: MouseEvent): void {
-  // Уже обработано чьим-то обработчиком — не лезем.
   if (e.defaultPrevented) return
 
   // Только обычный левый клик: тихо менять смысл жеста мы не вправе.
@@ -54,7 +53,6 @@ function onClick(e: MouseEvent): void {
   const target = e.target
   if (!(target instanceof Element)) return
 
-  // Проверка идёт до разбора ссылки: решение о переходе принимается здесь и сейчас.
   if (target.closest(`[${NO_NAV_ATTR}]`)) return
 
   const anchor = target.closest('a[href]')
@@ -86,7 +84,7 @@ let nativeOpen: typeof window.open | null = null
 
 /**
  * Подменяет window.open на версию, уводящую веб-адреса в браузер.
- * Патч глобала — осознанный компромисс, подробности в SETTINGS-UI.md.
+ * Без патча окно без вкладок открывало бы внешний адрес поверх самого себя.
  */
 function patchWindowOpen(): void {
   if (nativeOpen) return

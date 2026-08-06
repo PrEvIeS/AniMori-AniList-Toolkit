@@ -354,7 +354,7 @@ async function load(): Promise<void> {
     password.value = String(rawPassword)
     bypass.value = String(rawBypass)
 
-    // Загрузка — не правка: напоминание о перезапуске只 после действий человека.
+    // Загрузка — не правка: напоминание о перезапуске появляется после действий человека.
     needsRestart.value = false
   } catch (e) {
     Logger('ERROR', 'Не удалось прочитать настройки прокси', e)

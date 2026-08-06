@@ -266,4 +266,3 @@ npm run build
 - `docs/PROJECT-MAP-MODULES.md`: добавить ссылки на `docs/2.0.1/TRANSLATOR.md`
   и `docs/2.0.1/SETTINGS-UI.md`.
 - `docs/PROJECT-MAP.md`: добавить ссылку на этот журнал.
-}

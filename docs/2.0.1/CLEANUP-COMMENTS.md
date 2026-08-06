@@ -62,19 +62,19 @@ npm run build
 
 ## Сделано
 
-| Партия | Файл | Было | Стало | Коммит | Правило |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `src/bridge/TauriBridge.ts` | ~25 КБ | 11 617 б | `c1ab4ac` | до `dc20194` |
-| 1 | `src/bridge/IBridge.ts` | ~16 КБ | 8693 б | `11561da` | до `dc20194` |
-| 1 | `src/main.ts` | ~23,5 КБ | 12 560 б | `d1e4c09` | до `dc20194` |
-| 2 | `src/bridge/MonkeyBridge.ts` | 11 563 б | 8516 б | `80f5c28`, `b577a84` | до `dc20194` |
-| 2 | `src/bridge/TauriProxyDiagnostics.ts` | 4173 б | 2544 б | `595c9bf` | до `dc20194` |
-| 2 | `src/bridge/index.ts` | 2634 б | 1726 б | `da8e65c` | до `dc20194` |
-| 3 | `src-tauri/src/lib.rs` | 27 098 б | 17 717 б | `876fa5a` | до `dc20194` |
-| 4 | `src-tauri/src/proxy.rs` | 28 659 б | 16 664 б | `59d2d7b` | по новым |
-| 5 | `src-tauri/src/adblock.rs` | 19 467 б | 13 245 б | `4045d89` | по новым |
-| 5 | `src-tauri/src/proxy_guard.rs` | 10 992 б | 6025 б | `5a3ea87` | по новым |
-| 6 | `src/features/translator/index.ts` | 47 065 б | 34 677 б | `8488822` | по новым |
+| Партия | Файл                                  | Было     | Стало    | Коммит               | Правило      |
+| ------ | ------------------------------------- | -------- | -------- | -------------------- | ------------ |
+| 1      | `src/bridge/TauriBridge.ts`           | ~25 КБ   | 11 617 б | `c1ab4ac`            | до `dc20194` |
+| 1      | `src/bridge/IBridge.ts`               | ~16 КБ   | 8693 б   | `11561da`            | до `dc20194` |
+| 1      | `src/main.ts`                         | ~23,5 КБ | 12 560 б | `d1e4c09`            | до `dc20194` |
+| 2      | `src/bridge/MonkeyBridge.ts`          | 11 563 б | 8516 б   | `80f5c28`, `b577a84` | до `dc20194` |
+| 2      | `src/bridge/TauriProxyDiagnostics.ts` | 4173 б   | 2544 б   | `595c9bf`            | до `dc20194` |
+| 2      | `src/bridge/index.ts`                 | 2634 б   | 1726 б   | `da8e65c`            | до `dc20194` |
+| 3      | `src-tauri/src/lib.rs`                | 27 098 б | 17 717 б | `876fa5a`            | до `dc20194` |
+| 4      | `src-tauri/src/proxy.rs`              | 28 659 б | 16 664 б | `59d2d7b`            | по новым     |
+| 5      | `src-tauri/src/adblock.rs`            | 19 467 б | 13 245 б | `4045d89`            | по новым     |
+| 5      | `src-tauri/src/proxy_guard.rs`        | 10 992 б | 6025 б   | `5a3ea87`            | по новым     |
+| 6      | `src/features/translator/index.ts`    | 47 065 б | 34 677 б | `8488822`            | по новым     |
 
 Итого: 216 151 → 133 984 б, снято 82 167 б (−38%).
 
@@ -113,22 +113,22 @@ npm run build
 26 930 б, а `SettingsProxyCard.vue`, `shikimori-people.ts`, `player.ts` и `updater.rs`
 в неё не попали вовсе.
 
-| № | Цель | Вес | Файлов |
-| --- | --- | --- | --- |
-| 1 | `src/style.scss` | 46 173 б | 1 |
-| 2 | `ui`: `SettingsModal.vue`, `SettingsProxyCard.vue`, `LoggerModal.vue` | 64 876 б | 3 |
-| 3 | `ui`: `settings-state.ts`, `net-check.ts`, `reload.ts`, `links.ts`, `action-panel-state.ts` | 63 531 б | 5 |
-| 4 | `ui`: остальное (вкладки настроек, панели, мелкие модули) | 58 522 б | 13 |
-| 5 | `src/api` целиком | 119 074 б | 9 |
-| 6 | `src/core` целиком | 91 364 б | 10 |
-| 7 | `src/features/media` | 87 255 б | 8 |
-| 8 | `src/features/scanner` | 61 928 б | 6 |
-| 9 | `src/features/exporter` | 52 024 б | 5 |
-| 10 | `src/utils` | 35 027 б | 4 |
-| 11 | `src/features/adblock` | 32 430 б | 5 |
-| 12 | `src/features/search` | 21 682 б | 2 |
-| 13 | `src/features/translator`: `rules.ts`, `dom.ts` | 18 008 б | 2 |
-| 14 | Хвосты: `src-tauri/src/updater.rs`, `src/vite-env.d.ts` | 8985 б | 2 |
+| №   | Цель                                                                                        | Вес       | Файлов |
+| --- | ------------------------------------------------------------------------------------------- | --------- | ------ |
+| 1   | `src/style.scss`                                                                            | 46 173 б  | 1      |
+| 2   | `ui`: `SettingsModal.vue`, `SettingsProxyCard.vue`, `LoggerModal.vue`                       | 64 876 б  | 3      |
+| 3   | `ui`: `settings-state.ts`, `net-check.ts`, `reload.ts`, `links.ts`, `action-panel-state.ts` | 63 531 б  | 5      |
+| 4   | `ui`: остальное (вкладки настроек, панели, мелкие модули)                                   | 58 522 б  | 13     |
+| 5   | `src/api` целиком                                                                           | 119 074 б | 9      |
+| 6   | `src/core` целиком                                                                          | 91 364 б  | 10     |
+| 7   | `src/features/media`                                                                        | 87 255 б  | 8      |
+| 8   | `src/features/scanner`                                                                      | 61 928 б  | 6      |
+| 9   | `src/features/exporter`                                                                     | 52 024 б  | 5      |
+| 10  | `src/utils`                                                                                 | 35 027 б  | 4      |
+| 11  | `src/features/adblock`                                                                      | 32 430 б  | 5      |
+| 12  | `src/features/search`                                                                       | 21 682 б  | 2      |
+| 13  | `src/features/translator`: `rules.ts`, `dom.ts`                                             | 18 008 б  | 2      |
+| 14  | Хвосты: `src-tauri/src/updater.rs`, `src/vite-env.d.ts`                                     | 8985 б    | 2      |
 
 Всего в очереди 760 879 б в 73 файлах. При темпе чистки −30% снимется ещё
 около 230 КБ; пройдена примерно пятая часть работы.

@@ -1,6 +1,6 @@
 // Ссылки в десктопной сборке: внешние адреса — в браузер, anilist.co — в окне.
 // Страховка без клика — on_navigation в src-tauri/src/lib.rs.
-// Почему перехват и почему патч window.open — docs/2.0.1/SETTINGS-UI.md.
+// Почему перехват и почему патч window.open — docs/DECISIONS.md.
 
 import { Bridge } from '@/bridge'
 import { Logger } from '@/utils/logger'

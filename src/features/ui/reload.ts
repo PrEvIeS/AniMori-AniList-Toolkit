@@ -1,5 +1,5 @@
 // Единая точка перезагрузки страницы и клавиатурные сочетания для неё.
-// Почему не location.reload() и зачем ожидание записи — docs/2.0.1/SETTINGS-UI.md.
+// Почему не location.reload() и зачем ожидание записи — docs/DECISIONS.md.
 
 import { Bridge } from '@/bridge'
 import { Logger } from '@/utils/logger'

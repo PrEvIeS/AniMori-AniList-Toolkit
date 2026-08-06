@@ -1,6 +1,6 @@
 <!--
   Карточка прокси в панели настроек, только для десктопной сборки.
-  Решения и подводные камни — docs/2.0.1/SETTINGS-UI.md.
+  Решения и подводные камни — docs/DECISIONS.md.
 -->
 <template>
   <div class="amk-card" v-if="isDesktop">
@@ -213,7 +213,7 @@ const statusText = computed(() => {
 
 /**
  * Проверка по кнопке: щуп TCP со стороны Rust плюс боевой запрос через мост.
- * Шага два, потому что они ловят разные беды — docs/2.0.1/SETTINGS-UI.md.
+ * Шага два, потому что они ловят разные беды — docs/DECISIONS.md.
  */
 async function check(): Promise<void> {
   if (checking.value) return

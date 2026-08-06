@@ -1,6 +1,6 @@
 // Состояние панели действий: реестр кнопок и кнопка плеера, без разметки.
 // Отдельный файл, чтобы не было цикла actions.ts — ActionPanel.vue — actions.ts.
-// Почему shallowRef и почему кнопка плеера здесь — docs/2.0.1/SETTINGS-UI.md.
+// Почему shallowRef и почему кнопка плеера здесь — docs/DECISIONS.md.
 
 import { computed, ref, shallowRef } from 'vue'
 import type { Ref } from 'vue'

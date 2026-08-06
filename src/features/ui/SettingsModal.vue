@@ -1,6 +1,6 @@
 <!--
   Панель настроек #am-panel: каркас модалки, навигация и простые вкладки.
-  Решения по вкладкам, очистке кэша и перезагрузке — docs/2.0.1/SETTINGS-UI.md.
+  Решения по вкладкам, очистке кэша и перезагрузке — docs/DECISIONS.md.
 -->
 <template>
   <div
@@ -494,7 +494,7 @@ function disarmClear(): void {
 
 /**
  * Сброс кэша в два шага: первый клик взводит кнопку, второй запускает очистку.
- * Почему не confirm() и почему перезагрузка безусловна — docs/2.0.1/SETTINGS-UI.md.
+ * Почему не confirm() и почему перезагрузка безусловна — docs/DECISIONS.md.
  */
 function onClearCache(): void {
   if (clearBusy.value) return

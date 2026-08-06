@@ -1,6 +1,6 @@
 // Ручной прогон по адресам приложения с записью итога в core/net-health.ts.
 // Идентификаторы источников заданы литералами и обязаны совпадать с клиентами.
-// Ограничения проб и правила добавления адреса — docs/2.0.1/SETTINGS-UI.md.
+// Ограничения проб и правила добавления адреса — docs/DECISIONS.md.
 
 import { Bridge } from '@/bridge'
 import { anime365Limiter, animeThemesLimiter, shikiLimiter } from '../../api/rate-limit'

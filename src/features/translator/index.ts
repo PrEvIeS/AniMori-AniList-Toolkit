@@ -1,5 +1,5 @@
 // Переводчик интерфейса: очередь, кэш и наблюдатель за DOM.
-// Устройство конвейера, маркеры узлов и разбор дефектов — docs/2.0.1/TRANSLATOR.md.
+// Устройство конвейера, маркеры узлов и разбор дефектов — docs/DECISIONS.md.
 
 import { anilistPauseRemaining, anilistQuery, isAniListRateLimited } from '../../api/anilist'
 import { isAnime365RateLimited } from '../../api/anime365'

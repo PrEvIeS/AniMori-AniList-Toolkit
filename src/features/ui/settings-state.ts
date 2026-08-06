@@ -1,6 +1,6 @@
 // Реактивное состояние панели настроек #am-panel без разметки.
 // Запись только через saveSetting() из core/settings (РИСК №1 в docs/DECISIONS.md).
-// Решения и подводные камни — docs/2.0.1/SETTINGS-UI.md.
+// Решения и подводные камни — docs/DECISIONS.md.
 
 import { computed, ref } from 'vue'
 import type { WritableComputedRef } from 'vue'

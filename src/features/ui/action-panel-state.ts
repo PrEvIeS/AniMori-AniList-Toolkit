@@ -5,7 +5,7 @@
 import { computed, ref, shallowRef } from 'vue'
 import type { Ref } from 'vue'
 
-/** Порядок кнопок слева направо, как в монолите: ⚙, </>, ⇄. Перенос — правее всех. */
+/** Порядок кнопок слева направо: ⚙, </>, ⇄. Перенос — правее всех. */
 export const ACTION_ORDER = {
   settings: 10,
   logger: 20,
@@ -14,7 +14,7 @@ export const ACTION_ORDER = {
 } as const
 
 export interface ActionButton {
-  /** id узла: сохраняем идентификаторы монолита (am-set-btn, am-log-btn, am-cmp-btn). */
+  /** id узла: am-set-btn, am-log-btn, am-cmp-btn. Менять нельзя, на них завязаны стили. */
   id: string
   /** Подпись кнопки. Вставляется как текст, не как HTML. Используется, когда нет icon. */
   label: string
@@ -44,7 +44,7 @@ const registry = shallowRef<ActionButton[]>([])
 
 /**
  * Кнопки в порядке отрисовки: по полю order, а не по порядку регистрации.
- * Скрытые отсеиваются здесь, а не через v-if; почему — SETTINGS-UI.md.
+ * Скрытые отсеиваются здесь, а не через v-if: иначе рвётся соседство кнопок в панели.
  */
 export const actionButtons = computed<ActionButton[]>(() =>
   registry.value

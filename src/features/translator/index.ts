@@ -1,50 +1,5 @@
-// Этап 1 п.1.9: переводчик — очередь, кэш и наблюдатель (строки 2502-3060 монолита).
-//
-// Что здесь происходит, по шагам:
-//   1) MutationObserver видит новые узлы страницы и переводит интерфейс по словарю;
-//   2) debouncedFindContent собирает со страницы ссылки на тайтлы/персонажей/авторов;
-//   3) queueContent смотрит в кэш IndexedDB и кладёт в очередь только промахи;
-//   4) processTransQueue берёт пачку, спрашивает AniList и Shikimori, кладёт в кэш;
-//   5) applyTranslation подставляет русское название в конкретные элементы.
-//
-// Отличия от монолита (все сознательные):
-//   - глобальный window.ensureWidgets заменён на подписку registerMutationHook():
-//     модуль медиа-виджетов подпишется сам, когда будет вынесен;
-//   - globalPendingQueues наружу не торчит, вместо него getPendingQueueSizes();
-//   - флаг activeRound висел на самой функции, теперь это переменная модуля;
-//   - каждый элемент пачки обрабатывается в try/catch: одна битая карточка больше
-//     не роняет всю очередь перевода (в монолите один сбой сети мог её заморозить);
-//   - перевод никогда не пишется через textContent в элемент, внутри которого есть
-//     разметка (см. writeText): монолит на этом ломал вёрстку карточек.
-//
-// ВАЖНО про маркеры. AniList переиспользует один и тот же узел .tooltip для разных
-// карточек, а ссылки в списках переиспользует при виртуальном скролле. Поэтому
-// dataset.translated и dataset.queued хранят id (ключ) тайтла, а не флаг '1', иначе
-// узел навсегда глохнет после первого перевода и покажет оригинал.
-//
-// ВАЖНО про потерю элементов (аудит журнала от 31.07). Пачка удаляла id из pending
-// ДО запроса к AniList. Любой сбой сети, любой id, на который AniList не вернул
-// строку, и любое исключение внутри строки означали: id из pending исчез, а на
-// элементе остался маркер dataset.queued. Следующий скан такой элемент пропускал,
-// запросов по нему больше не было — карточка оставалась английской до перезагрузки
-// страницы. Теперь любой неуспех возвращает id в очередь и снимает маркер, а после
-// трёх неудач ключ отпускается совсем, чтобы не крутиться вечно.
-//
-// Пункт 3.8: темп запросов больше НЕ регулируется отсюда.
-//
-// Раньше после каждого элемента пачки стояла своя пауза (250 мс для тайтлов, 300 мс
-// для персон) поверх шлюза внутри api-клиентов. Получался двойной троттлинг: пачка
-// из сорока тайтлов простаивала десять секунд даже когда все сорок брались из кэша
-// и ни одного сетевого запроса не делалось. Теперь темп держит общий ограничитель
-// (src/api/rate-limit.ts), а очередь просто отдаёт работу так быстро, как её берут.
-// Ждать здесь нечего: acquireSlot() внутри клиента сам притормозит отправку.
-//
-// Второе изменение 3.8: в проверку лимитов добавлен anime365. Он стоит в той же
-// цепочке резолва названий, что и Shikimori, и если он ушёл в паузу или бэкофф,
-// запускать новую пачку так же бессмысленно.
-//
-// РИСК №4 из AUDITION.md: наблюдатель слушает всю страницу, поэтому собственный UI
-// обязательно помечать классом am-notr, иначе на Этапе 2 будет цикл Vue <-> переводчик.
+// Переводчик интерфейса: очередь, кэш и наблюдатель за DOM.
+// Устройство конвейера, маркеры узлов и разбор дефектов — docs/2.0.1/TRANSLATOR.md.
 
 import { anilistPauseRemaining, anilistQuery, isAniListRateLimited } from '../../api/anilist'
 import { isAnime365RateLimited } from '../../api/anime365'
@@ -94,9 +49,7 @@ const MEDIA_BATCH = 40
 const PERSON_BATCH = 10
 
 /**
- * Окно сбора пачки. Первый промах не запускает обработку немедленно: за эти
- * полсекунды в очередь успевают попасть остальные карточки экрана, и вместо
- * десяти запросов к AniList по одному элементу уходит один на десять.
+ * Окно сбора пачки: за полсекунды в очередь успевают остальные карточки экрана.
  * Окно фиксированное, а не скользящее: поток промахов не должен откладывать старт.
  */
 const DISPATCH_DELAY_MS = 500
@@ -107,17 +60,12 @@ const RETRY_DELAY_MS = 2000
 /** Сколько раз пробуем один ключ, прежде чем отпустить его до перезагрузки страницы. */
 const MAX_ATTEMPTS = 3
 
-/**
- * Порог «уже неважно» для отбора пачки. Всё, что дальше края экрана, считается
- * фоном и уступает место видимому. Значение не критично: оно влияет только на
- * порядок, ни один элемент из очереди не пропадает.
- */
+/** Порог «уже неважно» для отбора пачки: влияет только на порядок, ничто не теряется. */
 const VIEWPORT_MARGIN_PX = 600
 
 /**
  * Свои виджеты: их содержимое уже на русском и собрано вручную.
- * Ссылки внутри них переводчику отдавать нельзя — он перепишет наш текст
- * и снесёт бейджи (год, тип, статус в списке).
+ * Отдать ссылки внутри них переводчику — потерять бейджи года, типа и статуса.
  */
 const SELF_UI_SELECTOR =
   '.animori-franchise, .animori-themes, .animori-extlinks, .animori-ratings, #animori-actions'
@@ -178,8 +126,7 @@ interface AniListMediaRow {
 
 type AniListPersonRow = AniListPersonRef & { id: number }
 
-// ==== Состояние модуля ====
-// Всё приватное: наружу отдаются только функции.
+// ==== Состояние модуля: наружу отдаются только функции ====
 
 /** Ключ вида "MED2_123" -> элементы страницы, которые надо обновить. */
 const queue = new Map<string, QueueEntry[]>()
@@ -197,11 +144,8 @@ const attempts = new Map<string, number>()
 let isProcessing = false
 
 /**
- * Заявка на повторный прогон. Дефект A7 (журнал ч.3 §6.10).
- * Пока пачка обрабатывается, новые промахи попадают в processTransQueue,
- * та молча выходила по isProcessing — и если работающий цикл к этому моменту
- * уже проверил totalPending() и выходил из while, разбудить очередь было нечем.
- * Элементы висели до следующего перехода по сайту.
+ * Заявка на повторный прогон: промахи, пришедшие во время работы цикла.
+ * Без неё элементы ждали бы следующего перехода по сайту.
  */
 let rerunRequested = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -211,9 +155,8 @@ let isStarted = false
 let mutationHook: (() => void) | null = null
 
 /**
- * Подписка на изменения страницы. Нужна медиа-виджетам: AniList любит
- * пересобирать блоки, и их надо вставлять заново.
- * В монолите роль играла глобальная window.ensureWidgets.
+ * Подписка на изменения страницы. Нужна медиа-виджетам:
+ * AniList любит пересобирать блоки, и их надо вставлять заново.
  */
 export function registerMutationHook(hook: (() => void) | null): void {
   mutationHook = hook
@@ -225,15 +168,8 @@ export function getPendingQueueSizes(): Record<QueueKind, number> {
 }
 
 /**
- * Сбрасывает счётчики неудач. Дефект A8 (журнал ч.3 §6.11).
- *
- * После MAX_ATTEMPTS ключ отпускался, но запись в attempts оставалась равной 3.
- * Новый узел на странице ставился в очередь и на первом же сбое получал tries = 4,
- * то есть отбрасывался мгновенно, без единой реальной попытки. Один неудачный
- * момент (сеть моргнула) травил ключ на всё время жизни вкладки.
- *
- * Вызывать на смену роута: новая страница — новый шанс. Внутри одной страницы
- * счётчик по-прежнему работает и не даёт крутить цикл на упавшей сети.
+ * Сбрасывает счётчики неудач на смену роута: новая страница — новый шанс.
+ * Внутри одной страницы счётчик держит цикл от кручения на упавшей сети.
  */
 export function resetTranslatorRetries(): void {
   const dropped = dropDetachedEntries()
@@ -248,14 +184,7 @@ export function resetTranslatorRetries(): void {
 
 /**
  * Выбрасывает из очереди элементы, чьи узлы больше не в документе.
- *
- * Вторая половина дефекта A11. После ухода со списка в MED2 оставались
- * полторы-две сотни карточек покинутой страницы. Писать перевод некуда —
- * узлов нет, — но очередь честно ходила за каждым в anime365 по одному,
- * по четверти секунды на тайтл, и открытая страница ждала минутами.
- *
- * Уже отправленные пачки это не ломает: их id вынуты из pending раньше,
- * а результат всё равно ляжет в кэш и пригодится при возврате.
+ * Иначе покинутый список тянет сотни запросов, результат которых писать некуда.
  */
 function dropDetachedEntries(): number {
   let dropped = 0
@@ -286,11 +215,8 @@ function totalPending(): number {
 }
 
 /**
- * Расстояние от элемента до видимой области, в пикселях. 0 — элемент на экране.
- * Оторванные и скрытые узлы получают бесконечность и уходят в самый хвост.
- *
- * Ключ может держать несколько элементов (карточка в списке и та же ссылка
- * в боковом блоке), поэтому берём ближайший из них.
+ * Расстояние от элемента до видимой области в пикселях; 0 — элемент на экране.
+ * Ключ может держать несколько элементов, поэтому берём ближайший.
  */
 function entryDistance(key: string): number {
   const viewport = window.innerHeight || document.documentElement.clientHeight
@@ -300,8 +226,7 @@ function entryDistance(key: string): number {
     if (!el.isConnected) continue
 
     const rect = el.getBoundingClientRect()
-    // Нулевая рамка — узел в документе, но не отрисован (скрытая вкладка,
-    // свёрнутый блок). Показать ему перевод сейчас всё равно некому.
+    // Нулевая рамка — узел в документе, но не отрисован: показывать перевод некому.
     if (rect.width === 0 && rect.height === 0) continue
 
     let distance = 0
@@ -317,14 +242,7 @@ function entryDistance(key: string): number {
 
 /**
  * Набирает пачку, отдавая приоритет тому, что пользователь видит прямо сейчас.
- *
- * Дефект A12. Отбор шёл в порядке постановки в очередь, то есть в порядке обхода
- * DOM. При потолке ограничителя в 60 запросов в минуту длина очереди определяла
- * всё: открыв список из двух сотен тайтлов и пролистав вниз, человек ждал, пока
- * пройдут все карточки выше. Теперь видимое переводится первым, остальное
- * дозаполняется фоном и оседает в кэше.
- *
- * Отбор снимает выбранные id с pending — вызывающему это делать больше не нужно.
+ * Выбранные id снимаются с pending — вызывающему это делать не нужно.
  */
 function pickBatch(kind: QueueKind, size: number): number[] {
   const ids = [...pending[kind]]
@@ -354,8 +272,8 @@ function pickBatch(kind: QueueKind, size: number): number[] {
 // ==== Очередь ====
 
 /**
- * Ставит обработку в план. Если окно сбора уже открыто, второй раз не переставляем:
- * иначе непрерывный поток промахов при скролле откладывал бы старт бесконечно.
+ * Ставит обработку в план. Повторно не переставляем:
+ * непрерывный поток промахов при скролле откладывал бы старт бесконечно.
  */
 function scheduleDispatch(): void {
   if (dispatchTimer) return
@@ -367,8 +285,7 @@ function scheduleDispatch(): void {
 
 /**
  * Снимает маркер «уже в очереди» со всех элементов ключа.
- * Без этого повторная постановка невозможна: queueContent отсекает элемент
- * по dataset.queued, и карточка молча остаётся непереведённой.
+ * Без этого queueContent отсечёт элемент и карточка останется непереведённой.
  */
 function releaseQueued(key: string): void {
   for (const { el } of queue.get(key) ?? []) {
@@ -387,8 +304,7 @@ function returnToQueue(kind: QueueKind, id: number): void {
 
 /**
  * Возвращает id в очередь после сбоя, с паузой и счётчиком попыток.
- * После MAX_ATTEMPTS ключ отпускается: маркеры сняты, запись из очереди удалена,
- * так что новый узел на странице сможет попробовать снова с чистого листа.
+ * После MAX_ATTEMPTS ключ отпускается: новый узел начнёт с чистого листа.
  */
 function requeue(kind: QueueKind, id: number): void {
   const key = `${kind}_${id}`
@@ -397,8 +313,7 @@ function requeue(kind: QueueKind, id: number): void {
   releaseQueued(key)
 
   if (tries >= MAX_ATTEMPTS) {
-    // Это не рутина очереди, а потеря перевода: элемент останется английским
-    // до перезагрузки страницы. Уровень QUEUE прятал такие случаи от глаз.
+    // Не рутина очереди, а потеря перевода до перезагрузки страницы.
     Logger('WARN', `[Process] ${key}: неудач подряд ${tries}, ключ отпущен`)
     queue.delete(key)
     return
@@ -412,11 +327,7 @@ function requeue(kind: QueueKind, id: number): void {
 
 /**
  * Кладёт элемент в очередь перевода или сразу берёт готовое из кэша.
- * @param extra true только для главного заголовка страницы.
- * @param force игнорировать маркер «уже в очереди». Нужен тултипам: AniList переиспользует
- *   один узел и сам возвращает в него оригинальный текст, так что перевод надо
- *   применять заново. Лишних запросов не будет: данные берутся из IndexedDB,
- *   а pending — это Set.
+ * extra — главный заголовок страницы; force — общий узел тултипа, переводим заново.
  */
 async function queueContent(
   id: number,
@@ -428,12 +339,7 @@ async function queueContent(
   const key = `${kind}_${id}`
   if (el.dataset.queued === key && !extra && !force) return
 
-  // Дефект A6 (журнал ч.3 §6.9). Маркер dataset.queued раньше ставился ЗДЕСЬ,
-  // до await dbGet. Вызывают нас как void queueContent(...), то есть отказ
-  // IndexedDB никто не ловил: элемент оставался помеченным, в очередь не попадал,
-  // а повторно его уже не принимали — карточка английская до перезагрузки.
-  // Теперь маркер ставится только после того, как элемент реально учтён,
-  // а любой сбой на пути его снимает.
+  // Маркер ставится после учёта элемента: отказ IndexedDB не должен глушить узел.
   let cached: ShikiCacheRecord<TranslationPayload> | undefined | null = null
   try {
     cached = await dbGet<ShikiCacheRecord<TranslationPayload>>('shikiCache', key)
@@ -478,9 +384,7 @@ async function processTransQueue(): Promise<void> {
     while (totalPending() > 0) {
       Logger('QUEUE', `[Process] Запуск обработки. В ожидании: ${totalPending()} элементов.`)
 
-      // Лимит со стороны любого из трёх источников цепочки: отступаем и пробуем
-      // позже, а не колотим в закрытую дверь. anime365 добавлен в 3.8 — он стоит
-      // в том же резолве названий, что и Shikimori.
+      // Лимит любого из трёх источников цепочки: отступаем, а не колотим в дверь.
       if (isAniListRateLimited() || isShikimoriRateLimited() || isAnime365RateLimited()) {
         const wait = Math.max(1000, anilistPauseRemaining()) + Math.floor(Math.random() * 500)
         Logger('WARN', `[Process] Активен лимит API, повтор через ${wait}ms`)
@@ -488,12 +392,7 @@ async function processTransQueue(): Promise<void> {
         return
       }
 
-      // Дефект A11. Строгий приоритет MED2 морил голодом персонажей: после
-      // списка из двух сотен тайтлов очередь MED2 не пустеет минутами, и
-      // CHR2/STF3 открытой страницы не получают ход вообще.
-      // Персоны идут первыми по двум причинам: они бывают только на той
-      // странице, где стоит пользователь, и пачка у них вчетверо меньше
-      // (10 против 40), то есть задержка для тайтлов пренебрежимая.
+      // Персоны раньше тайтлов: они есть только на текущей странице, а пачка вчетверо меньше.
       if (pending.CHR2.size > 0) await processPersonBatch('CHR2')
       else if (pending.STF3.size > 0) await processPersonBatch('STF3')
       else if (pending.MED2.size > 0) await processMediaBatch()
@@ -502,9 +401,7 @@ async function processTransQueue(): Promise<void> {
     Logger('QUEUE', '[Process] Очередь пуста. Ожидание новых элементов.')
   } finally {
     isProcessing = false
-    // Пока мы работали, кто-то стучался в очередь. Гоняем ещё круг через
-    // общее окно сбора, а не напрямую: рекурсии нет, лишний холостой прогон
-    // стоит один Logger-вызов.
+    // В очередь стучались, пока мы работали: ещё круг через общее окно, без рекурсии.
     if (rerunRequested) {
       rerunRequested = false
       scheduleDispatch()
@@ -526,8 +423,7 @@ async function processMediaBatch(): Promise<void> {
     return
   }
 
-  // AniList мог не вернуть часть строк. Молча забыть их нельзя: элемент помечен
-  // как поставленный в очередь и сам себя больше не предложит.
+  // Пропавшие в ответе строки нельзя забыть: элемент помечен и сам себя не предложит.
   const returned = new Set(rows.map((row) => row.id))
   for (const id of ids) {
     if (!returned.has(id)) requeue('MED2', id)
@@ -612,8 +508,7 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
         )
 
         if (res.status === 429) {
-          // Возвращаем в очередь текущую строку И ВЕСЬ ОСТАТОК пачки: они уже
-          // вынуты из pending, и без этого возврата теряются безвозвратно.
+          // Возвращаем весь остаток пачки: id уже вынуты из pending и иначе теряются.
           pauseShikimori(6000)
           const rest = rows.slice(i)
           for (const pendingRow of rest) returnToQueue(kind, pendingRow.id)
@@ -655,9 +550,7 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
   }
 }
 
-/**
- * Собирает MAL id тайтлов персоны — их требует гард тёзок в shikimori-people.
- */
+/** Собирает MAL id тайтлов персоны — их требует гард тёзок в shikimori-people. */
 function collectTargetMalIds(row: AniListPersonRow, type: 'characters' | 'staff'): number[] {
   const nodes = (type === 'characters' ? row.media : row.staffMedia)?.nodes ?? []
   const ids: number[] = []
@@ -667,11 +560,7 @@ function collectTargetMalIds(row: AniListPersonRow, type: 'characters' | 'staff'
   return ids
 }
 
-/**
- * Собирает абсолютную ссылку на страницу персоны.
- * В монолите здесь была ошибка склейки (тот же класс багов, что чинил коммит 1306f00):
- * домен и фоллбэк подставлялись внутрь шаблонной строки, и ссылка ломалась.
- */
+/** Собирает абсолютную ссылку на страницу персоны: домен плюс относительный url. */
 function buildPersonLink(domain: string | null, url: string | null): string | null {
   if (!url) return null
   const host = domain ?? SHIKI_DOMAINS[0] ?? 'shikimori.io'
@@ -689,14 +578,8 @@ function hasOwnText(el: Element): boolean {
 }
 
 /**
- * Пишет перевод в элемент, не разрушая разметку.
- *
- * Правило: textContent допустим ТОЛЬКО для элемента без дочерних элементов.
- * Иначе внутри лежит вёрстка (обложка карточки, бейджи года и типа в хронологии
- * франшизы), и присваивание текста снесло бы её целиком — так ломались карточки
- * избранного на профиле и строки виджета франшизы.
- *
- * @returns false, если писать было некуда: вызывающий сам решает, что делать.
+ * Пишет перевод, не разрушая разметку: textContent допустим только без дочерних элементов.
+ * Возвращает false, если писать было некуда.
  */
 function writeText(el: HTMLElement, text: string): boolean {
   if (safelySetText(el, text)) return true
@@ -716,9 +599,7 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
 
   for (const { el, extra } of entries) {
     try {
-      // 1. Плавающая подсказка под курсором.
-      // Узел общий для всех карточек, поэтому пишем только если курсор всё ещё
-      // на том тайтле, для которого заказывали перевод (монолит: translatingId).
+      // 1. Плавающая подсказка: узел общий, пишем только на заказанном тайтле.
       if (el.classList.contains('title') && el.closest('.tooltip')) {
         if (el.dataset.translatingId !== String(id)) continue
         el.dataset.ru = data.ru
@@ -742,9 +623,7 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
         continue
       }
 
-      // 4. Обычная карточка в списке или сетке.
-      // Если текста внутри нет (плитка-обложка), ограничиваемся подсказкой:
-      // родной тултип AniList покажет имя сам.
+      // 4. Обычная карточка: без текста внутри хватит родного тултипа AniList.
       const nameEl = el.querySelector<HTMLElement>('.name') ?? el
       writeText(nameEl, data.ru)
       if (el.getAttribute('title')) el.setAttribute('title', data.ru)
@@ -760,8 +639,7 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
 
 /**
  * Вставляет русское описание, а оригинал прячет в раскрывашку.
- * Оригинал помечается am-notr, иначе переводчик со временем перепишет его фразы
- * и смысл кнопки «Оригинальное описание» теряется.
+ * Оригинал помечается am-notr, иначе переводчик со временем перепишет и его.
  */
 function applyDescription(el: HTMLElement, data: TranslationPayload): void {
   if (!data.desc) return
@@ -788,11 +666,8 @@ function applyDescription(el: HTMLElement, data: TranslationPayload): void {
 }
 
 /**
- * Подсказка при наведении: надо угадать, к какой карточке она относится.
- *
- * Узел тултипа один на всю страницу: AniList переписывает его текст под каждую
- * новую карточку. Поэтому ориентируемся не на маркер «уже переводили», а на то,
- * совпадает ли видимый текст с тем, что мы туда вписали в последний раз.
+ * Подсказка при наведении: узел один на всю страницу, надо угадать адресата.
+ * Ориентируемся не на маркер, а на совпадение видимого текста с нашим.
  */
 function processTooltip(tooltipNode: HTMLElement): void {
   const titleEl = tooltipNode.querySelector<HTMLElement>('.title')
@@ -853,8 +728,7 @@ function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
   if (link.classList.contains('cover')) return false
   if (link.closest('.nav')) return false
 
-  // Плитки-обложки (избранное на профиле) текста в себе не держат: имя там
-  // показывает родной тултип AniList. Писать в такую ссылку нечего.
+  // Плитки-обложки текста не держат: имя показывает родной тултип AniList.
   if (!hasOwnText(link) && !link.querySelector('.name')) return false
 
   if (kind === 'MED2') {
@@ -866,8 +740,7 @@ function isTranslatableLink(link: HTMLAnchorElement, kind: QueueKind): boolean {
 }
 
 /**
- * Обходит страницу и собирает всё, что надо перевести.
- * Задержка 300 мс — чтобы при быстром скролле не бегать по DOM на каждый чих.
+ * Обходит страницу и собирает всё, что надо перевести; 300 мс против беготни при скролле.
  * Повторные постановки отсекает сам queueContent по маркеру dataset.queued.
  */
 function debouncedFindContent(): void {
@@ -952,8 +825,7 @@ export function initTranslator(): void {
           translateNode(node)
           if (!(node instanceof HTMLElement)) return
 
-          // AniList прячет длинные описания под кнопку — раскрываем сразу,
-          // иначе русское описание встанет в обрезанный блок.
+          // Раскрываем обрезанные описания: иначе русский текст встанет в огрызок.
           if (node.classList.contains('description-length-toggle')) node.click()
           else node.querySelector<HTMLElement>('.description-length-toggle')?.click()
 
@@ -964,13 +836,12 @@ export function initTranslator(): void {
           }
         })
 
-        // Содержимое уже существующего тултипа заменили под новую карточку
-        // (строка 3021 монолита): переводим его заново.
+        // Тултип переиспользован под новую карточку — переводим его заново.
         const reused = findTooltip(mutation.target)
         if (reused) processTooltip(reused)
       } else if (mutation.type === 'characterData') {
         translateNode(mutation.target)
-        // Тултип часто обновляется точечной правкой текста (строка 3016 монолита).
+        // Тултип часто обновляется точечной правкой текста.
         const tooltip = findTooltip(mutation.target)
         if (tooltip) processTooltip(tooltip)
       } else if (mutation.type === 'attributes') {
@@ -984,7 +855,7 @@ export function initTranslator(): void {
 
     debouncedFindContent()
 
-    // Виджеты медиа-страницы восстанавливаем с задержкой, чтобы не дёргать их на каждый чих.
+    // Виджеты медиа-страницы восстанавливаем с задержкой, чтобы не дёргать на каждый чих.
     if (mutationHook) {
       if (mutationHookTimer) clearTimeout(mutationHookTimer)
       mutationHookTimer = setTimeout(() => mutationHook?.(), 150)

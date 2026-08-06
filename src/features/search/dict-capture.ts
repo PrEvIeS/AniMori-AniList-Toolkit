@@ -8,7 +8,7 @@
 // На Этапе 2 файл заменится Vue-компонентом, а core/dictionary.ts останется как есть.
 //
 // Класс am-notr на форме обязателен: иначе переводчик начнёт переводить собственную
-// форму и породит рекурсию мутаций (РИСК №4 из AUDITION.md).
+// форму и породит рекурсию мутаций (РИСК №4 из docs/DECISIONS.md).
 
 import { getUserDict, normDictKey, upsertUserDictEntry } from '../../core/dictionary'
 import { html } from '../../utils/dom'

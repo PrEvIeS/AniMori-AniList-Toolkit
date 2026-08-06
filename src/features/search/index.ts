@@ -349,7 +349,7 @@ export function initRussianSearch(): void {
     searchTimeout = window.setTimeout(() => void performRussianSearch(query), DEBOUNCE_MS)
   })
 
-  // РИСК №3 из AUDITION.md: React выкидывает наш блок при перерисовке выпадашки,
+  // РИСК №3 из docs/DECISIONS.md: React выкидывает наш блок при перерисовке выпадашки,
   // поэтому результат держится в cachedHtml и восстанавливается наблюдателем.
   const observer = new MutationObserver(() => {
     if (!document.body.classList.contains('am-ru-search-active')) return

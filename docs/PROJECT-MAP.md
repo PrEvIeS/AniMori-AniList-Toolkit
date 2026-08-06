@@ -1,8 +1,8 @@
 # Карта проекта AniMori
 
-Актуально для ветки `script&windows-dev` (вершина `bddc0a3`), 3 августа 2026.
-Здесь структура и связи кода, а не история разработки: история живёт
-в `docs/2.0.0/` и `docs/2.0.1/`.
+Ветка `script&windows-dev`. Здесь структура и связи кода, а не история
+разработки: решения и их причины — в `docs/DECISIONS.md`, ход работ —
+в `docs/<версия>/PLAN.md`, подробности — в телах коммитов.
 
 Карта разбита на три части:
 
@@ -10,9 +10,13 @@
 2. `PROJECT-MAP-MODULES.md` — прикладные модули и слой API;
 3. `PROJECT-MAP-SHELL.md` — оболочка Tauri, сборка, данные, инварианты.
 
+Размеры файлов в карте не указываются: они меняются каждую неделю и всегда
+оказываются ложью.
+
 ---
 
-> **Перед любой правкой:** `docs/CODE-STYLE.md` — комментарии в проекте ОЧЕНЬ лаконичны.
+> **Перед любой правкой:** `docs/CODE-STYLE.md` — комментарии в проекте ОЧЕНЬ
+> лаконичны. Перед любой записью в `docs/`: `docs/DOC-RULES.md`.
 
 ---
 
@@ -24,13 +28,14 @@ AniMori — надстройка над anilist.co для русскоязычн
 
 Одна кодовая база собирается в два продукта.
 
-| | Юзерскрипт | Десктоп |
-|---|---|---|
-| Сборка | `npm run build` (режим userscript) | `npm run build:tauri` плюс cargo |
-| Оболочка | Tampermonkey в браузере | Tauri 2 и WebView2, только Windows |
-| Артефакт | `dist/animori.user.js` | `AniMori_<версия>_x64-setup.exe` |
-| Мост | `MonkeyBridge` на GM_* | `TauriBridge` на плагинах Tauri |
-| Адблок | заглушка `impl.noop` | CSS плюс сетевой фильтр WebView2 |
+|                | Юзерскрипт                           | Десктоп                                |
+| -------------- | ------------------------------------ | -------------------------------------- |
+| Сборка        | `npm run build` (режим userscript)   | `npm run build:tauri` плюс cargo      |
+| Оболочка       | Tampermonkey в браузере             | Tauri 2 и WebView2, только Windows    |
+| Артефакт       | `dist/animori.user.js`               | `AniMori_<версия>_x64-setup.exe`      |
+| Мост           | `MonkeyBridge` на GM_\*              | `TauriBridge` на плагинах Tauri     |
+| Адблок         | заглушка `impl.noop`                 | CSS плюс сетевой фильтр WebView2    |
+| Сеть через прокси | нет, только диагностика доступности | два канала: WebView2 и клиент Rust  |
 
 Различия решаются на сборке через `resolve.alias`, а не ветвлением в рантайме:
 иначе в браузерный бандл уехали бы пакеты `@tauri-apps/*`, неработоспособные
@@ -47,81 +52,79 @@ AniMori — надстройка над anilist.co для русскоязычн
 
 ```
 .github/workflows/release.yml   сборка и публикация по тегу
-dictionary.json    182 КБ     словарь интерфейса, тянется с raw.githubusercontent
-docs/2.0.0/                     документы релиза 2.0.0, задним числом не правятся
-docs/2.0.1/                     текущий этап
+dictionary.json                 словарь интерфейса, тянется с raw.githubusercontent
+docs/                           карты, стиль, правила документации, реестр решений
+docs/<версия>/                  PLAN.md и CONTEXT.md, больше ничего
 src/                            общий фронтенд обеих сборок
 src-tauri/                      оболочка на Rust
-vite.config.ts     8.9 КБ     два режима сборки, алиасы, шапка юзерскрипта
+vite.config.ts                  два режима сборки, алиасы, шапка юзерскрипта
 tsconfig.json                   strict, алиасы для тайпчека
 package.json                    единственный источник номера версии
 CHANGELOG.md, README.md, LICENSE
 ```
 
+Документы в корне `docs/`: `DOC-RULES.md` (как вести записи), `DECISIONS.md`
+(реестр решений строками с хешами), `CODE-STYLE.md`, три части карты.
+
 ### src/
 
 ```
-main.ts          23.5 КБ   точка входа: порядок старта и привязка к SPA
-style.scss       46 КБ     все стили проекта одним файлом
-vite-env.d.ts     2.3 КБ    типы глобалов сборки
+main.ts        точка входа: порядок старта и привязка к SPA
+style.scss     все стили проекта одним файлом
+vite-env.d.ts  типы глобалов сборки, в том числе __ANIMORI_VERSION__
 
 api/        внешние сервисы
-  anilist.ts          18.6 КБ
-  shikimori-people.ts 19.0 КБ
-  anime365.ts         10.0 КБ
-  rate-limit.ts        9.8 КБ
-  dictionary.ts        9.5 КБ
-  shikimori-user.ts    8.8 КБ
-  animethemes.ts       8.6 КБ
-  shikimori.ts         8.3 КБ
-  titles.ts            2.3 КБ
+  anilist.ts, shikimori.ts, shikimori-people.ts, shikimori-user.ts,
+  anime365.ts, animethemes.ts, dictionary.ts, titles.ts, rate-limit.ts
 
 bridge/     абстракция платформы
-  IBridge.ts          16.1 КБ  контракт: storage, http, clipboard, shell
-  TauriBridge.ts      16.3 КБ
-  MonkeyBridge.ts      9.8 КБ
-  index.ts             2.5 КБ  единственная точка импорта: '@/bridge'
+  IBridge.ts              контракт: storage, http, clipboard, shell, proxyDiagnostics
+  TauriBridge.ts, MonkeyBridge.ts, TauriProxyDiagnostics.ts
+  index.ts                единственная точка импорта: '@/bridge'
 
 core/       ядро, ничего не знает о features/
-  db.ts               20.3 КБ  IndexedDB, кэши, сборщик мусора
-  settings.ts         15.6 КБ  все настройки и чтение их через мост
-  lifecycle.ts        12.4 КБ  реестр задач на смену роута и разбор
-  dictionary.ts        6.7 КБ  сборка итогового словаря
-  constants.ts         4.9 КБ  домены, TTL, регулярки перевода
-  types.ts             4.7 КБ
-  custom-links.ts      3.6 КБ
-  accent.ts            1.7 КБ
+  db.ts           IndexedDB, кэши, сборщик мусора
+  settings.ts     все настройки и чтение их через мост
+  lifecycle.ts    реестр задач на смену роута и разбор
+  net-health.ts   учёт доступности источников
+  proxy.ts        разбор и сборка настроек прокси
+  dictionary.ts   сборка итогового словаря
+  constants.ts    домены, TTL, регулярки перевода
+  types.ts, custom-links.ts, accent.ts
 
 features/   прикладные возможности
-  adblock/      impl.desktop.ts, impl.noop.ts, index.ts 12.3, net-block.ts 3.1,
-                net-probe.ts 14.2
-  exporter/     index.ts 6.0, sync-api.ts 23.9, sync-state.ts 12.8, SyncModal.vue 9.2
-  media/        index.ts 12.4, player.ts 17.8, franchise.ts 15.1, themes.ts 13.5,
-                ratings.ts 7.1, extlinks.ts 7.1, types.ts 2.8
-  scanner/      index.ts 4.4, compare.ts 27.1, scanner-state.ts 15.8,
-                ScannerModal.vue 12.4, ScannerDiffCategory.vue 2.1
-  search/       index.ts 15.0, dict-capture.ts 6.6
-  translator/   index.ts 47.0, rules.ts 11.9, dom.ts 6.1
-  ui/           SettingsModal.vue 38.1, settings-state.ts 22.0, LoggerModal.vue 15.9,
-                reload.ts 10.1, links.ts 9.7, NavPanel.vue 8.0, action-panel-state.ts 7.9,
-                nav.ts 5.4, ActionPanel.vue 4.5, logger-state.ts 4.1, actions.ts 3.1,
-                settings.ts 2.2, logger-ui.ts 2.1
+  adblock/    impl.desktop.ts, impl.noop.ts, index.ts, net-block.ts, net-probe.ts
+  exporter/   index.ts, sync-api.ts, sync-state.ts, SyncModal.vue
+  media/      index.ts, player.ts, franchise.ts, themes.ts, ratings.ts,
+              extlinks.ts, types.ts
+  scanner/    index.ts, compare.ts, scanner-state.ts, ScannerModal.vue,
+              ScannerDiffCategory.vue
+  search/     index.ts, dict-capture.ts
+  translator/ index.ts, rules.ts, dom.ts
+  ui/         SettingsModal.vue и вкладки (SettingsDevTab, SettingsDictTab,
+              SettingsLinksTab, SettingsSupportTab, SettingsProxyCard),
+              settings-state.ts, LoggerModal.vue, logger-state.ts,
+              ActionPanel.vue, action-panel-state.ts, actions.ts,
+              NavPanel.vue, nav.ts, reload.ts, links.ts, net-check.ts,
+              NetToast.vue, net-toast.ts, settings.ts, logger-ui.ts
 
-utils/      logger.ts 12.2, vue-mounter.ts 13.1, dom.ts 5.1, name-match.ts 4.6
+utils/      logger.ts, vue-mounter.ts, dom.ts, name-match.ts
 ```
 
 ### src-tauri/
 
 ```
-src/lib.rs        24.6 КБ  создание окна, инъекция бандла, команды, плагины
-src/adblock.rs    19.5 КБ  сетевой блокировщик на событиях WebView2, только Windows
-src/updater.rs     6.5 КБ  проверка и установка обновлений
-src/main.rs        0.2 КБ  вызов run()
-build.rs           1.7 КБ  AppManifest::commands
-capabilities/               ACL окна, открытого на внешнем адресе
-icons/                      иконки приложения
-tauri.conf.json    1.1 КБ  идентификатор, бандл, автообновление
-Cargo.toml         4.5 КБ
+src/lib.rs          создание окна, инъекция бандла, команды, плагины
+src/adblock.rs      сетевой блокировщик на событиях WebView2, только Windows
+src/proxy.rs        решение о прокси, щуп, состояние для интерфейса
+src/proxy_guard.rs  сторож готовности страницы и аварийный выход
+src/updater.rs      проверка и установка обновлений
+src/main.rs         вызов run()
+build.rs            AppManifest::commands
+capabilities/       ACL окна, открытого на внешнем адресе
+icons/              иконки приложения
+tauri.conf.json     идентификатор, бандл, автообновление
+Cargo.toml
 ```
 
 ---

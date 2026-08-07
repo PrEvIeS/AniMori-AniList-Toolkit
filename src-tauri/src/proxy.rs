@@ -84,7 +84,7 @@ pub struct ProxyProbe {
 }
 
 /// Состояние живёт в приложении: команда status вызывается из окна, а окно
-/// про setup() не знает. Mutex — требование Tauri, запись всᄅ равно одна.
+/// про setup() не знает. Mutex — требование Tauri, запись всё равно одна.
 pub struct ProxyState(Mutex<ProxyStatus>);
 
 /// Всё, что нужно обработчику авторизации окна. bypass здесь потому, что на этих
@@ -478,6 +478,5 @@ pub async fn animori_proxy_probe(app: AppHandle) -> Result<ProxyProbe, String> {
         }
     })
     .await
-    .map_err(|e| format!("Проверка прокси не завершилась: {e}")),
-    )
+    .map_err(|e| format!("Проверка прокси не завершилась: {e}"))
 }

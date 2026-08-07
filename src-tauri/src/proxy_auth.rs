@@ -3,7 +3,7 @@
 // отменяется молча. Наши запросы к API идут мимо, через basicAuth в TauriBridge.ts.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use tauri::{AppHandle, WebviewWindow};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -20,8 +20,31 @@ use crate::proxy::{self, WindowAuth};
 /// при неверном пароле.
 const MAX_ATTEMPTS: u32 = 5;
 
-/// Сколько раз учётные данные уже подставлялись за сеанс.
+/// Сколько раз учётные данные уже подставлялись после последней живой страницы.
 static ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+
+/// Прокси вообще спрашивал авторизацию: без этого сторож не вправе винить пароль.
+static ASKED: AtomicBool = AtomicBool::new(false);
+
+/// Повторный запрос после подстановки: прокси пару не принял.
+static REJECTED: AtomicBool = AtomicBool::new(false);
+
+/// Прокси хотя бы раз спросил учётные данные за этот сеанс.
+pub fn was_asked() -> bool {
+    ASKED.load(Ordering::Relaxed)
+}
+
+/// Прокси отверг подставленную пару. Признак косвенный: кода ошибки в событии нет.
+pub fn was_rejected() -> bool {
+    REJECTED.load(Ordering::Relaxed)
+}
+
+/// Страница ожила — прошлые попытки больше ни о чём не говорят. Без сброса
+/// долгий сеанс выбрал бы лимит даже при верном пароле.
+pub fn note_page_ready() {
+    ATTEMPTS.store(0, Ordering::Relaxed);
+    REJECTED.store(false, Ordering::Relaxed);
+}
 
 /// Хост без схемы, логина и порта. Свой разбор, как в adblock.rs: тянуть ради
 /// одной строки общий модуль между двумя платформенными файлами не стоит.
@@ -137,7 +160,15 @@ unsafe fn on_request(
         return Ok(());
     }
 
+    ASKED.store(true, Ordering::Relaxed);
+
     let attempt = ATTEMPTS.fetch_add(1, Ordering::Relaxed) + 1;
+
+    // Повтор после подстановки значит одно: предыдущую пару прокси не принял.
+    if attempt > 1 {
+        REJECTED.store(true, Ordering::Relaxed);
+    }
+
     if attempt > MAX_ATTEMPTS {
         log::warn!(
             "Запрос авторизации повторился больше {MAX_ATTEMPTS} раз — учётные данные \

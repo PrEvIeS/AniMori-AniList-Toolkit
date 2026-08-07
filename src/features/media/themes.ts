@@ -297,7 +297,7 @@ function mount(ctx: MediaContext): void {
   loadingAniId = ctx.aniId
   void buildThemes(ctx, sidebar)
     .catch((e: unknown) =>
-      Logger('ERROR', '[Themes] Не удалось построить список музыкальных тем', e)
+      Logger('ERROR', '[Themes] Не удалось построить список музыкальных тем', e),
     )
     .finally(() => {
       if (loadingAniId === ctx.aniId) loadingAniId = null

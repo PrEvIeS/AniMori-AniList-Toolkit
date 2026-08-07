@@ -30,10 +30,9 @@
 Правила — `docs/CODE-STYLE.md`. Порядок — по доле комментариев, не по весу файла.
 Здесь только остаток; сделанное ищется в истории ветки. Поведение не меняется.
 
-- [ ] `media/`
-- [ ] `scanner/` и `exporter/`
-- [ ] `utils/`, `adblock/`, `search/`
-- [ ] Хвосты `translator/`
+- [ ] `src/features/scanner/` и `src/features/exporter/`
+- [ ] `src/utils/`, `src/features/adblock/`, `src/features/search/`
+- [ ] Хвосты `src/features/translator/`
 
 ## Реформа документации
 

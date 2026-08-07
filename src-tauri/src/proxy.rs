@@ -29,6 +29,7 @@ const KEY_KIND: &str = "set_proxy_kind";
 const KEY_HOST: &str = "set_proxy_host";
 const KEY_PORT: &str = "set_proxy_port";
 const KEY_LOGIN: &str = "set_proxy_login";
+const KEY_PASSWORD: &str = "set_proxy_pass";
 const KEY_BYPASS: &str = "set_proxy_bypass";
 
 /// Совпадает с DEFAULT_PROXY.bypass в src/core/proxy.ts и подставляется только при
@@ -53,7 +54,7 @@ pub struct ProxyStatus {
     outcome: ProxyOutcome,
     /// Пусто для всех исходов, кроме Applied.
     server: String,
-    /// По этому полю панель объясняет, почему страница спросит пароль отдельно.
+    /// По этому полю панель объясняет разницу в поведении окна и наших запросов.
     has_credentials: bool,
 }
 
@@ -73,6 +74,20 @@ pub struct ProxyProbe {
 /// про setup() не знает. Mutex — требование Tauri, запись всё равно одна.
 pub struct ProxyState(Mutex<ProxyStatus>);
 
+/// Всё, что нужно обработчику авторизации окна. bypass здесь потому, что на этих
+/// адресах трафик идёт мимо прокси и подставлять учётные данные нельзя.
+#[derive(Clone)]
+#[allow(dead_code)] // потребитель появится в proxy_auth.rs, шаг 2 пункта 5.3.8
+pub struct WindowAuth {
+    pub login: String,
+    pub password: String,
+    pub bypass: Vec<String>,
+}
+
+/// Пароль живёт только в памяти процесса: файл настроек в обработчике события
+/// читать нельзя, а в журнал он не попадает никогда.
+pub struct ProxyCredentials(Mutex<Option<WindowAuth>>);
+
 /// Разобранная настройка в том виде, в каком её принимает движок окна.
 struct ProxyArgs {
     /// Адрес без схемы и порт отдельно: только так их принимает проверка связи.
@@ -82,7 +97,10 @@ struct ProxyArgs {
     server: String,
     /// Для --proxy-bypass-list. Пусто, если исключений нет.
     bypass: String,
-    /// Влияет только на предупреждение в журнале.
+    /// Учётные данные движку не передать аргументом: они уходят в ProxyCredentials.
+    login: String,
+    password: String,
+    /// Влияет на предупреждение в журнале и на подпись в панели.
     has_credentials: bool,
 }
 
@@ -99,6 +117,16 @@ enum Config {
 fn read_string(value: Option<serde_json::Value>) -> String {
     match value {
         Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Пароль без обрезки пробелов, как и в карточке настроек: пробел по краям
+/// законен, а тихая правка дала бы отказ авторизации.
+fn read_password(value: Option<serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(s)) => s,
         Some(serde_json::Value::Number(n)) => n.to_string(),
         _ => String::new(),
     }
@@ -211,12 +239,16 @@ fn read_config(app: &AppHandle) -> Config {
         .collect::<Vec<_>>()
         .join(";");
 
+    let login = read_string(store.get(KEY_LOGIN));
+
     Config::On(Box::new(ProxyArgs {
         server: format!("{scheme}://{host}:{port}"),
         host,
         port,
         bypass,
-        has_credentials: !read_string(store.get(KEY_LOGIN)).is_empty(),
+        has_credentials: !login.is_empty(),
+        password: read_password(store.get(KEY_PASSWORD)),
+        login,
     }))
 }
 
@@ -228,8 +260,37 @@ pub fn apply_to_webview(app: &AppHandle) {
     #[cfg(windows)]
     std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
 
+    // Заводится ДО decide(): учётные данные складывает он сам, по месту решения.
+    app.manage(ProxyCredentials(Mutex::new(None)));
+
     let status = decide(app);
     app.manage(ProxyState(Mutex::new(status)));
+}
+
+/// Складывает учётные данные для обработчика авторизации окна. Только при Applied:
+/// без прокси в окне подставлять их некому и незачем.
+fn remember_credentials(app: &AppHandle, args: &ProxyArgs) {
+    if args.login.is_empty() {
+        return;
+    }
+
+    let Some(state) = app.try_state::<ProxyCredentials>() else {
+        log::warn!("Прокси: учётные данные некуда сложить, окно останется без авторизации");
+        return;
+    };
+
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+
+    *guard = Some(WindowAuth {
+        login: args.login.clone(),
+        password: args.password.clone(),
+        bypass: args
+            .bypass
+            .split(';')
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+            .collect(),
+    });
 }
 
 fn decide(app: &AppHandle) -> ProxyStatus {
@@ -272,7 +333,7 @@ fn decide(app: &AppHandle) -> ProxyStatus {
     if args.has_credentials {
         log::warn!(
             "У прокси задан логин: наши запросы к API пройдут с ним, \
-             а страница будет спрашивать авторизацию средствами движка окна"
+             а окно авторизацию у прокси пока не проходит — страница останется пустой"
         );
     }
 
@@ -288,6 +349,8 @@ fn decide(app: &AppHandle) -> ProxyStatus {
         std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", &value);
         log::info!("Прокси для окна: {}", args.server);
 
+        remember_credentials(app, &args);
+
         ProxyStatus {
             outcome: ProxyOutcome::Applied,
             server: args.server,
@@ -298,6 +361,7 @@ fn decide(app: &AppHandle) -> ProxyStatus {
     #[cfg(not(windows))]
     {
         let _ = &value;
+        let _ = remember_credentials;
         log::warn!("Прокси для окна на этой платформе пока не поддержан — страница идёт напрямую");
 
         // Не Applied: адрес движку никто не отдавал, зелёной галочке взяться неоткуда.
@@ -324,6 +388,15 @@ pub fn current_status(app: &AppHandle) -> Option<(ProxyOutcome, String)> {
     let state = app.try_state::<ProxyState>()?;
     let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
     Some((guard.outcome, guard.server.clone()))
+}
+
+/// Учётные данные для обработчика авторизации окна. None — подставлять нечего:
+/// прокси выключен, задан негодно, молчит или логина у него нет.
+#[allow(dead_code)] // потребитель появится в proxy_auth.rs, шаг 2 пункта 5.3.8
+pub fn window_auth(app: &AppHandle) -> Option<WindowAuth> {
+    let state = app.try_state::<ProxyCredentials>()?;
+    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.clone()
 }
 
 /// Перечитывает файл ЗАНОВО: смысл кнопки — проверить только что введённый адрес.

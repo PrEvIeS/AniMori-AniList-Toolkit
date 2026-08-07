@@ -20,6 +20,18 @@ const KEY_ENABLED: &str = "set_proxy_on";
 /// укладывается: меньше — ложные срабатывания у далёкого прокси.
 const PAGE_READY_TIMEOUT_MS: u64 = 12_000;
 
+/// Когда проверять гонку подписки: прокси с логином обязан спросить учётные
+/// данные на первом же соединении, а это секунды, а не десятки секунд.
+const AUTH_SILENCE_MS: u64 = 3_000;
+
+/// Шаг опроса. Сон целиком не годится: при известной причине человека нечем
+/// занять оставшиеся десять секунд ожидания.
+const POLL_STEP_MS: u64 = 250;
+
+/// Тихий перезаход разрешён ровно один: иначе мёртвый прокси превратил бы окно
+/// в вечную карусель перезагрузок.
+static RELOADED: AtomicBool = AtomicBool::new(false);
+
 /// Отметка «страница ожила». Отдельно от ProxyState: команда ниже вызывается ВСЕГДА,
 /// в том числе когда прокси выключен и сторож не заводится.
 pub struct PageReady(AtomicBool);
@@ -29,6 +41,63 @@ pub struct PageReady(AtomicBool);
 #[tauri::command]
 pub fn animori_page_ready(state: State<'_, PageReady>) {
     state.0.store(true, Ordering::Relaxed);
+
+    // Живая страница обнуляет счёт попыток авторизации: лимит на подбор пароля,
+    // а не на длину сеанса.
+    #[cfg(windows)]
+    crate::proxy_auth::note_page_ready();
+}
+
+/// Прокси спрашивал учётные данные. За пределами Windows события нет вовсе.
+fn auth_asked() -> bool {
+    #[cfg(windows)]
+    {
+        crate::proxy_auth::was_asked()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Прокси отверг подставленную пару логина и пароля.
+fn auth_rejected() -> bool {
+    #[cfg(windows)]
+    {
+        crate::proxy_auth::was_rejected()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Чем кончилось ожидание очередного отрезка времени.
+enum Verdict {
+    Ready,
+    Rejected,
+    Silent,
+}
+
+/// Ждёт с шагом POLL_STEP_MS и выходит раньше срока, как только исход ясен.
+fn wait(app: &AppHandle, total_ms: u64) -> Verdict {
+    let mut left = total_ms;
+
+    while left > 0 {
+        let step = left.min(POLL_STEP_MS);
+        std::thread::sleep(Duration::from_millis(step));
+        left -= step;
+
+        if app.state::<PageReady>().0.load(Ordering::Relaxed) {
+            return Verdict::Ready;
+        }
+
+        if auth_rejected() {
+            return Verdict::Rejected;
+        }
+    }
+
+    Verdict::Silent
 }
 
 /// Заводит сторожа, один раз сразу после создания окна. Отсчёт от создания, а не от
@@ -47,28 +116,82 @@ pub fn spawn(app: &AppHandle) {
         return;
     }
 
+    // Логин задан: значит отсутствие запроса авторизации — сам по себе симптом.
+    let has_login = proxy::window_auth(app).is_some();
+
     let app = app.clone();
 
     // Обычный поток, а не задача рантайма: blocking_show держит поток до ответа
     // человека минутами, а на главном потоке он и вовсе повесил бы окно.
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(PAGE_READY_TIMEOUT_MS));
+        let mut verdict = wait(&app, AUTH_SILENCE_MS);
 
-        if app.state::<PageReady>().0.load(Ordering::Relaxed) {
+        // Прокси ставится до окна, а обработчик — после него: первый запрос авторизации
+        // теоретически может проскочить мимо подписки. Один тихий перезаход дешевле
+        // любого диалога и незаметен, если страница и так всё равно пуста.
+        if matches!(verdict, Verdict::Silent)
+            && has_login
+            && !auth_asked()
+            && !RELOADED.swap(true, Ordering::Relaxed)
+        {
+            match app.get_webview_window("main") {
+                Some(window) => {
+                    log::info!("Прокси не спросил учётные данные за 3 с — один тихий перезаход");
+                    if let Err(e) = window.reload() {
+                        log::warn!("Перезаход не удался: {e}");
+                    }
+                }
+                None => log::warn!("Окно main не найдено, перезаход пропущен"),
+            }
+        }
+
+        if matches!(verdict, Verdict::Silent) {
+            verdict = wait(&app, PAGE_READY_TIMEOUT_MS - AUTH_SILENCE_MS);
+        }
+
+        if matches!(verdict, Verdict::Ready) {
             return;
         }
 
+        let rejected = matches!(verdict, Verdict::Rejected) || auth_rejected();
         let seconds = PAGE_READY_TIMEOUT_MS / 1000;
-        log::warn!("Страница не подала признаков жизни за {seconds} с при прокси {server}");
 
-        let approved = app
-            .dialog()
-            .message(format!(
+        if rejected {
+            log::warn!("Прокси {server} не принял учётные данные");
+        } else {
+            log::warn!("Страница не подала признаков жизни за {seconds} с при прокси {server}");
+        }
+
+        // Три разные беды — три разных текста. При отказе по паролю выключать рабочий
+        // прокси — лечение хуже болезни, поэтому называем файл и ключ для правки вручную:
+        // панель настроек живёт внутри страницы, которая не загрузилась.
+        let message = if rejected {
+            format!(
+                "Прокси {server} не принял логин и пароль, поэтому AniList не загрузился.\n\n\
+                 Проверьте их в файле %APPDATA%\\com.foulnike.animori\\animori-settings.json: \
+                 ключи \"set_proxy_login\" и \"set_proxy_pass\". Панель настроек живёт внутри \
+                 страницы, которая сейчас пуста.\n\n\
+                 Выключить прокси и перезапустить приложение?"
+            )
+        } else if auth_asked() {
+            format!(
+                "AniList не загрузился за {seconds} секунд.\n\n\
+                 Прокси {server} принял учётные данные, но трафик через него всё равно \
+                 не проходит.\n\n\
+                 Выключить прокси и перезапустить приложение?"
+            )
+        } else {
+            format!(
                 "AniList не загрузился за {seconds} секунд.\n\n\
                  Похоже, дело в прокси {server}: он принимает соединение, но трафик \
                  через него не проходит.\n\n\
                  Выключить прокси и перезапустить приложение?"
-            ))
+            )
+        };
+
+        let approved = app
+            .dialog()
+            .message(message)
             .title("AniMori: страница не загрузилась")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(

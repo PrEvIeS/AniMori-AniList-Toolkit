@@ -47,6 +47,17 @@ pub enum ProxyOutcome {
     Applied,
 }
 
+/// Как окно живёт с авторизацией у прокси. Accepted косвенный: кода ошибки
+/// в событии нет, и принятие видно лишь по отсутствию повторного запроса.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyAuth {
+    None,
+    Pending,
+    Accepted,
+    Rejected,
+}
+
 /// Что действует в окне прямо сейчас. Снимок делается один раз, при запуске.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +67,8 @@ pub struct ProxyStatus {
     server: String,
     /// По этому полю панель объясняет разницу в поведении окна и наших запросов.
     has_credentials: bool,
+    /// Собирается при вызове команды: авторизация случается позже снимка.
+    auth: ProxyAuth,
 }
 
 /// Ответ про то, что записано в настройках СЕЙЧАС, а не про снимок запуска.
@@ -71,13 +84,13 @@ pub struct ProxyProbe {
 }
 
 /// Состояние живёт в приложении: команда status вызывается из окна, а окно
-/// про setup() не знает. Mutex — требование Tauri, запись всё равно одна.
+/// про setup() не знает. Mutex — требование Tauri, запись всᄅ равно одна.
 pub struct ProxyState(Mutex<ProxyStatus>);
 
 /// Всё, что нужно обработчику авторизации окна. bypass здесь потому, что на этих
 /// адресах трафик идёт мимо прокси и подставлять учётные данные нельзя.
 #[derive(Clone)]
-#[allow(dead_code)] // потребитель появится в proxy_auth.rs, шаг 2 пункта 5.3.8
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct WindowAuth {
     pub login: String,
     pub password: String,
@@ -300,6 +313,7 @@ fn decide(app: &AppHandle) -> ProxyStatus {
                 outcome: ProxyOutcome::Off,
                 server: String::new(),
                 has_credentials: false,
+                auth: ProxyAuth::None,
             }
         }
         Config::Invalid => {
@@ -307,6 +321,7 @@ fn decide(app: &AppHandle) -> ProxyStatus {
                 outcome: ProxyOutcome::Invalid,
                 server: String::new(),
                 has_credentials: false,
+                auth: ProxyAuth::None,
             }
         }
         Config::On(args) => args,
@@ -325,16 +340,13 @@ fn decide(app: &AppHandle) -> ProxyStatus {
             outcome: ProxyOutcome::Unreachable,
             server: args.server,
             has_credentials: args.has_credentials,
+            auth: ProxyAuth::None,
         };
     }
 
-    // Аргумента для учётных данных у движка нет, и перекос двух каналов не должен
-    // выглядеть случайной поломкой.
+    // Событие авторизации приходит позже и только если прокси его спросит.
     if args.has_credentials {
-        log::warn!(
-            "У прокси задан логин: наши запросы к API пройдут с ним, \
-             а окно авторизацию у прокси пока не проходит — страница останется пустой"
-        );
+        log::info!("У прокси задан логин: окно авторизуется через обработчик в proxy_auth.rs");
     }
 
     let mut value = format!("--proxy-server={}", args.server);
@@ -355,6 +367,7 @@ fn decide(app: &AppHandle) -> ProxyStatus {
             outcome: ProxyOutcome::Applied,
             server: args.server,
             has_credentials: args.has_credentials,
+            auth: ProxyAuth::None,
         }
     }
 
@@ -369,17 +382,45 @@ fn decide(app: &AppHandle) -> ProxyStatus {
             outcome: ProxyOutcome::Unreachable,
             server: args.server,
             has_credentials: args.has_credentials,
+            auth: ProxyAuth::None,
         }
     }
 }
 
-/// Что действует в окне прямо сейчас: снимок запуска, в сеть команда не ходит
-/// и меняться не может — движок читает прокси один раз.
+/// Живой опрос обработчика: снимок запуска об авторизации знать не может.
+fn auth_state(has_credentials: bool) -> ProxyAuth {
+    if !has_credentials {
+        return ProxyAuth::None;
+    }
+
+    #[cfg(windows)]
+    {
+        if crate::proxy_auth::was_rejected() {
+            ProxyAuth::Rejected
+        } else if crate::proxy_auth::was_asked() {
+            ProxyAuth::Accepted
+        } else {
+            ProxyAuth::Pending
+        }
+    }
+
+    // За пределами Windows прокси в окно не попадает, значит и спрашивать некому.
+    #[cfg(not(windows))]
+    {
+        ProxyAuth::None
+    }
+}
+
+/// Что действует в окне прямо сейчас: в сеть команда не ходит, адрес неизменен
+/// до перезапуска, а вот авторизация меняется по ходу сеанса.
 #[tauri::command]
 pub fn animori_proxy_status(state: State<'_, ProxyState>) -> ProxyStatus {
     // Отравленный мьютекс не повод отказывать: внутри структура без инвариантов.
     let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    guard.clone()
+
+    let mut status = guard.clone();
+    status.auth = auth_state(status.has_credentials);
+    status
 }
 
 /// Исход и адрес для сторожа страницы (proxy_guard.rs). None — состояние ещё не
@@ -392,7 +433,6 @@ pub fn current_status(app: &AppHandle) -> Option<(ProxyOutcome, String)> {
 
 /// Учётные данные для обработчика авторизации окна. None — подставлять нечего:
 /// прокси выключен, задан негодно, молчит или логина у него нет.
-#[allow(dead_code)] // потребитель появится в proxy_auth.rs, шаг 2 пункта 5.3.8
 pub fn window_auth(app: &AppHandle) -> Option<WindowAuth> {
     let state = app.try_state::<ProxyCredentials>()?;
     let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -438,5 +478,6 @@ pub async fn animori_proxy_probe(app: AppHandle) -> Result<ProxyProbe, String> {
         }
     })
     .await
-    .map_err(|e| format!("Проверка прокси не завершилась: {e}"))
+    .map_err(|e| format!("Проверка прокси не завершилась: {e}")),
+    )
 }

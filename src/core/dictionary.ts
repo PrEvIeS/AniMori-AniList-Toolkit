@@ -1,30 +1,14 @@
-// Пункт 1.3 плана: локальный словарь переводов (строки 227–261 монолита).
-//
-// Двухуровневая схема: удалённая база (DICT_URL с GitHub) + правки пользователя.
-// Итоговый словарь = Object.assign(remoteDict, getUserDict()).
-//
-// Итерация 3.5.3: GM_getValue/GM_setValue заменены на Bridge.storage. Хранилище
-// асинхронное, а переводчик читает словарь синхронно на каждом проходе по DOM,
-// поэтому правки держим в памяти: loadUserDict() один раз наполняет кэш при старте,
-// getUserDict() отдаёт копию кэша, setUserDict() сначала обновляет память и только
-// потом пишет в хранилище. Тот же приём, что и в core/settings.ts.
-//
-// amRetranslate — коллбэк из initTranslator (features/translator/), вызывается при
-// изменении словаря, чтобы перевести страницу заново. Устанавливается через сеттер.
+// Словарь переводов: удалённая база с GitHub плюс правки пользователя поверх неё.
+// Правки держим в памяти: переводчик читает словарь синхронно на каждом проходе по DOM.
+// Любое изменение словаря дёргает amRetranslate — коллбэк из initTranslator.
 
 import { Bridge } from '@/bridge'
 import { Logger } from '../utils/logger'
 
-/**
- * Удалённая база с GitHub (DICT_URL). Приватная переменная, устанавливается
- * единожды при инициализации через setRemoteDict().
- */
+/** Удалённая база с GitHub, ставится единожды через setRemoteDict(). */
 let remoteDict: Record<string, string> = Object.create(null)
 
-/**
- * Коллбэк для повторного перевода DOM после изменения словаря.
- * Устанавливается через registerRetranslateCallback().
- */
+/** Коллбэк повторного перевода DOM, ставится через registerRetranslateCallback(). */
 let amRetranslate: (() => void) | null = null
 
 const STORAGE_KEY = 'am_user_dict'
@@ -32,19 +16,12 @@ const STORAGE_KEY = 'am_user_dict'
 /** Кэш правок в памяти: getUserDict() обязан оставаться синхронным. */
 let userDictCache: Record<string, string> = {}
 
-/**
- * Итоговый словарь (база + правки юзера). Глобальная переменная dictionary из IIFE
- * станет приватной на Этапе 2, когда переводчик переедет в Vue. Пока оставляем здесь
- * для совместимости с остатком монолита.
- */
+/** Итоговый словарь: база плюс правки юзера. */
 export let dictionary: Record<string, string> = Object.create(null)
 
 /**
  * Нормализует ключ: схлопывает пробелы и триммит.
- *
- * Экспортируется, потому что захват выделенного текста (features/search/dict-capture.ts)
- * обязан нормализовать выделение точно так же: иначе запись ляжет в словарь с
- * другим ключом и переводчик её не поймает.
+ * Экспортируется ради захвата выделения: иначе ключи разойдутся и перевод не сработает.
  */
 export function normDictKey(v: string | null | undefined): string {
   return String(v ?? '')
@@ -61,8 +38,8 @@ function parseDict(raw: unknown): Record<string, string> {
 }
 
 /**
- * Наполняет кэш правок из хранилища. Вызывается один раз из bootstrap() до
- * rebuildDictionary(), иначе первый проход переводчика прошёл бы без правок юзера.
+ * Наполняет кэш правок из хранилища.
+ * Вызывается из bootstrap() до rebuildDictionary(), иначе первый проход пойдёт без правок.
  */
 export async function loadUserDict(): Promise<void> {
   try {
@@ -75,16 +52,16 @@ export async function loadUserDict(): Promise<void> {
 }
 
 /**
- * Отдаёт копию правок. Копия, а не сам объект: раньше каждый вызов возвращал свежий
- * результат JSON.parse, и правки в нём не влияли на сохранённые данные до setUserDict().
+ * Отдаёт копию правок, а не сам объект.
+ * Иначе правки в редакторе меняли бы сохранённые данные до setUserDict().
  */
 export function getUserDict(): Record<string, string> {
   return { ...userDictCache }
 }
 
 /**
- * Сохраняет правки: сначала память, затем хранилище. Никогда не бросает исключение,
- * иначе добавление слова из выделения падало бы на ошибке записи.
+ * Сохраняет правки: сначала память, затем хранилище.
+ * Никогда не бросает: иначе добавление слова из выделения падало бы на ошибке записи.
  */
 export function setUserDict(obj: Record<string, string>): void {
   userDictCache = obj && typeof obj === 'object' ? { ...obj } : {}

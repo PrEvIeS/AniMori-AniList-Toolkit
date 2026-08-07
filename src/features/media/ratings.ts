@@ -1,13 +1,6 @@
-// Этап 1 п.1.10 (часть 3/3): виджет рейтингов Shikimori/MAL/AniList (строки 3257-3320 монолита).
-//
-// Этап 5, итерация 5.2: без данных Shikimori виджет раньше просто не появлялся,
-// и для человека это было неотличимо от поломки расширения. Теперь, если все зеркала
-// молчат устойчиво (shikimoriTrouble()), блок всё равно строится: оценка AniList
-// у нас есть всегда, а вместо остального идёт одна строка причины.
-//
-// Совета про VPN здесь нет намеренно. Отказ одного источника ещё ничего не говорит
-// про сеть в целом, и разговор про туннель — дело общего тоста, который встаёт только
-// при двух и более молчащих источниках. Здесь только факт.
+// Виджет рейтингов Shikimori, MyAnimeList и AniList с гистограммой голосов.
+// При устойчивом молчании Shikimori блок всё1 равно строится: оценка AniList есть всегда.
+// Совета про VPN здесь нет: отказ одного источника — не суждение о сети, это дело тоста.
 
 import { shikimoriTrouble } from '../../api/shikimori'
 import { amApplyAccentToDom } from '../../core/accent'
@@ -63,7 +56,7 @@ function createRatingItem(options: RatingItemOptions): HTMLElement {
   return item
 }
 
-/** Строка отказа под бейджами. Один стиль для всех виджетов этапа 5. */
+/** Строка отказа под бейджами. Один стиль для всех виджетов сайдбара. */
 function createTroubleNote(text: string): HTMLElement {
   const note = document.createElement('div')
   note.className = 'am-net-note'
@@ -173,9 +166,7 @@ function anilistScoreText(ctx: MediaContext): string {
 
 /**
  * Урезанный блок на случай молчания Shikimori: только оценка AniList и причина.
- *
- * Бейджи Shikimori и MyAnimeList не рисуются вовсе, а не ставятся с N/A: адреса
- * для них берутся из ответа Shikimori, а пустой бейдж без ссылки выглядит поломкой.
+ * Бейджи Shikimori и MAL не рисуются вовсе: без адресов они выглядят поломкой.
  */
 function mountTrouble(ctx: MediaContext, sidebar: HTMLElement, reason: string): void {
   const box = document.createElement('div')
@@ -207,8 +198,7 @@ function mount(ctx: MediaContext): void {
   if (!sidebar) return
   if (document.querySelector('.animori-ratings')) return
 
-  // Данных нет. Если причина известна — говорим о ней, иначе молчим как раньше:
-  // у тайтла может не быть карточки на Shikimori, и это не повод для сообщения.
+  // Молчим без известной причины: у тайтла может не быть карточки на Shikimori.
   if (!ctx.shikiData) {
     const reason = shikimoriTrouble()
     if (reason) mountTrouble(ctx, sidebar, reason)
@@ -253,8 +243,7 @@ function mount(ctx: MediaContext): void {
 
   try {
     const histo = buildHistogram('SHIKIMORI', scoreMap)
-    // Гистограмма вешается на бейдж MAL: у Shikimori-бейджа её срезала бы шапка страницы.
-    // Показ управляется правилом .shiki-badge:hover ~ .mal-badge из style.scss.
+    // Гистограмма висит на бейдже MAL: у Shikimori-бейджа её срезала бы шапка страницы.
     if (histo) {
       histo.classList.add('am-histo-shiki')
       malBadge.appendChild(histo)

@@ -188,9 +188,44 @@
                   :data-key="key"
                   @click="selectAccent(key)"
                 >
-                  <span class="am-accent-dot" :style="{ background: AM_ACCENTS[key].dot }"></span
+                  <span class="am-accent-dot" :style="{ background: accentDot(key) }"></span
                   >{{ AM_ACCENTS[key].name }}
                 </button>
+              </div>
+              <!-- Пипетка и поле hex дублируют друг друга: нативный выбор может не открыться. -->
+              <div class="amk-row" v-if="accentPreset === 'custom'" style="margin-top: 10px">
+                <span class="amk-row-label"
+                  ><b>Свой цвет</b
+                  ><span class="amk-row-hint">пипетка или hex вида #7aa2f7</span></span
+                >
+                <span style="display: flex; gap: 8px; align-items: center; flex-shrink: 0">
+                  <input
+                    type="color"
+                    id="am_accent_pick"
+                    :value="accentCustomColor"
+                    style="
+                      width: 40px;
+                      height: 32px;
+                      padding: 2px;
+                      background: transparent;
+                      border: 1px solid rgba(var(--color-text-light), 0.25);
+                      border-radius: 8px;
+                      cursor: pointer;
+                    "
+                    @input="onAccentColor($event)"
+                  />
+                  <input
+                    class="amk-input amk-mono"
+                    id="am_accent_hex"
+                    placeholder="#7aa2f7"
+                    style="width: 104px"
+                    :value="accentCustomColor"
+                    @change="onAccentColor($event)"
+                  />
+                </span>
+              </div>
+              <div v-if="accentTooLight" class="amk-row-hint" style="padding: 8px 2px 2px">
+                Цвет светлый: белый текст кнопок и активных серий на нём читается плохо.
               </div>
             </div>
           </div>
@@ -360,7 +395,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { AM_ACCENTS } from '../../core/accent'
 import { clearCache } from '../../core/db'
-import type { TitleSource } from '../../core/settings'
+import type { AccentPreset, TitleSource } from '../../core/settings'
 import { Logger } from '../../utils/logger'
 import SettingsDevTab from './SettingsDevTab.vue'
 import SettingsDictTab from './SettingsDictTab.vue'
@@ -372,7 +407,10 @@ import {
   ACCENT_KEYS,
   AL_DEV_SETTINGS,
   AL_PIN_REDIRECT,
+  accentCustomColor,
+  accentCustomDot,
   accentPreset,
+  accentTooLight,
   activeTab,
   alAuthLink,
   alClientId,
@@ -394,6 +432,7 @@ import {
   reloadCustomLinks,
   saveAlToken,
   selectAccent,
+  setAccentCustom,
   showCompareButton,
   showSyncButton,
   syncTitleSources,
@@ -451,6 +490,17 @@ function onPrimaryChange(e: Event): void {
 
 function onFallbackChange(e: Event): void {
   titleFallback.value = inputValue(e) as TitleSource
+}
+
+// ==== Оформление ====
+
+/** У чипа «Свой цвет» кружок показывает выбранный оттенок, а не радугу. */
+function accentDot(key: AccentPreset): string {
+  return key === 'custom' ? accentCustomDot.value : AM_ACCENTS[key].dot
+}
+
+function onAccentColor(e: Event): void {
+  setAccentCustom(inputValue(e))
 }
 
 // ==== Аккаунт ====

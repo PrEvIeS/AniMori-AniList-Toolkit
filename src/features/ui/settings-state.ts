@@ -7,7 +7,13 @@ import type { WritableComputedRef } from 'vue'
 
 import { Bridge } from '@/bridge'
 import { getStoredAlToken, setAlToken } from '../../api/anilist'
-import { AM_ACCENTS, amSetAccent } from '../../core/accent'
+import {
+  AM_ACCENTS,
+  DEFAULT_CUSTOM_ACCENT,
+  amSetAccent,
+  isAccentTooLight,
+  parseAccentHex,
+} from '../../core/accent'
 import { CL_COLORS, getCustomLinks, setCustomLinks } from '../../core/custom-links'
 import type { CustomLink } from '../../core/custom-links'
 import {
@@ -160,11 +166,38 @@ export const showSyncButton = settingRef('showSyncButton', 'set_btn_sync')
 export const showCompareButton = settingRef('showCompareButton', 'set_btn_compare')
 
 export const accentPreset = settingRef('accentPreset', 'am_accent')
+export const accentCustom = settingRef('accentCustom', 'am_accent_custom')
 export const ACCENT_KEYS = Object.keys(AM_ACCENTS) as AccentPreset[]
+
+/** Значение поля выбора цвета: пока своё не задано, показываем предложенный. */
+export const accentCustomColor = computed(() => accentCustom.value || DEFAULT_CUSTOM_ACCENT)
+
+/** Кружок чипа «Свой цвет»: настроенный оттенок вместо радуги. */
+export const accentCustomDot = computed(() => {
+  const triple = parseAccentHex(accentCustom.value)
+  return triple ? 'rgb(' + triple + ')' : AM_ACCENTS.custom.dot
+})
+
+/** Свой цвет выбран светлым: белый текст кнопок на таком фоне теряется. */
+export const accentTooLight = computed(() => {
+  const triple = parseAccentHex(accentCustom.value)
+  return accentPreset.value === 'custom' && triple !== null && isAccentTooLight(triple)
+})
 
 export function selectAccent(key: AccentPreset): void {
   accentPreset.value = key
-  amSetAccent(key)
+  amSetAccent(key, accentCustom.value)
+}
+
+/**
+ * Принимает свой цвет и сразу переводит акцент в пресет custom.
+ * Кривой ввод не сохраняется: поле hex правят посимвольно.
+ */
+export function setAccentCustom(value: string): void {
+  if (!parseAccentHex(value)) return
+  accentCustom.value = value.trim().toLowerCase()
+  if (accentPreset.value !== 'custom') accentPreset.value = 'custom'
+  amSetAccent('custom', accentCustom.value)
 }
 
 export const customLinks = ref<CustomLink[]>([])

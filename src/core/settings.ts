@@ -5,7 +5,16 @@
 import { Bridge } from '@/bridge'
 
 export type TitleSource = 'shikimori' | 'anime365' | 'off' | 'none'
-export type AccentPreset = 'site' | 'sakura' | 'mono' | 'catppuccin'
+export type AccentPreset =
+  | 'site'
+  | 'sakura'
+  | 'mono'
+  | 'catppuccin'
+  | 'nord'
+  | 'dracula'
+  | 'matcha'
+  | 'sunset'
+  | 'custom'
 
 export interface AniMoriSettings {
   translateInterface: boolean
@@ -28,6 +37,11 @@ export interface AniMoriSettings {
   enableLogger: boolean
   accentPreset: AccentPreset
   /**
+   * Цвет пресета `custom` в виде hex. Пустая строка и любой кривой ввод
+   * равны теме сайта: разбор живёт в core/accent.ts.
+   */
+  accentCustom: string
+  /**
    * Блокировать всплывающие окна плеера. В юзерскрипте потребителя нет и быть не может:
    * Kodik крутится в кросс-доменном фрейме, работает только on_new_window в Tauri.
    * Тот ловит НОВЫЕ окна: редиректы текущего фрейма и оверлеи им не отсекаются.
@@ -37,7 +51,7 @@ export interface AniMoriSettings {
   blockPlayerPopups: boolean
   /**
    * Резать рекламные блоки самого AniList. В отличие от blockPlayerPopups работает
-   * везде: баннеры живут в главном фрейме на том же домене, что и скрипт.
+   * всюду: баннеры живут в главном фрейме на том же домене, что и скрипт.
    */
   hideAds: boolean
   /**
@@ -81,6 +95,7 @@ const DEFAULT_SETTINGS: AniMoriSettings = {
   mangalibDomain: 'mangalib.me',
   enableLogger: true,
   accentPreset: 'site',
+  accentCustom: '',
   blockPlayerPopups: true,
   hideAds: true,
   showSyncButton: true,
@@ -114,6 +129,7 @@ async function readSettings(): Promise<AniMoriSettings> {
     mangalibDomain,
     enableLogger,
     accentPreset,
+    accentCustom,
     blockPlayerPopups,
     hideAds,
     showSyncButton,
@@ -139,6 +155,7 @@ async function readSettings(): Promise<AniMoriSettings> {
     storage.get('set_mangalib_domain', DEFAULT_SETTINGS.mangalibDomain),
     storage.get('set_logger', DEFAULT_SETTINGS.enableLogger),
     storage.get<AccentPreset>('am_accent', DEFAULT_SETTINGS.accentPreset),
+    storage.get('am_accent_custom', DEFAULT_SETTINGS.accentCustom),
     storage.get('set_block_popups', DEFAULT_SETTINGS.blockPlayerPopups),
     storage.get('set_hide_ads', DEFAULT_SETTINGS.hideAds),
     storage.get('set_btn_sync', DEFAULT_SETTINGS.showSyncButton),
@@ -170,6 +187,7 @@ async function readSettings(): Promise<AniMoriSettings> {
     mangalibDomain,
     enableLogger,
     accentPreset,
+    accentCustom,
     blockPlayerPopups,
     hideAds,
     showSyncButton,

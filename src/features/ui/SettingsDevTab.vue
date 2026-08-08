@@ -1,5 +1,5 @@
 <!--
-  Вкладка «Разработчик»: тумблер логгера, ручная проверка сети и карточка прокси.
+  Вкладка «Разработчик»: тумблер логгера и ручная проверка сети.
   Строки отчёта копятся по ходу прогона: молчащая полминуты кнопка читалась бы как зависание.
   У левой колонки обязателен min-width: 0 — иначе она не сжимается и наезжает на код с временем.
 -->
@@ -63,14 +63,11 @@
       </div>
     </div>
   </div>
-
-  <SettingsProxyCard />
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
 
-import SettingsProxyCard from './SettingsProxyCard.vue'
 import { canRunNetCheck, netCheckCooldownRemaining, runNetCheck } from './net-check'
 import type { NetCheckRow } from './net-check'
 import { enableLogger } from './settings-state'

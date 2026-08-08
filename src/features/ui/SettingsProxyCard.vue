@@ -88,14 +88,27 @@
     <div
       v-if="showBadConfig"
       class="amk-row-hint"
-      style="padding: 8px 2px 0; line-height: 1.5; color: rgb(var(--color-red, 243, 139, 168))"
+      style="padding: 8px 2px 0; line-height: 1.5"
+      :style="{ color: 'rgb(var(--color-red, 243,139,168))' }"
     >
       Прокси включён, но адрес или порт заданы неверно — трафик пойдёт напрямую.
     </div>
 
     <div v-if="showPasswordNote" class="amk-row-hint" style="padding: 8px 2px 0; line-height: 1.5">
-      Пароль хранится в файле настроек в открытом виде. Прокси с паролем примут запросы AniMori, а
-      сам сайт спросит авторизацию отдельным окошком.
+      Пароль хранится в файле настроек в открытом виде — не используйте здесь пароль, который
+      где-то ещё что-то значит. Окно авторизуется у прокси само, вводить логин ещё раз
+      не потребуется.
+    </div>
+
+    <div
+      v-if="showSocksAuthNote"
+      class="amk-row-hint"
+      style="padding: 8px 2px 0; line-height: 1.5"
+      :style="{ color: 'rgb(var(--color-red, 243,139,168))' }"
+    >
+      SOCKS5 с логином движок окна не поддерживает: сайт пойдёт через такой прокси без
+      авторизации и, скорее всего, получит отказ. Запросы AniMori логин и пароль
+      используют, поэтому источники продолжат работать.
     </div>
 
     <div v-if="needsRestart" class="amk-row-hint" style="padding: 8px 2px 0; line-height: 1.5">
@@ -103,7 +116,7 @@
       перезагрузить» здесь не поможет и обновит только страницу.
     </div>
 
-    <!-- Состояние — что было при запуске, проверка — жив ли адрес сейчас. -->
+    <!-- Состояние — запуск и авторизация, проверка — жив ли адрес сейчас. -->
     <div class="amk-row" style="padding-top: 10px">
       <span class="amk-row-label"
         ><b>Состояние</b><span class="amk-row-hint">{{ statusText }}</span></span
@@ -174,7 +187,7 @@ const portDraft = ref(String(DEFAULT_PROXY.port))
 /** Была ли хотя бы одна запись за время жизни панели. */
 const needsRestart = ref(false)
 
-/** Что произошло с прокси при запуске приложения. Наполняется со стороны Rust. */
+/** Что произошло с прокси при запуске и как идёт авторизация. Наполняется из Rust. */
 const status = ref<ProxyStatus | null>(null)
 
 const checking = ref(false)
@@ -197,7 +210,10 @@ const showBadConfig = computed(
 
 const showPasswordNote = computed(() => password.value.length > 0)
 
-/** Говорит о прошедшем запуске, а не о том, что набрано в полях сейчас. */
+/** Отталкиваемся от логина: без него SOCKS5 работает в окне безупречно. */
+const showSocksAuthNote = computed(() => kind.value === 'socks5' && login.value.length > 0)
+
+/** Говорит о запуске и авторизации, а не о том, что набрано в полях сейчас. */
 const statusText = computed(() => {
   const s = status.value
   if (!s) return 'читаем…'
@@ -207,6 +223,12 @@ const statusText = computed(() => {
     return 'при запуске прокси был включён, но адрес негоден — трафик идёт напрямую'
   if (s.outcome === 'unreachable')
     return `при запуске ${s.server} не ответил — трафик идёт напрямую`
+
+  if (s.auth === 'rejected')
+    return `${s.server} применён, но логин или пароль он не принял — страница останется пустой`
+  if (s.auth === 'pending')
+    return `${s.server} применён, авторизация запрошена и ответа пока нет`
+  if (s.auth === 'accepted') return `применён ${s.server}, авторизация пройдена`
 
   return `при запуске применён ${s.server}${s.hasCredentials ? ' (с логином)' : ''}`
 })
@@ -220,6 +242,9 @@ async function check(): Promise<void> {
 
   checking.value = true
   checkText.value = ''
+
+  // Авторизация могла случиться после того, как панель открыли.
+  void loadStatus()
 
   try {
     const probe = await Bridge.proxyDiagnostics.probe()
@@ -361,7 +386,7 @@ async function load(): Promise<void> {
   }
 }
 
-/** Состояние запуска. Читается из памяти процесса оболочки, сеть не трогается. */
+/** Исход запуска и авторизация на сейчас. Читается из оболочки, сеть не трогается. */
 async function loadStatus(): Promise<void> {
   try {
     status.value = await Bridge.proxyDiagnostics.status()

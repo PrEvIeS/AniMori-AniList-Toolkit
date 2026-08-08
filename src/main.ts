@@ -147,7 +147,7 @@ async function bootstrap(): Promise<void> {
   await step('сетевая разведка', initNetProbe)
 
   // Без этого вызова сохранённый пресет игнорируется.
-  await step('акцентный цвет', () => amSetAccent(settings.accentPreset))
+  await step('акцентный цвет', () => amSetAccent(settings.accentPreset, settings.accentCustom))
 
   // Каждая фича регистрирует свою кнопку внутри init*(), порядок пилюль задаёт
   // ACTION_ORDER. Отдельные шаги: сломавшаяся модалка не лишает панели действий.

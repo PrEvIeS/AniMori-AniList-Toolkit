@@ -20,7 +20,7 @@ type RawProxyProbe = {
 
 export const tauriProxyDiagnostics: IProxyDiagnostics = {
   /**
-   * Исход применения прокси при запуске: читается из ProxyState в памяти оболочки.
+   * Исход применения прокси при запуске и состояние авторизации на сейчас.
    * Сетевой работы нет, вызов дешёвый.
    */
   async status(): Promise<ProxyStatus> {

@@ -185,7 +185,7 @@ const monkeyShell: IShell = {
  */
 const monkeyProxyDiagnostics: IProxyDiagnostics = {
   status(): Promise<ProxyStatus> {
-    return Promise.resolve({ outcome: 'off', server: '', hasCredentials: false })
+    return Promise.resolve({ outcome: 'off', server: '', hasCredentials: false, auth: 'none' })
   },
 
   markPageReady(): Promise<void> {

@@ -310,6 +310,9 @@
                 </label>
               </div>
             </div>
+
+            <!-- Карточка сама молчит там, где прокси не поддержан. -->
+            <SettingsProxyCard />
           </div>
 
           <!-- ==== Разработчик ==== -->
@@ -362,6 +365,7 @@ import { Logger } from '../../utils/logger'
 import SettingsDevTab from './SettingsDevTab.vue'
 import SettingsDictTab from './SettingsDictTab.vue'
 import SettingsLinksTab from './SettingsLinksTab.vue'
+import SettingsProxyCard from './SettingsProxyCard.vue'
 import SettingsSupportTab from './SettingsSupportTab.vue'
 import { reloadPage } from './reload'
 import {

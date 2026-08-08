@@ -485,21 +485,26 @@
   border-color: rgb(var(--am-accent));
   color: rgb(var(--am-accent));
 }
+/* Сетка, а не flex-верстка: имена тем разной длины давали рваные ряды. */
+.am-accents,
 .amk-accents {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
   gap: 8px;
+  padding: 2px 0 4px;
 }
 .am-accent-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 12px;
+  min-width: 0;
+  padding: 8px 12px;
   border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
   font-family: inherit;
+  white-space: nowrap;
   color: rgb(var(--color-text-light));
   background: rgba(var(--color-text-light), 0.06);
   border: 1px solid rgba(var(--color-text-light), 0.2);
@@ -516,6 +521,10 @@
   background: rgba(var(--am-accent), 0.15);
   border-color: rgb(var(--am-accent));
   color: rgb(var(--am-accent));
+}
+.am-accent-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .am-accent-dot {
   width: 13px;
@@ -1788,10 +1797,11 @@ body.am-ru-search-active .am-ru-injected-container {
 .am-log-details details summary::-webkit-details-marker {
   display: none;
 }
+/* Цвета категорий не зависят от акцента: на sunset INFO сливался с WARN. */
 .type-info .am-log-badge {
-  background: rgba(var(--am-accent), 0.15);
-  color: rgb(var(--am-accent));
-  border: 1px solid rgba(var(--am-accent), 0.3);
+  background: rgba(var(--color-blue), 0.15);
+  color: rgb(var(--color-blue));
+  border: 1px solid rgba(var(--color-blue), 0.3);
 }
 .type-api .am-log-badge {
   background: rgba(var(--color-purple), 0.15);

@@ -1,6 +1,6 @@
 <!--
-  Панель «Поддержать»: звезда на GitHub, отзыв на Greasy Fork, ссылка на установку.
-  Идентификаторы am-sup-* сохранены: на них ссылается style.scss.
+  Панель «Поддержать»: звезда на GitHub, обратная связь и ссылка на установку.
+  Вторая кнопка и ссылка разные у скрипта и приложения; идентификаторы am-sup-* сохранены.
   Ссылки идут через window.open: в десктопе их перехватывает оболочка и отдаёт браузеру.
 -->
 <template>
@@ -36,7 +36,7 @@
       class="amk-btn amk-btn-ghost amk-btn-block"
       id="am-sup-review"
       style="margin-bottom: 8px; gap: 8px"
-      @click="openExternal(SUP_GREASY_FEEDBACK)"
+      @click="openExternal(feedbackUrl)"
     >
       <svg
         viewBox="0 0 24 24"
@@ -50,23 +50,23 @@
       >
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
-      Оценить на Greasy Fork
+      {{ feedbackLabel }}
     </button>
     <div class="amk-row-hint" style="padding: 2px 2px 6px; line-height: 1.5">
-      Отзыв двигает скрипт в выдаче — так его находят новые пользователи.
+      {{ feedbackHint }}
     </div>
   </div>
   <div class="amk-card">
     <div class="amk-card-title">Поделиться</div>
     <div class="amk-row-hint" style="padding: 2px 2px 8px; line-height: 1.5">
-      Рассказать друзьям — тоже поддержка. Ссылка на установку:
+      {{ shareHint }}
     </div>
     <div style="display: flex; gap: 8px">
       <input
         class="amk-input amk-mono"
         id="am-sup-link"
         readonly
-        :value="SUP_GREASY"
+        :value="shareUrl"
         style="flex: 1"
       />
       <button
@@ -97,8 +97,25 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
+import { Bridge } from '@/bridge'
 import { amCopy } from '../../utils/dom'
-import { SUP_GITHUB, SUP_GREASY, SUP_GREASY_FEEDBACK } from './settings-state'
+import { ISSUES_NEW, SUP_GITHUB, SUP_GREASY, SUP_GREASY_FEEDBACK } from './settings-state'
+
+/** Платформа константна на всю сессию, поэтому не ref и не computed. */
+const isDesktop = Bridge.platform === 'tauri'
+
+// Отзыв на Greasy Fork имеет смысл только тому, кто ставил оттуда скрипт.
+const feedbackUrl = isDesktop ? ISSUES_NEW : SUP_GREASY_FEEDBACK
+const feedbackLabel = isDesktop ? 'Отзыв или идея на GitHub' : 'Оценить на Greasy Fork'
+const feedbackHint = isDesktop
+  ? 'Отчёт об ошибке или идея — самая полезная помощь приложению.'
+  : 'Отзыв двигает скрипт в выдаче — так его находят новые пользователи.'
+
+// Другу даём ту точку установки, которой пользуется сам отправитель.
+const shareUrl = isDesktop ? SUP_GITHUB : SUP_GREASY
+const shareHint = isDesktop
+  ? 'Рассказать друзьям — тоже поддержка. Страница проекта с установщиком:'
+  : 'Рассказать друзьям — тоже поддержка. Ссылка на установку:'
 
 const supportCopyLabel = ref('Копировать')
 
@@ -108,7 +125,7 @@ function openExternal(url: string): void {
 
 function onSupportCopy(e: Event): void {
   const target = e.currentTarget
-  amCopy(SUP_GREASY, target instanceof HTMLElement ? target : undefined)
+  amCopy(shareUrl, target instanceof HTMLElement ? target : undefined)
   supportCopyLabel.value = 'Скопировано ✓'
   setTimeout(() => {
     supportCopyLabel.value = 'Копировать'

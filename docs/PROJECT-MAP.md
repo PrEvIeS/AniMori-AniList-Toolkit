@@ -52,9 +52,10 @@ AniMori — надстройка над anilist.co для русскоязычн
 
 ```
 .github/workflows/release.yml   сборка и публикация по тегу
+.github/ISSUE_TEMPLATE/         четыре формы обращений и config.yml
 dictionary.json                 словарь интерфейса, тянется с raw.githubusercontent
 docs/                           карты, стиль, правила документации, реестр решений
-docs/<версия>/                  PLAN.md и CONTEXT.md, больше ничего
+docs/<версия>/                  PLAN.md, CONTEXT.md и свой DECISIONS.md
 src/                            общий фронтенд обеих сборок
 src-tauri/                      оболочка на Rust
 vite.config.ts                  два режима сборки, алиасы, шапка юзерскрипта
@@ -62,6 +63,11 @@ tsconfig.json                   strict, алиасы для тайпчека
 package.json                    единственный источник номера версии
 CHANGELOG.md, README.md, LICENSE
 ```
+
+Формы обращений: `bug.yml`, `translation.yml`, `feature.yml`, `dictionary-bulk.yml`.
+GitHub берёт их только из ветки по умолчанию, так что в рабочей ветке их
+проверить нельзя. `config.yml` выключает пустые обращения и ссылается на
+якорь раздела установки в README.
 
 Документы в корне `docs/`: `DOC-RULES.md` (как вести записи), `DECISIONS.md`
 (реестр решений строками с хешами), `CODE-STYLE.md`, три части карты.
@@ -105,8 +111,8 @@ features/   прикладные возможности
               SettingsLinksTab, SettingsSupportTab, SettingsProxyCard),
               settings-state.ts, LoggerModal.vue, logger-state.ts,
               ActionPanel.vue, action-panel-state.ts, actions.ts,
-              NavPanel.vue, nav.ts, reload.ts, links.ts, net-check.ts,
-              NetToast.vue, net-toast.ts, settings.ts, logger-ui.ts
+              player-hero.scss, NavPanel.vue, nav.ts, reload.ts, links.ts,
+              net-check.ts, NetToast.vue, net-toast.ts, settings.ts, logger-ui.ts
 
 utils/      logger.ts, vue-mounter.ts, dom.ts, name-match.ts
 ```
@@ -118,6 +124,7 @@ src/lib.rs          создание окна, инъекция бандла, к
 src/adblock.rs      сетевой блокировщик на событиях WebView2, только Windows
 src/proxy.rs        решение о прокси, щуп, состояние для интерфейса
 src/proxy_guard.rs  сторож готовности страницы и аварийный выход
+src/proxy_auth.rs   ответ на запрос логина прокси, только Windows
 src/updater.rs      проверка и установка обновлений
 src/main.rs         вызов run()
 build.rs            AppManifest::commands

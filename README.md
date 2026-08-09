@@ -88,7 +88,7 @@
 
 ### Приложение для Windows
 
-1. Скачайте установщик из раздела **[Releases](https://github.com/foulnike/AniMori-AniList-Toolkit/releases)** — это `AniMori_Setup.exe` либо тот же файл с полным именем вида `AniMori_2.0.0_x64-setup.exe`.
+1. Скачайте установщик из раздела **[Releases](https://github.com/foulnike/AniMori-AniList-Toolkit/releases)** — это `AniMori_Setup.exe` либо тот же файл с полным именем вида `AniMori_2.0.1_x64-setup.exe`.
 2. Запустите установщик и откройте AniMori из меню «Пуск».
 
 Приложению нужен компонент **WebView2**: в Windows 11 и актуальной Windows 10 он уже установлен, иначе установщик предложит его загрузить. Дальше программа следит за обновлениями сама: при запуске она сверяется с последним релизом и предлагает установить новую версию, если та вышла.

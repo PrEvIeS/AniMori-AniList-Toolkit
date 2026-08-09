@@ -1,6 +1,5 @@
-// Пункт 1.3 плана: глобальные константы и конфигурация (строки 36-142 монолита).
-// Только неизменяемые значения. Изменяемое состояние сессии (паузы rate-limit,
-// инстанс БД, словарь) живёт в своих модулях, а не здесь.
+// Глобальные константы: только неизменяемые значения и регэкспы переводчика.
+// Состояние сессии — паузы, инстанс БД, словарь — живёт в своих модулях, не здесь.
 
 export const IS_SHIKI = window.location.hostname.includes('shikimori')
 export const IS_ANILIST = window.location.hostname.includes('anilist.co')
@@ -14,9 +13,7 @@ export const SHIKI_DOMAINS: readonly string[] = ['shikimori.io', 'shikimori.rip'
 
 /** anime365 (smotret-anime) — фоллбэк для тайтлов/описаний. */
 export const ANIME365_DOMAINS: readonly string[] = ['smotret-anime.online', 'anime365.ru']
-// Пункт 3.8: ANIME365_THROTTLE удалён. Персональный интервал у каждого источника
-// означал разную скорость в одной цепочке резолва названий. Темп теперь единый
-// и задаётся в src/api/rate-limit.ts (API_MIN_INTERVAL_MS / API_WINDOW_MS / API_MAX_PER_WINDOW).
+// Своего интервала у anime365 нет: темп един для всех и задан в api/rate-limit.ts.
 /** подряд-сбоев -> отключение источника на сессию */
 export const ANIME365_FAIL_LIMIT = 5
 
@@ -27,7 +24,7 @@ export const CACHE_TIME = 90 * 24 * 60 * 60 * 1000
 export const DB_NAME = 'AniMoriSuperDB'
 export const DB_VERSION = 5
 
-// ==== Локализация для парсера дат/времени ====
+// Локализация для парсера дат и времени.
 export const monthsFull: Record<string, string> = {
   Jan: 'января',
   Feb: 'февраля',
@@ -60,9 +57,8 @@ export const seasons: Record<string, string> = {
   Fall: 'Осень',
 }
 
-// ==== Регэкспы перевода (роли, даты, время) ====
-// ВНИМАНИЕ: rxRoleEps/rxRoleOP/rxRoleED имеют флаг /g и, значит, разделяемый lastIndex.
-// Использовать только через .replace(), никогда через .test()/.exec() в цикле.
+// Регэкспы перевода: роли, даты, время.
+// rxRoleEps, rxRoleOP и rxRoleED имеют флаг /g и общий lastIndex: только через .replace().
 export const rxRole = /^(.+?)\s*\((.+)\)$/
 export const rxRoleEps = /\beps?\b/gi
 export const rxRoleOP = /\bOP\b/gi

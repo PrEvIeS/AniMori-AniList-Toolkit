@@ -121,7 +121,6 @@ async function onDumpState(): Promise<void> {
       settings,
       queueSizes: getPendingQueueSizes(),
       databaseCache: dbStats,
-      // listMountedApps() — новое по сравнению с императивным кодом
       mountedApps: listMountedApps(),
       rateLimits: {
         anilist: isAniListRateLimited() ? 'Пауза' : 'OK',
@@ -196,10 +195,8 @@ function toggleStack(id: number): void {
 }
 
 // ---------- JSON-viewer ----------
-//
-// Возвращает доверенный HTML: все строки и ключи экранируются через escapeHTML.
-// v-html в шаблоне применяется только к результату этой функции.
 
+/** Возвращает доверенный HTML: все строки и ключи экранируются через escapeHTML. */
 function jsonView(obj: unknown, isRoot = true): string {
   if (obj === null) return '<span style="color:#f38ba8">null</span>'
   if (typeof obj === 'undefined') return '<span style="color:#f38ba8">undefined</span>'
@@ -258,19 +255,28 @@ function asSingle(item: DisplayItem): LogSingle {
 
 <template>
   <div v-if="isLoggerOpen" id="am-logger-overlay" @click="onOverlayClick">
-    <div class="am-logger-modal" style="position:relative;">
-
+    <div class="am-logger-modal" style="position: relative">
       <!-- Шапка -->
       <div class="am-logger-header">
         <h2>
           AniMori Logger
-          <span style="font-size:12px;opacity:0.6;font-weight:normal;">(Session Memory)</span>
+          <span style="font-size: 12px; opacity: 0.6; font-weight: normal">(Session Memory)</span>
         </h2>
         <input
           type="text"
           placeholder="Поиск по логам..."
           :value="searchQuery"
-          style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:6px;padding:6px 10px;font-size:12px;outline:none;width:200px;transition:0.2s;"
+          style="
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            outline: none;
+            width: 200px;
+            transition: 0.2s;
+          "
           @input="onSearch"
         />
         <div class="am-logger-filters">
@@ -280,7 +286,9 @@ function asSingle(item: DisplayItem): LogSingle {
             class="am-log-filter"
             :class="{ active: activeFilter === f }"
             @click="setFilter(f)"
-          >{{ f }}</button>
+          >
+            {{ f }}
+          </button>
         </div>
         <div class="am-logger-actions">
           <button :disabled="stateLoading" @click="() => void onDumpState()">
@@ -296,7 +304,6 @@ function asSingle(item: DisplayItem): LogSingle {
       <!-- Список записей -->
       <div id="am-log-container" ref="containerRef" @scroll="onContainerScroll">
         <template v-for="(item, idx) in displayItems" :key="idx">
-
           <!-- Группа -->
           <div
             v-if="item.kind === 'group'"
@@ -304,19 +311,19 @@ function asSingle(item: DisplayItem): LogSingle {
           >
             <div
               class="am-log-header am-log-group-header"
-              style="cursor:pointer;"
+              style="cursor: pointer"
               @click="toggleGroup(idx)"
             >
               <span class="am-log-time">{{ asGroup(item).time }}</span>
               <span class="am-log-badge">{{ asGroup(item).type }}</span>
-              <span
-                class="am-log-msg am-log-group-count"
-                style="font-style:italic;color:#8b949e;"
-              >Сгруппировано ({{ asGroup(item).entries.length }})</span>
+              <span class="am-log-msg am-log-group-count" style="font-style: italic; color: #8b949e"
+                >Сгруппировано ({{ asGroup(item).entries.length }})</span
+              >
               <span
                 class="am-log-expand"
                 :style="openGroups.has(idx) ? 'transform:rotate(180deg)' : ''"
-              >▼</span>
+                >▼</span
+              >
             </div>
             <div v-show="openGroups.has(idx)" class="am-log-group-items">
               <div
@@ -333,26 +340,40 @@ function asSingle(item: DisplayItem): LogSingle {
                   <span class="am-log-badge">{{ entry.type }}</span>
                   <span class="am-log-path" :title="entry.path">/{{ shortPath(entry.path) }}</span>
                   <span class="am-log-msg">{{ entry.message }}</span>
-                  <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+                  <div style="margin-left: auto; display: flex; gap: 8px; align-items: center">
                     <span
                       v-if="entry.stack"
                       class="am-log-btn-stack"
                       title="Показать Stack Trace"
                       @click.stop="toggleStack(entry.id)"
-                    >[Stack]</span>
+                      >[Stack]</span
+                    >
                     <span
                       v-if="entry.details != null"
                       class="am-log-expand"
                       :style="openDetails.has(entry.id) ? 'transform:rotate(180deg)' : ''"
-                    >▼</span>
+                      >▼</span
+                    >
                   </div>
                 </div>
                 <div
                   v-if="entry.stack && openStacks.has(entry.id)"
                   class="am-log-stack-details"
-                  style="padding:8px 12px;background:rgba(252,129,129,0.1);border-top:1px solid rgba(255,255,255,0.05);"
+                  style="
+                    padding: 8px 12px;
+                    background: rgba(252, 129, 129, 0.1);
+                    border-top: 1px solid rgba(255, 255, 255, 0.05);
+                  "
                 >
-                  <pre style="margin:0;font-size:10.5px;color:#f38ba8;white-space:pre-wrap;font-family:inherit;">{{ entry.stack }}</pre>
+                  <pre
+                    style="
+                      margin: 0;
+                      font-size: 10.5px;
+                      color: #f38ba8;
+                      white-space: pre-wrap;
+                      font-family: inherit;
+                    "
+                    >{{ entry.stack }}</pre>
                 </div>
                 <!-- v-html безопасен: jsonView экранирует всё через escapeHTML -->
                 <div
@@ -372,51 +393,89 @@ function asSingle(item: DisplayItem): LogSingle {
             <div
               class="am-log-header"
               :style="asSingle(item).entry.details != null ? 'cursor:pointer' : ''"
-              @click="asSingle(item).entry.details != null ? toggleDetails(asSingle(item).entry.id) : undefined"
+              @click="
+                asSingle(item).entry.details != null
+                  ? toggleDetails(asSingle(item).entry.id)
+                  : undefined
+              "
             >
               <span class="am-log-time">{{ asSingle(item).entry.time }}</span>
               <span class="am-log-badge">{{ asSingle(item).entry.type }}</span>
-              <span class="am-log-path" :title="asSingle(item).entry.path">/{{ shortPath(asSingle(item).entry.path) }}</span>
+              <span class="am-log-path" :title="asSingle(item).entry.path"
+                >/{{ shortPath(asSingle(item).entry.path) }}</span
+              >
               <span class="am-log-msg">{{ asSingle(item).entry.message }}</span>
-              <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+              <div style="margin-left: auto; display: flex; gap: 8px; align-items: center">
                 <span
                   v-if="asSingle(item).entry.stack"
                   class="am-log-btn-stack"
                   title="Показать Stack Trace"
                   @click.stop="toggleStack(asSingle(item).entry.id)"
-                >[Stack]</span>
+                  >[Stack]</span
+                >
                 <span
                   v-if="asSingle(item).entry.details != null"
                   class="am-log-expand"
-                  :style="openDetails.has(asSingle(item).entry.id) ? 'transform:rotate(180deg)' : ''"
-                >▼</span>
+                  :style="
+                    openDetails.has(asSingle(item).entry.id) ? 'transform:rotate(180deg)' : ''
+                  "
+                  >▼</span
+                >
               </div>
             </div>
             <div
               v-if="asSingle(item).entry.stack && openStacks.has(asSingle(item).entry.id)"
               class="am-log-stack-details"
-              style="padding:8px 12px;background:rgba(252,129,129,0.1);border-top:1px solid rgba(255,255,255,0.05);"
+              style="
+                padding: 8px 12px;
+                background: rgba(252, 129, 129, 0.1);
+                border-top: 1px solid rgba(255, 255, 255, 0.05);
+              "
             >
-              <pre style="margin:0;font-size:10.5px;color:#f38ba8;white-space:pre-wrap;font-family:inherit;">{{ asSingle(item).entry.stack }}</pre>
+              <pre
+                style="
+                  margin: 0;
+                  font-size: 10.5px;
+                  color: #f38ba8;
+                  white-space: pre-wrap;
+                  font-family: inherit;
+                "
+                >{{ asSingle(item).entry.stack }}</pre>
             </div>
             <!-- v-html безопасен: jsonView экранирует всё через escapeHTML -->
             <div
-              v-if="asSingle(item).entry.details != null && openDetails.has(asSingle(item).entry.id)"
+              v-if="
+                asSingle(item).entry.details != null && openDetails.has(asSingle(item).entry.id)
+              "
               class="am-log-details"
               v-html="safeJsonView(asSingle(item).entry.details)"
             />
           </div>
-
         </template>
       </div>
 
       <!-- Кнопка прокрутки к новым логам -->
       <button
         v-if="unreadCount > 0"
-        style="position:absolute;bottom:25px;right:30px;background:#3dbbee;color:#fff;border:none;border-radius:20px;padding:8px 16px;cursor:pointer;box-shadow:0 4px 15px rgba(0,0,0,0.5);font-weight:bold;z-index:10;transition:0.2s;"
+        style="
+          position: absolute;
+          bottom: 25px;
+          right: 30px;
+          background: #3dbbee;
+          color: #fff;
+          border: none;
+          border-radius: 20px;
+          padding: 8px 16px;
+          cursor: pointer;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+          font-weight: bold;
+          z-index: 10;
+          transition: 0.2s;
+        "
         @click="scrollToBottom"
-      >⬇ Новые логи ({{ unreadCount }})</button>
-
+      >
+        ⬇ Новые логи ({{ unreadCount }})
+      </button>
     </div>
   </div>
 </template>

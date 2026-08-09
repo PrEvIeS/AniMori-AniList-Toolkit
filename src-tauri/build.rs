@@ -10,6 +10,9 @@
 // AppManifest::commands порождает разрешения с именами в kebab-case:
 //   animori_reload        -> allow-animori-reload
 //   animori_open_external -> allow-animori-open-external
+//   animori_proxy_status  -> allow-animori-proxy-status
+//   animori_proxy_probe   -> allow-animori-proxy-probe
+//   animori_page_ready    -> allow-animori-page-ready
 // Именно эти имена перечисляются в capabilities/default.json.
 //
 // Правило на будущее: новая команда — три места.
@@ -18,7 +21,20 @@
 //   3) permissions в capabilities/default.json
 // Пропуск любого из трёх даёт тот же отказ на стороне JS.
 
-const COMMANDS: &[&str] = &["animori_reload", "animori_open_external"];
+const COMMANDS: &[&str] = &[
+    "animori_reload",
+    "animori_open_external",
+    // Пункт 5.3.6: диагностика прокси для карточки настроек. Обе только читают:
+    // status отдаёт снимок состояния, probe открывает TCP-соединение на адрес из
+    // файла настроек. Ни та, ни другая не принимают адрес параметром — иначе скрипт
+    // чужого сайта получил бы сканер портов местной сети чужими руками.
+    "animori_proxy_status",
+    "animori_proxy_probe",
+    // Пункт 5.3.7: отметка «страница ожила» для сторожа прокси. Ничего не читает,
+    // ничего не возвращает и параметров не принимает — только поднимает флаг, по
+    // которому сторож понимает, что вмешиваться не нужно.
+    "animori_page_ready",
+];
 
 fn main() {
     tauri_build::try_build(

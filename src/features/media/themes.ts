@@ -1,8 +1,16 @@
-// Этап 1 п.1.10 (часть 3/3): виджет музыкальных тем OP/ED (строки 3340-3456 монолита).
+// Виджет музыкальных тем OP/ED с поиском трека в выбранном музыкальном сервисе.
+// Пустой список и отказ источника — разные исходы: первый молчит, второй пишет причину.
+// Клиент AnimeThemes никогда не отклоняется, поэтому причину даёт только core/net-health.ts.
 
 import { Bridge } from '@/bridge'
-import { fetchMalThemes, type MalThemes, type ThemeItem } from '../../api/animethemes'
+import {
+  NET_SOURCE_ANIMETHEMES,
+  fetchMalThemes,
+  type MalThemes,
+  type ThemeItem,
+} from '../../api/animethemes'
 import { amApplyAccentToDom } from '../../core/accent'
+import { describeState, getHealth, isTroubled } from '../../core/net-health'
 import { settings } from '../../core/settings'
 import { amCopy, applyMarquee } from '../../utils/dom'
 import { Logger } from '../../utils/logger'
@@ -39,10 +47,8 @@ let builtAniId: number | null = null
 let builtBox: HTMLElement | null = null
 let loadingAniId: number | null = null
 
-// Итерация 3.5.3: выбранный музыкальный сервис переехал в асинхронное хранилище,
-// а нужен он в момент сборки разметки, где ждать нельзя. Держим его в памяти и читаем
-// один раз — в buildThemes(), который и так асинхронный. Если чтение не удалось, остаётся
-// VK Музыка — значение по умолчанию из 1.9.1.
+// Выбранный сервис лежит в асинхронном хранилище, а нужен там, где ждать нельзя.
+// Читается один раз в buildThemes(); если чтение не удалось, остаётся VK Музыка.
 let serviceCache: MusicService = 'vk'
 let serviceLoaded = false
 
@@ -159,12 +165,7 @@ function createTrack(
     info.appendChild(artistSpan)
   }
 
-  // Копирование «Название — Исполнитель». Внутри ссылки гасим переход и всплытие.
-  //
-  // Атрибут data-am-no-nav — не дублирование preventDefault, а единственное, что работает
-  // в десктопной сборке. Там перехватчик ссылок (features/ui/links.ts) висит на документе
-  // в фазе перехвата и отрабатывает РАНЬШЕ этого обработчика: клик по иконке копирования
-  // давал сразу два действия — трек копировался и тут же открывался браузер со стримингом.
+  // data-am-no-nav обязателен: в десктопе links.ts перехватывает клик раньше и откроет стриминг.
   const copyBtn = document.createElement('span')
   copyBtn.className = 'am-theme-copy'
   copyBtn.title = 'Скопировать трек'
@@ -222,6 +223,35 @@ function fillBox(box: HTMLElement, themes: MalThemes): void {
   box.style.display = 'block'
 }
 
+/**
+ * Причина отказа AnimeThemes или null, если учёт считает источник живым.
+ * Текст берётся из состояния: 403 без туннеля и молчание сети лечатся по-разному.
+ */
+function themesTrouble(): string | null {
+  if (!isTroubled(NET_SOURCE_ANIMETHEMES)) return null
+  const state = getHealth(NET_SOURCE_ANIMETHEMES)?.state
+  return state ? describeState(state) : null
+}
+
+/** Строка отказа вместо списка треков. Стиль тот же, что у виджета рейтингов. */
+function fillTrouble(box: HTMLElement, reason: string): void {
+  const heading = document.createElement('h2')
+  heading.textContent = 'Музыкальные темы'
+  heading.style.cssText = 'margin: 0 0 8px; width: 100%; text-align: center;'
+
+  const note = document.createElement('div')
+  note.className = 'am-net-note'
+  note.textContent =
+    `AnimeThemes ${reason}: список опенингов и эндингов сейчас недоступен. ` +
+    `Подробности — в настройках, вкладка «Разработчик».`
+  note.style.cssText =
+    'padding: 8px 10px; border-radius: 6px; font-size: 0.85em; line-height: 1.35;' +
+    ' color: rgb(var(--color-text-light)); background: rgba(var(--color-red, 252,129,129), 0.10);'
+
+  box.append(heading, note)
+  box.style.display = 'block'
+}
+
 async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<void> {
   // Блок создаём сразу скрытым: он занимает место в DOM и не даёт повторно дёргать API.
   const box = document.createElement('div')
@@ -231,12 +261,19 @@ async function buildThemes(ctx: MediaContext, sidebar: HTMLElement): Promise<voi
   builtAniId = ctx.aniId
   builtBox = box
 
-  // Чтение выбранного сервиса идёт параллельно с запросом тем: оно короче сетевого
-  // ответа и ничего не задерживает, но к моменту сборки ссылок значение уже в памяти.
+  // Чтение сервиса идёт параллельно запросу тем: оно короче и ничего не задерживает.
   const [themes] = await Promise.all([fetchMalThemes(ctx.malData.idMal), loadService()])
   if (!isStillOnPage(ctx.aniId)) return
-  // Тем нет — блок остаётся скрытым, а не удаляется: иначе виджет запросит их снова.
-  if (!themes || (themes.openings.length === 0 && themes.endings.length === 0)) return
+
+  // Причину пишем, только если учёт её знает: лучше ничего, чем ложное объяснение.
+  if (!themes) {
+    const reason = themesTrouble()
+    if (reason) fillTrouble(box, reason)
+    return
+  }
+
+  // Тем нет в базе — блок остаётся скрытым, а не удаляется: иначе виджет запросит их снова.
+  if (themes.openings.length === 0 && themes.endings.length === 0) return
 
   fillBox(box, themes)
   amApplyAccentToDom()

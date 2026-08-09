@@ -1,37 +1,10 @@
-// Пункт 1.4 плана: поиск персонажей и авторов Shikimori (строки 1953-2083 монолита).
-//
-// Отдельно от shikimori.ts, потому что это не транспорт, а стратегия поиска:
-// три REST-запроса, фоллбэк на GraphQL, дозагрузка деталей и гард тёзок.
-//
-// Почему так сложно: API Shikimori ищет только по точному порядку слов, а AniList
-// даёт имена в западном порядке. Оттуда вариант с reversedName и два разных
-// REST-эндпоинта (/search и ?search) — они ведут себя по-разному на одних и тех же данных.
-//
-// Гард тёзок: если совпадение не кандзи-точное (score < 90), требуем пересечения
-// по MAL id тайтлов. Без этого однофамильцы подменяли описания персонажей.
-//
-// Пункт 3.5.2: транспорт переведён с GM_xmlhttpRequest на Bridge.http. Изменена
-// ровно одна функция — локальная обёртка request(); вся стратегия поиска, пороги
-// совпадения, гард тёзок и кэш ролей остались нетронутыми.
-//
-// Пункт 3.8 — главное исправление этого файла.
-//
-// При переходе на мост здесь появился второй, неучтённый канал в тот же домен:
-// шлюз темпа жил внутри shikimori.ts и обслуживал только fetchShiki(), а request()
-// ниже шёл напрямую. На одну персону — до пяти запросов (три поиска, GraphQL,
-// детали), при пачке в десять штук — до пятидесяти обращений мимо счётчика,
-// без минимального интервала и без уважения к штрафной паузе после 429. Именно
-// поэтому перевод визуально ускорился, а счётчик окна при этом не заполнялся.
-//
-// Теперь request() берёт слот у того же shikiLimiter, что и fetchShiki: один бюджет
-// на весь источник, включая оба зеркала и оба канала.
-//
-// Там же выровнены уровни логов. Раньше было наоборот: битый JSON одного из трёх
-// поисков кричал ERROR, хотя остальные два ещё могли найти персону, а полный
-// транспортный сбой глотался молча через `catch { return { status: 0 } }`.
+// Поиск персонажей и авторов Shikimori: три REST-запроса, фоллбэк на GraphQL и гард тёзок.
+// Отдельно от shikimori.ts: там транспорт, здесь стратегия, но бюджет темпа у них общий.
+// Сложность оттого, что Shikimori ищет по точному порядку слов, а AniList даёт западный.
 
 import { Bridge } from '@/bridge'
 import { SHIKI_DOMAINS } from '../core/constants'
+import { reportError, reportStatus } from '../core/net-health'
 import { Logger } from '../utils/logger'
 import { scoreNameMatch } from '../utils/name-match'
 import type { NameCandidate, NameTarget } from '../utils/name-match'
@@ -64,28 +37,34 @@ function mirrorUrl(domain: string, path: string): string {
   return 'https://' + domain + path
 }
 
+/** Идентификатор зеркала в учёте состояния сети. Совпадает с shikimori.ts намеренно. */
+function netId(domain: string): string {
+  return `shikimori:${domain}`
+}
+
 interface RawResponse {
   status: number
   responseText: string
 }
 
 /**
- * Обёртка над Bridge.http, которая никогда не реджектит.
- * Форма результата (status + responseText) сохранена намеренно: на неё завязаны
- * все три шага поиска ниже. status 0 = транспортный сбой.
- *
- * Пункт 3.8: слот у общего ограничителя, куки не шлём, транспортный сбой больше
- * не пропадает из лога, а 429 сразу тормозит весь источник, а не только текущую
- * ветку поиска: соседние запросы пачки уже стоят в очереди шлюза.
+ * Обёртка над Bridge.http: никогда не реджектит, status 0 означает транспортный сбой.
+ * Единственное горлышко файла: слот, учёт и пауза по 429 живут только здесь.
  */
 async function request(opts: {
   method: 'GET' | 'POST'
   url: string
+  domain: string
   headers?: Record<string, string>
   data?: string
 }): Promise<RawResponse> {
+  const label = `Shikimori (${opts.domain})`
+  let startedAt = Date.now()
   try {
     await shikiLimiter.acquireSlot()
+
+    // Время считается после очереди шлюза: иначе наша же пауза делала бы источник медленным.
+    startedAt = Date.now()
 
     const r = await Bridge.http.request({
       method: opts.method,
@@ -94,6 +73,8 @@ async function request(opts: {
       body: opts.data,
       credentials: 'omit',
     })
+
+    reportStatus(netId(opts.domain), label, r.status, Date.now() - startedAt)
 
     if (r.status === 429) {
       shikiLimiter.pause(PERSON_RATE_PAUSE_MS)
@@ -104,8 +85,8 @@ async function request(opts: {
 
     return { status: r.status, responseText: r.text }
   } catch (e) {
-    // Транспортный сбой (BridgeHttpError). Поиск персон не должен ронять перевод
-    // страницы, поэтому отдаём status 0 — но теперь хотя бы с записью в журнал.
+    // Поиск персон не должен ронять перевод страницы, поэтому status 0 вместо исключения.
+    reportError(netId(opts.domain), label, e, Date.now() - startedAt)
     Logger('WARN', `Shikimori: запрос поиска персоны не ушёл: ${opts.url}`, e)
     return { status: 0, responseText: '' }
   }
@@ -219,7 +200,7 @@ export async function fetchShikiPersonREST(
       ]
 
       for (const url of searchUrls) {
-        const r = await request({ method: 'GET', url })
+        const r = await request({ method: 'GET', url, domain })
         if (r.status === 429) {
           rateLimited = true
           break
@@ -253,6 +234,7 @@ export async function fetchShikiPersonREST(
         const r = await request({
           method: 'POST',
           url: mirrorUrl(domain, '/api/graphql'),
+          domain,
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           data: JSON.stringify({ query: gqlQuery, variables: { search: cleanStr } }),
         })
@@ -280,6 +262,7 @@ export async function fetchShikiPersonREST(
         const rDetails = await request({
           method: 'GET',
           url: mirrorUrl(domain, `/api/${endpointStr}/${item.id}`),
+          domain,
         })
         if (rDetails.status === 429) return { status: 429, data: null }
         if (rDetails.status === 0) transportFailures++
@@ -293,7 +276,7 @@ export async function fetchShikiPersonREST(
           }
         }
 
-        // Гард тёзок: при неточном совпадении требуем общий тайтл.
+        // Гард тёзок: неточное совпадение требует общего тайтла, иначе подменялись однофамильцы.
         if (targetMalIds.length && itemScore < 90 && detailsRes) {
           const candMal = collectCandidateMalIds(detailsRes)
           if (candMal.length && !candMal.some((id) => targetMalIds.includes(id))) {
@@ -335,9 +318,7 @@ export async function fetchShikiPersonREST(
     }
   }
 
-  // Разводим два разных исхода, которые раньше выглядели одинаково:
-  //   - источник ответил, но такой персоны у него нет — штатно, WARN;
-  //   - до источника вообще не достучались — это уже ошибка.
+  // Два разных исхода: источник ответил и не знает такой персоны либо до него не достучались.
   if (transportFailures > 0) {
     Logger('ERROR', `Поиск персоны сорвался на всех зеркалах: ${cleanStr}`, {
       transportFailures,
@@ -362,20 +343,13 @@ interface ShikiRoleEntry {
 
 /**
  * Сколько тайтлов максимум проверяем при резолве через роли.
- * Без потолка персона с сорока тайтлами стоит сорока запросов, а совпадение
- * почти всегда находится на первых же: список AniList идёт по убыванию значимости.
+ * Совпадение почти всегда на первых: список AniList идёт по убыванию значимости.
  */
 const MAX_MEDIA_PROBES = 5
 
 /**
- * Кэш списков ролей на время сессии.
- *
- * АУДИТ (итерация 10): без кэша один и тот же /roles тянулся до 11 раз за минуту:
- * на странице десяток персонажей из одного аниме, и каждый независимо запрашивал
- * один и тот же список. Это давало 35% лишнего трафика и выбивало 429.
- *
- * Храним именно промис, а не результат: тогда параллельные вызовы дожидаются
- * одного запроса, а не стартуют свой каждый.
+ * Кэш списков ролей на время сессии: без него один /roles тянулся до 11 раз за минуту.
+ * Храним промис, а не результат: тогда параллельные вызовы ждут одного запроса.
  */
 const rolesCache = new Map<string, Promise<ShikiRoleEntry[] | null>>()
 
@@ -400,8 +374,7 @@ function loadRoles(kind: string, id: number): Promise<ShikiRoleEntry[] | null> {
 
 /**
  * Резолвит персонажа/автора через роли в общих тайтлах, когда поиск по имени не сработал.
- * Кандидаты уже ограничены составом тайтла, поэтому порог мягче (55), но слабые
- * совпадения по подстроке (30) всё равно отсекаются.
+ * Кандидаты уже ограничены составом тайтла, поэтому порог мягче (55), но не ниже.
  */
 export async function resolveShikiPersonByMedia(
   personData: AniListPersonRef,

@@ -1,16 +1,14 @@
-// Секция 7 монолита (строки 3796-3932): русский поиск в шапке AniList.
+// Русский поиск в шапке AniList.
 //
 // AniList не ищет по русским названиям. Схема обхода:
 //   1) пользователь вводит кириллицу → ищем на Shikimori (он умеет русские названия);
 //   2) полученные MAL id одним GraphQL-запросом маппим в тайтлы AniList;
 //   3) рисуем результаты в родной выпадашке сайта, подстраиваясь под его разметку.
 //
-// Два тонких места, сохранённые как в монолите:
+// Два тонких места:
 //   - корневые поля Character/Staff в AniList отдают 404 на пустой результат, поэтому
 //     каждый персонаж запрашивается через алиас Page(perPage:1) — пустой список вместо ошибки;
 //   - эндпоинты /search у Shikimori игнорируют &limit, поэтому списки режутся на клиенте.
-//
-// На Этапе 2 рендер станет Vue-компонентом; пока — императивный порт 1:1.
 
 import { anilistQuery } from '../../api/anilist'
 import { fetchShiki } from '../../api/shikimori'
@@ -22,12 +20,12 @@ import { initDictCapture } from './dict-capture'
 /**
  * Признак поля поиска в шапке сайта.
  *
- * Монолит сравнивал placeholder со строкой 'Поиск в AniList', то есть с результатом
- * работы своего же переводчика. Побочный эффект: при translateInterface: false
- * или при правке формулировки в dictionary.json русский поиск молча переставал работать:
- * две независимые функции оказались связаны через текст интерфейса.
+ * Сравнивать placeholder со строкой 'Поиск в AniList' нельзя: это результат работы
+ * нашего же переводчика, и при translateInterface: false или правке формулировки
+ * в dictionary.json русский поиск молча переставал работать: две независимые
+ * функции оказывались связаны через текст интерфейса.
  *
- * Здесь поле опознаётся по смыслу placeholder'а: упоминание AniList плюс глагол поиска
+ * Поэтому поле опознаётся по смыслу placeholder'а: упоминание AniList плюс глагол поиска
  * на любом из двух языков. Подходит и 'Поиск в AniList', и исходное 'Search AniList'.
  */
 const SEARCH_SITE_RE = /anilist/i
@@ -107,7 +105,8 @@ function generateCol(
   if (items.length === 0) return ''
 
   let colHtml = html`<div class="result-col animori-custom-result-col">
-    <h3 class="title">${title}</h3>`
+    <h3 class="title">${title}</h3>
+  </div>`
 
   for (const item of items) {
     const alItem = alMap[`${typeStr.toUpperCase()}_${item.id}`]
@@ -147,7 +146,8 @@ function generatePersonCol(
   if (items.length === 0) return ''
 
   let colHtml = html`<div class="result-col animori-custom-result-col">
-    <h3 class="title">${title}</h3>`
+    <h3 class="title">${title}</h3>
+  </div>`
 
   items.forEach((item, i) => {
     const page = alData[`${aliasPrefix}${i}`] as Record<string, AlPersonNode[] | null> | undefined
@@ -252,7 +252,7 @@ async function performRussianSearch(query: string): Promise<void> {
       shikiChars.length === 0 &&
       shikiStaff.length === 0
     ) {
-      cachedHtml = html`<div class="am-ru-empty">Ничего не найдено ¯\_(ツ)_/¯</div>`
+      cachedHtml = html`<div class="am-ru-empty">Ничего не найдено ¯_(ツ)_/¯</div>`
       renderCustomResults(cachedHtml)
       return
     }
@@ -347,7 +347,7 @@ export function initRussianSearch(): void {
     searchTimeout = window.setTimeout(() => void performRussianSearch(query), DEBOUNCE_MS)
   })
 
-  // РИСК №3 из AUDITION.md: React выкидывает наш блок при перерисовке выпадашки,
+  // Риск №3 из docs/DECISIONS.md: React выкидывает наш блок при перерисовке выпадашки,
   // поэтому результат держится в cachedHtml и восстанавливается наблюдателем.
   const observer = new MutationObserver(() => {
     if (!document.body.classList.contains('am-ru-search-active')) return
@@ -365,7 +365,7 @@ export function initRussianSearch(): void {
   observer.observe(document.body, { childList: true, subtree: true })
 }
 
-/** Единая точка входа секции 7 монолита. */
+/** Единая точка входа модуля поиска. */
 export function initSearch(): void {
   initRussianSearch()
   initDictCapture()

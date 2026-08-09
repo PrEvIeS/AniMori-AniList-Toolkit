@@ -1,27 +1,11 @@
-// Этап 2 п.2.5: состояние панели действий, отделённое от компонента.
-//
-// Зачем отдельный файл, а не всё внутри ActionPanel.vue или actions.ts:
-// actions.ts обязан импортировать компонент, чтобы его смонтировать, а компонент
-// обязан читать состояние. Если состояние держать в actions.ts, получится цикл
-// actions.ts -> ActionPanel.vue -> actions.ts. Здесь цикла нет:
-//   actions.ts -> ActionPanel.vue -> action-panel-state.ts
-//   actions.ts -> action-panel-state.ts
-//
-// Кнопка плеера живёт в этом же состоянии, а не в разметке медиа-виджета:
-// в монолите и на этапе 1 она вставлялась в общий контейнер императивно
-// (player.ts -> ensureActionsContainer().prepend), а Vue владеет детьми
-// контейнера целиком и посторонний узел внутри его разметки — источник
-// расхождений при перерисовке.
-//
-// Этап 3 п.3.7: к кнопке добавлены три необязательных поля — icon, progress и visible.
-// Все три понадобились переносу списков, который переехал с отдельной плитки на Shikimori
-// в общую панель AniList, но сделаны общими: любая кнопка вправе быть с иконкой,
-// показывать ход длительной операции и убираться из панели по настройке.
+// Состояние панели действий: реестр кнопок и кнопка плеера, без разметки.
+// Отдельный файл, чтобы не было цикла actions.ts — ActionPanel.vue — actions.ts.
+// Почему shallowRef и почему кнопка плеера здесь — docs/DECISIONS.md.
 
 import { computed, ref, shallowRef } from 'vue'
 import type { Ref } from 'vue'
 
-/** Порядок кнопок слева направо, как в монолите: ⚙, </>, ⇄. Перенос добавлен правее всех. */
+/** Порядок кнопок слева направо: ⚙, </>, ⇄. Перенос — правее всех. */
 export const ACTION_ORDER = {
   settings: 10,
   logger: 20,
@@ -30,7 +14,7 @@ export const ACTION_ORDER = {
 } as const
 
 export interface ActionButton {
-  /** id узла: сохраняем идентификаторы монолита (am-set-btn, am-log-btn, am-cmp-btn). */
+  /** id узла: am-set-btn, am-log-btn, am-cmp-btn. Менять нельзя, на них завязаны стили. */
   id: string
   /** Подпись кнопки. Вставляется как текст, не как HTML. Используется, когда нет icon. */
   label: string
@@ -38,19 +22,13 @@ export interface ActionButton {
   /** Меньше — левее. Значения из ACTION_ORDER. */
   order: number
   /**
-   * Внутренности SVG 24×24 (path, circle и так далее) без самого тега svg.
-   *
-   * Такой же формат, как у TAB_ICONS в SettingsModal.vue: оболочка со всеми атрибутами
-   * живёт в шаблоне, чтобы все иконки были одного размера и толщины линий.
-   * Значение — только наша собственная константа, пользовательский ввод сюда не попадает.
+   * Внутренности SVG 24×24 без самого тега svg, как у TAB_ICONS в SettingsModal.vue.
+   * Значение — только собственная константа, пользовательский ввод сюда не попадает.
    */
   icon?: string
   /**
    * Ход длительной операции. Непустая строка вытесняет иконку и подпись.
-   *
-   * До 3.7 прогресс переноса писался в подпись своей плитки на Shikimori. Своей
-   * плитки больше нет, а терять индикатор нельзя: перенос идёт минутами и без
-   * строки состояния выглядит зависшим.
+   * Перенос идёт минутами и без строки состояния выглядит зависшим.
    */
   progress?: Ref<string>
   /** Видимость кнопки. Отсутствует — кнопка видна всегда. */
@@ -59,28 +37,14 @@ export interface ActionButton {
 }
 
 /**
- * Реестр зарегистрированных кнопок.
- *
- * shallowRef, а не ref: обычный ref делает содержимое глубоко реактивным и попутно
- * разворачивает вложенные ref в их значения (UnwrapRef). Для полей progress и visible
- * это губительно сразу с двух сторон: типы перестают совпадать с ActionButton, а связь
- * с исходным ref теряется — панель запомнила бы значение на момент регистрации и
- * никогда не узнала о ходе переноса.
- *
- * Цена решения: мутации массива на месте (push) не замечаются, поэтому
- * registerActionButton обязан заменять сам массив.
+ * Реестр зарегистрированных кнопок. shallowRef сохраняет связь с чужими ref в progress и visible.
+ * Цена решения: push не замечается, массив надо заменять целиком.
  */
 const registry = shallowRef<ActionButton[]>([])
 
 /**
- * Кнопки в порядке отрисовки.
- *
- * Порядок задаётся полем order, а не порядком регистрации: иначе поздние итерации
- * добавляли бы свои кнопки справа и раскладка разошлась бы с монолитом.
- *
- * Скрытые кнопки отсеиваются здесь, а не через v-if в шаблоне: разделители
- * между пилюлями рисуются селектором .am-premium-btn + .am-premium-btn, и соседство
- * узлов обязано быть фактическим, а не логическим.
+ * Кнопки в порядке отрисовки: по полю order, а не по порядку регистрации.
+ * Скрытые отсеиваются здесь, а не через v-if: иначе рвётся соседство кнопок в панели.
  */
 export const actionButtons = computed<ActionButton[]>(() =>
   registry.value
@@ -91,9 +55,6 @@ export const actionButtons = computed<ActionButton[]>(() =>
 /**
  * Добавляет кнопку в панель. Повторная регистрация того же id игнорируется.
  * Можно вызывать и до, и после initActionBar(): панель реактивна.
- *
- * Массив заменяется целиком, а не дополняется push: у shallowRef отслеживается только
- * присваивание .value.
  */
 export function registerActionButton(button: ActionButton): void {
   if (registry.value.some((b) => b.id === button.id)) return
@@ -104,13 +65,33 @@ export const PLAYER_BUTTON_ID = 'ru-player-btn'
 export const PLAYER_BUTTON_LABEL = '▶ Плеер'
 export const PLAYER_BUTTON_TITLE = 'Смотреть онлайн'
 
+/** Подпись на месте в шапке тайтла: там кнопка широкая и короткое слово смотрится сиротливо. */
+export const PLAYER_BUTTON_HERO_LABEL = '▶ Смотреть'
+
+/** Колонка под обложкой в шапке тайтла: кнопка встаёт следом за «Добавить в список». */
+const PLAYER_ANCHOR_SELECTOR = '.header .cover-wrap-inner'
+
+/** Куда переносится кнопка плеера. null — кнопка остаётся в плавающей панели. */
+export const playerAnchor = shallowRef<HTMLElement | null>(null)
+
+/**
+ * Ищет посадочное место заново: AniList пересобирает шапку и выкидывает узлы (РИСК №3).
+ * Присваивание только при настоящей смене, иначе кнопка перевешивалась бы на каждый вызов.
+ */
+export function refreshPlayerAnchor(): void {
+  const found = document.querySelector<HTMLElement>(PLAYER_ANCHOR_SELECTOR)
+  const next = found && found.isConnected ? found : null
+  const current = playerAnchor.value
+  if (current === next && (!current || current.isConnected)) return
+  playerAnchor.value = next
+}
+
 /** Видна ли кнопка плеера. Управляется медиа-виджетом плеера. */
 export const isPlayerVisible = ref(false)
 
 /**
- * Обработчик кнопки плеера. shallowRef, а не ref: значение — функция, и оборачивать
- * её в глубокую реактивность незачем. В шаблоне не используется, поэтому смена
- * обработчика при каждом mount() виджета не вызывает перерисовку панели.
+ * Обработчик кнопки плеера. shallowRef: значение — функция.
+ * В шаблоне не используется, поэтому смена обработчика не перерисовывает панель.
  */
 export const playerHandler = shallowRef<(() => void) | null>(null)
 
@@ -118,16 +99,16 @@ export const playerHandler = shallowRef<(() => void) | null>(null)
 export function showPlayerButton(onClick: () => void): void {
   playerHandler.value = onClick
   isPlayerVisible.value = true
+  // Зовётся на каждую перерисовку страницы, поэтому здесь же обновляется и место кнопки.
+  refreshPlayerAnchor()
 }
 
 /**
  * Гасит кнопку плеера.
- *
- * Вызывается и виджетом плеера (плеер выключен в настройках или это не аниме),
- * и медиа-модулем при уходе со страницы тайтла: кнопка живёт в общей панели,
- * а не в разметке виджета, поэтому cleanupSelectors её не снимает.
+ * Зовётся и виджетом плеера, и медиа-модулем: cleanupSelectors кнопку не снимает.
  */
 export function hidePlayerButton(): void {
   isPlayerVisible.value = false
   playerHandler.value = null
+  playerAnchor.value = null
 }

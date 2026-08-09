@@ -1,20 +1,7 @@
 <!--
-  Этап 2 п.2.5: плавающая панель кнопок AniMori. Заменяет императивный render()
-  из features/ui/actions.ts (этап 1, п.1.7).
-
-  Компонент рендерит САМ контейнер #animori-actions, а не его содержимое, и монтируется
-  в document.body. Причина в style.scss: #animori-actions — это display:flex, а разделители
-  между кнопками нарисованы селектором .am-premium-btn + .am-premium-btn. Если бы
-  компонент монтировался внутрь готового контейнера, узел-корень vue-mounter'а встал бы
-  между контейнером и кнопками: кнопки перестали бы быть flex-элементами пилюли и
-  потеряли бы разделители. Стили при этом не тронуты ни на строку.
-
-  Кнопка плеера — часть этой же панели (в монолите и на этапе 1 её вставлял player.ts
-  через prepend). Она идёт первой: в раскладке монолита плеер слева.
-
-  Этап 3 п.3.7: у кнопки появилось три варианта содержимого вместо одного: строка
-  прогресса (если операция идёт), иконка (если задана) или текстовая подпись.
-  Порядок именно такой: пока идёт перенос, пользователю важнее видеть его ход, чем значок.
+  Плавающая панель кнопок: компонент рисует сам контейнер #animori-actions в body.
+  Узел-обёртка внутри контейнера разорвал бы flex и убрал разделители кнопок.
+  Кнопка плеера идёт первой и при наличии посадочного места уезжает под обложку.
 -->
 
 <script setup lang="ts">
@@ -22,18 +9,17 @@ import { Logger } from '../../utils/logger'
 import {
   actionButtons,
   isPlayerVisible,
+  PLAYER_BUTTON_HERO_LABEL,
   PLAYER_BUTTON_ID,
   PLAYER_BUTTON_LABEL,
   PLAYER_BUTTON_TITLE,
+  playerAnchor,
   playerHandler,
   type ActionButton,
 } from './action-panel-state'
+import './player-hero.scss'
 
-/**
- * Ошибка обработчика не должна ломать панель: до этого пункта каждый onClick был
- * обёрнут в try/catch внутри render(), и это поведение сохраняется. Без обёртки
- * исключение всплыло бы в планировщик Vue и погасило бы обновления компонента.
- */
+/** Без обёртки ошибка обработчика всплывёт в планировщик Vue и погасит панель. */
 function runAction(button: ActionButton): void {
   try {
     button.onClick()
@@ -60,22 +46,22 @@ function runPlayer(): void {
 
 <template>
   <div id="animori-actions" class="am-accent-scope">
-    <button
-      v-if="isPlayerVisible"
-      :id="PLAYER_BUTTON_ID"
-      type="button"
-      class="am-premium-btn"
-      :title="PLAYER_BUTTON_TITLE"
-      @click="runPlayer"
-    >
-      {{ PLAYER_BUTTON_LABEL }}
-    </button>
+    <!-- При выключенном телепорте адрес не нужен, но Vue требует годного значения. -->
+    <Teleport :to="playerAnchor ?? 'body'" :disabled="!playerAnchor">
+      <button
+        v-if="isPlayerVisible"
+        :id="PLAYER_BUTTON_ID"
+        type="button"
+        class="am-premium-btn"
+        :class="{ 'am-player-hero': !!playerAnchor }"
+        :title="PLAYER_BUTTON_TITLE"
+        @click="runPlayer"
+      >
+        {{ playerAnchor ? PLAYER_BUTTON_HERO_LABEL : PLAYER_BUTTON_LABEL }}
+      </button>
+    </Teleport>
 
-    <!--
-      Интерполяция, а не v-html для подписи: монолит писал в разметку '&lt;/&gt;' и получал '</>',
-      здесь тот же результат без разбора HTML. v-html остаётся только для собственных
-      SVG-констант — точно так же, как устроены иконки вкладок в SettingsModal.vue.
-    -->
+    <!-- Интерполяция, а не v-html: подпись вида '</>' должна остаться текстом. -->
     <button
       v-for="button in actionButtons"
       :key="button.id"

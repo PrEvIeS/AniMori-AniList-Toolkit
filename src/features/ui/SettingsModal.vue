@@ -1,41 +1,6 @@
 <!--
-  Пункт 2.2 плана: панель настроек #am-panel на Vue (замена императивного features/ui/settings.ts).
-
-  Разметка, идентификаторы и классы повторяют 1.9.1 один в один — весь CSS (.amk-*, .am-dict-*,
-  .am-cl-*, .am-accent-*) уже лежит в style.scss и не менялся. Инлайновый style оставлен ровно
-  там, где он был в монолите.
-
-  Состояние и запись в хранилище живут в settings-state.ts. Компонент не трогает GM_setValue
-  напрямую (РИСК №1 из AUDITION.md).
-
-  Текстовые поля намеренно работают через :value + @change, а не v-model: монолит сохранял их
-  по событию change (потеря фокуса), а не на каждое нажатие клавиши. Сохраняем это поведение,
-  иначе домены и словарь писались бы в хранилище посимвольно.
-
-  Пункты 2.8 и 2.10: тумблер «Блокировщик рекламы» — единственный элемент, которого не было
-  в 1.9.1. Сознательно без пояснений и без деления на «баннеры» и «попапы»: для пользователя
-  это одна функция. Один чекбокс пишет сразу два ключа (set_hide_ads и set_block_popups) —
-  см. hideAds в settings-state.ts.
-
-  Пункт 2.9: тумблер адблока переехал из «Модулей» во вкладку «Прочее», строкой под «Логгером».
-  Логика деления: во «Модулях» живёт то, что добавляет блоки на страницу тайтла (плеер, рейтинги,
-  франшиза, темы), а адблок ничего не добавляет и работает на всём сайте — ему место рядом с логгером.
-
-  Правка 2 августа: строка адблока существует только в десктопной сборке
-  (v-if="isAdblockAvailable"). В юзерскрипте блокировщика нет, и строки нет тоже. Промежуточный
-  вариант с подсказкой про расширение браузера был отвергнут: неуправляемая строка в списке
-  тумблеров читается как сломанный переключатель, а не как совет.
-
-  Пункт 3.7.2: там же, во «Прочем», появилась карточка «Панель действий» с видимостью кнопок
-  переноса и сравнения. Отдельная карточка, а не строки в общей: логгер и адблок включают
-  и выключают сами функции, а здесь речь только о том, что показано в пилюле: сами модули
-  остаются рабочими.
-
-  Пункт 4.3: подвал больше не зовёт location.reload() напрямую. В десктопной оболочке этот
-  вызов молча не делал ничего, и кнопки «Применить и перезагрузить» и «Очистить кэш» выглядели
-  сломанными. Теперь обе идут через reloadPage() из ./reload, который зовёт мост.
-
-  Динамический import() здесь запрещён: сборка — однофайловый userscript, любой чанк ломает его.
+  Панель настроек #am-panel: каркас модалки, навигация и простые вкладки.
+  Решения по вкладкам, очистке кэша и перезагрузке — docs/DECISIONS.md.
 -->
 <template>
   <div
@@ -50,7 +15,9 @@
         <h2 class="amk-title">
           <span class="amk-dot"></span>AniMori <span class="amk-sub">настройки</span>
         </h2>
-        <button class="amk-close" id="am-set-close" title="Закрыть" @click="closeSettings()">✕</button>
+        <button class="amk-close" id="am-set-close" title="Закрыть" @click="closeSettings()">
+          ✕
+        </button>
       </div>
 
       <div class="amk-body amk-tabbed">
@@ -78,15 +45,23 @@
               ></svg>
             </span>
             {{ tab.label }}
-            <span v-if="tab.key === 'dict'" class="amk-tab-count" id="am-dict-count" :hidden="dictTotal === 0">{{
-              dictTotal
-            }}</span>
+            <span
+              v-if="tab.key === 'dict'"
+              class="amk-tab-count"
+              id="am-dict-count"
+              :hidden="dictTotal === 0"
+              >{{ dictTotal }}</span
+            >
           </button>
         </nav>
 
         <div class="amk-tabpanes">
           <!-- ==== Перевод ==== -->
-          <div class="amk-pane" :class="{ active: activeTab === 'translate' }" data-pane="translate">
+          <div
+            class="amk-pane"
+            :class="{ active: activeTab === 'translate' }"
+            data-pane="translate"
+          >
             <div class="amk-card">
               <div class="amk-card-title">Перевод</div>
               <div class="amk-row">
@@ -98,7 +73,8 @@
               </div>
               <div class="amk-row">
                 <span class="amk-row-label"
-                  ><b>Тайтлы и описания</b><span class="amk-row-hint">основной источник · фоллбэк</span></span
+                  ><b>Тайтлы и описания</b
+                  ><span class="amk-row-hint">основной источник · фоллбэк</span></span
                 >
               </div>
               <div class="amk-row" style="gap: 8px; border-top: none; padding-top: 0">
@@ -122,19 +98,27 @@
                   @change="onFallbackChange($event)"
                 >
                   <option value="none">Без фоллбэка</option>
-                  <option value="shikimori" :disabled="isFallbackOptionDisabled('shikimori')">Shikimori</option>
-                  <option value="anime365" :disabled="isFallbackOptionDisabled('anime365')">anime365</option>
+                  <option value="shikimori" :disabled="isFallbackOptionDisabled('shikimori')">
+                    Shikimori
+                  </option>
+                  <option value="anime365" :disabled="isFallbackOptionDisabled('anime365')">
+                    anime365
+                  </option>
                 </select>
               </div>
               <div class="amk-row">
-                <span class="amk-row-label"><b>Персонажи</b><span class="amk-row-hint">с Shikimori</span></span>
+                <span class="amk-row-label"
+                  ><b>Персонажи</b><span class="amk-row-hint">с Shikimori</span></span
+                >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_chars" v-model="translateCharacters" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
                 </label>
               </div>
               <div class="amk-row">
-                <span class="amk-row-label"><b>Персонал</b><span class="amk-row-hint">с Shikimori</span></span>
+                <span class="amk-row-label"
+                  ><b>Персонал</b><span class="amk-row-hint">с Shikimori</span></span
+                >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_staff" v-model="translateStaff" />
                   <span class="amk-track"></span><span class="amk-thumb"></span>
@@ -145,111 +129,7 @@
 
           <!-- ==== Словарь ==== -->
           <div class="amk-pane am-notr" :class="{ active: activeTab === 'dict' }" data-pane="dict">
-            <div class="amk-card">
-              <div class="amk-card-title">Локальный словарь</div>
-              <div class="amk-row-hint" style="padding: 2px 2px 8px; line-height: 1.5">
-                Свои переводы поверх общего словаря. Применяются на странице сразу, без перезагрузки. Регистр
-                сохраняется.
-              </div>
-              <div style="display: flex; gap: 8px; margin-bottom: 8px">
-                <input
-                  class="amk-input"
-                  id="am-dict-src"
-                  placeholder="Оригинал (англ.)"
-                  style="flex: 1"
-                  v-model="dictSrcDraft"
-                />
-                <input
-                  class="amk-input"
-                  id="am-dict-tr"
-                  placeholder="Перевод (рус.)"
-                  style="flex: 1"
-                  v-model="dictTrDraft"
-                  @keydown.enter="addDictDraft()"
-                />
-                <button class="amk-btn amk-btn-primary" id="am-dict-add" @click="addDictDraft()">＋</button>
-              </div>
-              <input
-                class="amk-input"
-                id="am-dict-search"
-                placeholder="Поиск по своим записям…"
-                style="margin-bottom: 8px"
-                v-model="dictSearch"
-              />
-              <div id="am-dict-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto">
-                <div v-for="entry in filteredDictEntries" :key="entry.key" class="am-dict-row">
-                  <input
-                    class="amk-input"
-                    style="flex: 1"
-                    :value="entry.key"
-                    @change="onDictKeyChange(entry.key, entry.value, $event)"
-                  />
-                  <input
-                    class="amk-input"
-                    style="flex: 1"
-                    :value="entry.value"
-                    @change="onDictValueChange(entry.key, $event)"
-                  />
-                  <button
-                    class="amk-btn amk-btn-ghost am-dict-del"
-                    title="Удалить"
-                    @click="deleteDictEntry(entry.key)"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-              <div
-                id="am-dict-empty"
-                class="amk-row-hint"
-                style="padding: 14px 2px; text-align: center"
-                :style="{ display: dictTotal === 0 ? 'block' : 'none' }"
-              >
-                Пока нет своих записей. Добавьте перевод выше или выделите текст на странице.
-              </div>
-            </div>
-            <div class="amk-card">
-              <div class="amk-card-title">Импорт / Экспорт</div>
-              <div style="display: flex; gap: 8px; flex-wrap: wrap">
-                <button class="amk-btn amk-btn-ghost" id="am-dict-export" style="flex: 1" @click="exportDict()">
-                  Экспорт
-                </button>
-                <button class="amk-btn amk-btn-ghost" id="am-dict-import" style="flex: 1" @click="importDictFromFile()">
-                  Импорт
-                </button>
-                <button class="amk-btn amk-btn-ghost" id="am-dict-copy" style="flex: 1" @click="onDictCopy()">
-                  {{ dictCopyLabel }}
-                </button>
-              </div>
-              <button
-                class="amk-btn amk-btn-primary amk-btn-block"
-                id="am-dict-share"
-                style="margin-top: 8px; display: inline-flex; align-items: center; justify-content: center; gap: 8px"
-                @click="shareDict()"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <circle cx="18" cy="5" r="3" />
-                  <circle cx="6" cy="12" r="3" />
-                  <circle cx="18" cy="19" r="3" />
-                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-                </svg>
-                Предложить в общую базу
-              </button>
-              <div class="amk-row-hint" style="padding: 8px 2px 2px; line-height: 1.5">
-                Экспорт скачивает JSON, «Копировать» кладёт его в буфер для отправки другим. Импорт объединяет с
-                текущими записями.
-              </div>
-            </div>
+            <SettingsDictTab />
           </div>
 
           <!-- ==== Модули ==== -->
@@ -288,13 +168,17 @@
           </div>
 
           <!-- ==== Оформление ==== -->
-          <div class="amk-pane" :class="{ active: activeTab === 'appearance' }" data-pane="appearance">
+          <div
+            class="amk-pane"
+            :class="{ active: activeTab === 'appearance' }"
+            data-pane="appearance"
+          >
             <div class="amk-card">
               <div class="amk-card-title">Оформление</div>
               <div class="amk-row-hint" style="padding: 2px 2px 8px">
                 Акцентный цвет тулкита — тему AniList не меняет
               </div>
-              <div class="amk-accents" id="am-accent-chips">
+              <div class="am-accents" id="am-accent-chips">
                 <button
                   v-for="key in ACCENT_KEYS"
                   :key="key"
@@ -304,137 +188,51 @@
                   :data-key="key"
                   @click="selectAccent(key)"
                 >
-                  <span class="am-accent-dot" :style="{ background: AM_ACCENTS[key].dot }"></span>{{
-                    AM_ACCENTS[key].name
-                  }}
+                  <span class="am-accent-dot" :style="{ background: accentDot(key) }"></span
+                  >{{ AM_ACCENTS[key].name }}
                 </button>
+              </div>
+              <!-- Пипетка и поле hex дублируют друг друга: нативный выбор может не открыться. -->
+              <div class="amk-row" v-if="accentPreset === 'custom'" style="margin-top: 10px">
+                <span class="amk-row-label"
+                  ><b>Свой цвет</b
+                  ><span class="amk-row-hint">пипетка или hex вида #7aa2f7</span></span
+                >
+                <span style="display: flex; gap: 8px; align-items: center; flex-shrink: 0">
+                  <input
+                    type="color"
+                    id="am_accent_pick"
+                    :value="accentCustomColor"
+                    style="
+                      width: 40px;
+                      height: 32px;
+                      padding: 2px;
+                      background: transparent;
+                      border: 1px solid rgba(var(--color-text-light), 0.25);
+                      border-radius: 8px;
+                      cursor: pointer;
+                    "
+                    @input="onAccentColor($event)"
+                  />
+                  <input
+                    class="amk-input amk-mono"
+                    id="am_accent_hex"
+                    placeholder="#7aa2f7"
+                    style="width: 104px"
+                    :value="accentCustomColor"
+                    @change="onAccentColor($event)"
+                  />
+                </span>
+              </div>
+              <div v-if="accentTooLight" class="amk-row-hint" style="padding: 8px 2px 2px">
+                Цвет светлый: белый текст кнопок и активных серий на нём читается плохо.
               </div>
             </div>
           </div>
 
           <!-- ==== Ссылки ==== -->
           <div class="amk-pane" :class="{ active: activeTab === 'links' }" data-pane="links">
-            <div class="amk-card">
-              <div class="amk-card-title">Внешние ссылки</div>
-              <div class="amk-row">
-                <span class="amk-row-label"><b>Показывать ссылки</b></span>
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_extlinks" v-model="enableExtLinks" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <div class="amk-row">
-                <span class="amk-row-label"><b>RuTracker</b></span>
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_link_rutracker" v-model="enableLinkRutracker" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <div class="amk-row">
-                <span class="amk-row-label"><b>YummyAnime</b></span>
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_link_yummy" v-model="enableLinkYummy" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <input
-                class="amk-input amk-mono"
-                id="set_yummy_domain"
-                placeholder="yummyanime.tv"
-                style="margin: 2px 0 8px"
-                :value="yummyDomain"
-                @change="onDomainChange('yummy', $event)"
-              />
-              <div class="amk-row">
-                <span class="amk-row-label"><b>AnimeGO</b></span>
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_link_animego" v-model="enableLinkAnimego" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <input
-                class="amk-input amk-mono"
-                id="set_animego_domain"
-                placeholder="animego.org"
-                style="margin: 2px 0 8px"
-                :value="animegoDomain"
-                @change="onDomainChange('animego', $event)"
-              />
-              <div class="amk-row">
-                <span class="amk-row-label"><b>MangaLib</b></span>
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_link_mangalib" v-model="enableLinkMangalib" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <input
-                class="amk-input amk-mono"
-                id="set_mangalib_domain"
-                placeholder="mangalib.me"
-                style="margin: 2px 0 6px"
-                :value="mangalibDomain"
-                @change="onDomainChange('mangalib', $event)"
-              />
-            </div>
-
-            <div class="amk-card">
-              <div class="amk-card-title">Свои ссылки</div>
-              <div id="am-custom-links-list" style="display: flex; flex-direction: column; gap: 10px">
-                <div v-for="(link, index) in customLinks" :key="index" class="am-cl-row">
-                  <div style="display: flex; gap: 8px; align-items: center">
-                    <input
-                      class="amk-input"
-                      placeholder="Название"
-                      style="flex: 1"
-                      :value="link.name"
-                      @change="onLinkFieldChange(index, 'name', $event)"
-                    />
-                    <button
-                      class="amk-btn amk-btn-ghost am-cl-del"
-                      title="Удалить"
-                      @click="removeCustomLink(index)"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <input
-                    class="amk-input amk-mono"
-                    :placeholder="CUSTOM_URL_EXAMPLE"
-                    style="margin-top: 6px"
-                    :value="link.url"
-                    @change="onLinkFieldChange(index, 'url', $event)"
-                  />
-                  <div class="am-cl-swatches">
-                    <span
-                      v-for="color in CL_COLORS"
-                      :key="color"
-                      class="am-cl-sw"
-                      :class="{ active: link.color === color }"
-                      :style="{ background: 'rgb(' + color + ')' }"
-                      @click="setCustomLinkColor(index, color)"
-                    ></span>
-                  </div>
-                </div>
-              </div>
-              <button class="amk-btn amk-btn-ghost" id="am-custom-add" style="width: 100%; margin-top: 10px" @click="addCustomLink()">
-                ＋ Добавить свою ссылку
-              </button>
-              <div class="amk-row-hint" style="padding: 10px 2px 2px; line-height: 1.5">
-                В URL-шаблоне подставляются:
-                <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px"
-                  >{ru}</code
-                >
-                — русское название,
-                <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px"
-                  >{romaji}</code
-                >
-                — ромадзи,
-                <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px"
-                  >{query}</code
-                >
-                — авто (ru → romaji). Всё кодируется автоматически.
-              </div>
-            </div>
+            <SettingsLinksTab />
           </div>
 
           <!-- ==== Аккаунт ==== -->
@@ -450,9 +248,14 @@
                   style="color: rgb(var(--color-blue)); text-decoration: none"
                   >здесь</a
                 >, redirect URL:
-                <code style="background: rgba(var(--color-text-light), 0.12); padding: 1px 5px; border-radius: 4px">{{
-                  AL_PIN_REDIRECT
-                }}</code>
+                <code
+                  style="
+                    background: rgba(var(--color-text-light), 0.12);
+                    padding: 1px 5px;
+                    border-radius: 4px;
+                  "
+                  >{{ AL_PIN_REDIRECT }}</code
+                >
               </div>
               <input
                 class="amk-input amk-mono"
@@ -464,8 +267,19 @@
                 @change="onTokenChange($event)"
               />
               <div style="display: flex; gap: 8px; margin-bottom: 6px">
-                <input class="amk-input amk-mono" id="set_al_client" placeholder="Client ID" style="flex: 1" v-model="alClientId" />
-                <button class="amk-btn amk-btn-ghost" id="set_al_gen" title="Создать ссылку авторизации" @click="onGenerateAuthLink()">
+                <input
+                  class="amk-input amk-mono"
+                  id="set_al_client"
+                  placeholder="Client ID"
+                  style="flex: 1"
+                  v-model="alClientId"
+                />
+                <button
+                  class="amk-btn amk-btn-ghost"
+                  id="set_al_gen"
+                  title="Создать ссылку авторизации"
+                  @click="onGenerateAuthLink()"
+                >
                   Ссылка
                 </button>
               </div>
@@ -494,18 +308,9 @@
 
           <!-- ==== Прочее ==== -->
           <div class="amk-pane" :class="{ active: activeTab === 'misc' }" data-pane="misc">
-            <div class="amk-card">
+            <div class="amk-card" v-if="isAdblockAvailable">
               <div class="amk-card-title">Прочее</div>
               <div class="amk-row">
-                <span class="amk-row-label"
-                  ><b>Логгер</b><span class="amk-row-hint">отслеживание действий скрипта (для отладки)</span></span
-                >
-                <label class="amk-switch">
-                  <input type="checkbox" id="set_logger" v-model="enableLogger" />
-                  <span class="amk-track"></span><span class="amk-thumb"></span>
-                </label>
-              </div>
-              <div class="amk-row" v-if="isAdblockAvailable">
                 <span class="amk-row-label"><b>Блокировщик рекламы</b></span>
                 <label class="amk-switch">
                   <input type="checkbox" id="set_hide_ads" v-model="hideAds" />
@@ -521,7 +326,8 @@
               </div>
               <div class="amk-row">
                 <span class="amk-row-label"
-                  ><b>Кнопка переноса</b><span class="amk-row-hint">перенос списков Shikimori → AniList</span></span
+                  ><b>Кнопка переноса</b
+                  ><span class="amk-row-hint">перенос списков Shikimori → AniList</span></span
                 >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_btn_sync" v-model="showSyncButton" />
@@ -530,7 +336,8 @@
               </div>
               <div class="amk-row">
                 <span class="amk-row-label"
-                  ><b>Кнопка сравнения</b><span class="amk-row-hint">сверка списков двух сайтов</span></span
+                  ><b>Кнопка сравнения</b
+                  ><span class="amk-row-hint">сверка списков двух сайтов</span></span
                 >
                 <label class="amk-switch">
                   <input type="checkbox" id="set_btn_compare" v-model="showCompareButton" />
@@ -538,85 +345,19 @@
                 </label>
               </div>
             </div>
+
+            <!-- Карточка сама молчит там, где прокси не поддержан. -->
+            <SettingsProxyCard />
+          </div>
+
+          <!-- ==== Разработчик ==== -->
+          <div class="amk-pane" :class="{ active: activeTab === 'dev' }" data-pane="dev">
+            <SettingsDevTab />
           </div>
 
           <!-- ==== Поддержать ==== -->
           <div class="amk-pane" :class="{ active: activeTab === 'support' }" data-pane="support">
-            <div class="amk-card">
-              <div class="amk-card-title">Поддержать проект</div>
-              <div class="amk-row-hint" style="padding: 2px 2px 10px; line-height: 1.55">
-                AniMori — бесплатный проект, я делаю его из любви к японским мультикам. Денег не нужно. Если тулкит
-                вам пригодился, лучшая благодарность — пара действий ниже. Это правда помогает.
-              </div>
-              <button
-                class="amk-btn amk-btn-primary amk-btn-block"
-                id="am-sup-star"
-                style="margin-bottom: 8px; gap: 8px"
-                @click="openExternal(SUP_GITHUB)"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                </svg>
-                Star на GitHub
-              </button>
-              <button
-                class="amk-btn amk-btn-ghost amk-btn-block"
-                id="am-sup-review"
-                style="margin-bottom: 8px; gap: 8px"
-                @click="openExternal(SUP_GREASY_FEEDBACK)"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
-                Оценить на Greasy Fork
-              </button>
-              <div class="amk-row-hint" style="padding: 2px 2px 6px; line-height: 1.5">
-                Отзыв двигает скрипт в выдаче — так его находят новые пользователи.
-              </div>
-            </div>
-            <div class="amk-card">
-              <div class="amk-card-title">Поделиться</div>
-              <div class="amk-row-hint" style="padding: 2px 2px 8px; line-height: 1.5">
-                Рассказать друзьям — тоже поддержка. Ссылка на установку:
-              </div>
-              <div style="display: flex; gap: 8px">
-                <input class="amk-input amk-mono" id="am-sup-link" readonly :value="SUP_GREASY" style="flex: 1" />
-                <button class="amk-btn amk-btn-primary" id="am-sup-copy" style="gap: 7px" @click="onSupportCopy($event)">
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="14"
-                    height="14"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>
-                  <span>{{ supportCopyLabel }}</span>
-                </button>
-              </div>
-            </div>
+            <SettingsSupportTab />
           </div>
         </div>
       </div>
@@ -625,76 +366,73 @@
         <button class="amk-btn amk-btn-primary amk-btn-block" id="am-apply" @click="onApply()">
           Применить и перезагрузить
         </button>
-        <button class="amk-btn amk-btn-danger" id="am-clear" @click="onClearCache()">Очистить кэш</button>
+        <button
+          class="amk-btn amk-btn-danger"
+          id="am-clear"
+          :title="clearTitle"
+          :disabled="clearBusy"
+          @click="onClearCache()"
+        >
+          {{ clearLabel }}
+        </button>
+      </div>
+      <div
+        v-if="clearArmed"
+        class="amk-row-hint"
+        id="am-clear-note"
+        style="padding: 0 14px 10px; line-height: 1.5; text-align: right"
+      >
+        Будут удалены все сохранённые названия, персонажи, франшизы и темы. Настройки, токен и свой
+        словарь останутся. После очистки страница перезагрузится, а данные поедут с серверов заново.
+        Нажмите ещё раз для подтверждения.
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { AM_ACCENTS } from '../../core/accent'
-import { CL_COLORS } from '../../core/custom-links'
 import { clearCache } from '../../core/db'
-import type { TitleSource } from '../../core/settings'
-import { amCopy } from '../../utils/dom'
+import type { AccentPreset, TitleSource } from '../../core/settings'
+import { Logger } from '../../utils/logger'
+import SettingsDevTab from './SettingsDevTab.vue'
+import SettingsDictTab from './SettingsDictTab.vue'
+import SettingsLinksTab from './SettingsLinksTab.vue'
+import SettingsProxyCard from './SettingsProxyCard.vue'
+import SettingsSupportTab from './SettingsSupportTab.vue'
 import { reloadPage } from './reload'
 import {
   ACCENT_KEYS,
   AL_DEV_SETTINGS,
   AL_PIN_REDIRECT,
-  CUSTOM_URL_EXAMPLE,
-  SUP_GITHUB,
-  SUP_GREASY,
-  SUP_GREASY_FEEDBACK,
+  accentCustomColor,
+  accentCustomDot,
   accentPreset,
+  accentTooLight,
   activeTab,
-  addCustomLink,
-  addDictDraft,
   alAuthLink,
   alClientId,
   alToken,
-  animegoDomain,
   closeSettings,
-  commitDictEntry,
-  copyDictToClipboard,
-  customLinks,
-  deleteDictEntry,
-  dictSearch,
-  dictSrcDraft,
   dictTotal,
-  dictTrDraft,
-  enableExtLinks,
   enableFranchise,
-  enableLinkAnimego,
-  enableLinkMangalib,
-  enableLinkRutracker,
-  enableLinkYummy,
-  enableLogger,
   enablePlayer,
   enableRatings,
   enableThemes,
-  exportDict,
   fallbackDisabled,
-  filteredDictEntries,
   generateAuthLink,
   hideAds,
-  importDictFromFile,
   isAdblockAvailable,
   isFallbackOptionDisabled,
   isSettingsOpen,
   loadAuthState,
-  mangalibDomain,
-  normalizeDomain,
-  persistCustomLinks,
   refreshDict,
   reloadCustomLinks,
-  removeCustomLink,
   saveAlToken,
   selectAccent,
-  setCustomLinkColor,
-  shareDict,
+  setAccentCustom,
   showCompareButton,
   showSyncButton,
   syncTitleSources,
@@ -703,9 +441,11 @@ import {
   translateCharacters,
   translateInterface,
   translateStaff,
-  yummyDomain,
 } from './settings-state'
 import type { TabKey } from './settings-state'
+
+/** Сколько кнопка сброса держится «на взводе»: хватает прочитать предупреждение. */
+const CLEAR_ARM_MS = 8000
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'translate', label: 'Перевод' },
@@ -715,10 +455,11 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'links', label: 'Ссылки' },
   { key: 'account', label: 'Аккаунт' },
   { key: 'misc', label: 'Прочее' },
+  { key: 'dev', label: 'Разработчик' },
   { key: 'support', label: 'Поддержать' },
 ]
 
-/** Иконки вкладок — те же SVG, что в 1.9.1. */
+/** Иконки вкладок — те же SVG, что в 1.9.1; у dev — терминал. */
 const TAB_ICONS: Record<TabKey, string> = {
   translate:
     '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18"/>',
@@ -730,12 +471,10 @@ const TAB_ICONS: Record<TabKey, string> = {
     '<path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 0 1 6 6l-2 2"/><path d="M13 18l-1 1a4 4 0 0 1-6-6l2-2"/>',
   account: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="M16 7l3 3"/>',
   misc: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/>',
+  dev: '<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>',
   support:
     '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>',
 }
-
-const dictCopyLabel = ref('Копировать')
-const supportCopyLabel = ref('Копировать')
 
 function inputValue(e: Event): string {
   const el = e.target
@@ -753,40 +492,15 @@ function onFallbackChange(e: Event): void {
   titleFallback.value = inputValue(e) as TitleSource
 }
 
-// ==== Домены ====
+// ==== Оформление ====
 
-function onDomainChange(which: 'yummy' | 'animego' | 'mangalib', e: Event): void {
-  const normalized = normalizeDomain(inputValue(e))
-  if (which === 'yummy') yummyDomain.value = normalized
-  else if (which === 'animego') animegoDomain.value = normalized
-  else mangalibDomain.value = normalized
+/** У чипа «Свой цвет» кружок показывает выбранный оттенок, а не радугу. */
+function accentDot(key: AccentPreset): string {
+  return key === 'custom' ? accentCustomDot.value : AM_ACCENTS[key].dot
 }
 
-// ==== Свои ссылки ====
-
-function onLinkFieldChange(index: number, field: 'name' | 'url', e: Event): void {
-  const link = customLinks.value[index]
-  if (!link) return
-  link[field] = inputValue(e).trim()
-  persistCustomLinks()
-}
-
-// ==== Словарь ====
-
-function onDictKeyChange(oldKey: string, value: string, e: Event): void {
-  commitDictEntry(oldKey, inputValue(e), value)
-}
-
-function onDictValueChange(key: string, e: Event): void {
-  commitDictEntry(key, key, inputValue(e))
-}
-
-function onDictCopy(): void {
-  if (!copyDictToClipboard()) return
-  dictCopyLabel.value = '✓ Скопировано'
-  setTimeout(() => {
-    dictCopyLabel.value = 'Копировать'
-  }, 1400)
+function onAccentColor(e: Event): void {
+  setAccentCustom(inputValue(e))
 }
 
 // ==== Аккаунт ====
@@ -802,35 +516,70 @@ function onGenerateAuthLink(): void {
   }
 }
 
-// ==== Поддержать ====
-
-function openExternal(url: string): void {
-  window.open(url, '_blank', 'noopener')
-}
-
-function onSupportCopy(e: Event): void {
-  const target = e.currentTarget
-  amCopy(SUP_GREASY, target instanceof HTMLElement ? target : undefined)
-  supportCopyLabel.value = 'Скопировано ✓'
-  setTimeout(() => {
-    supportCopyLabel.value = 'Копировать'
-  }, 1200)
-}
-
 // ==== Подвал ====
 
-// Пункт 4.3: перезагрузка идёт через мост (./reload), а не location.reload():
-// в десктопном окне второй вариант не работает вовсе. Обёртка нужна ради void:
-// reloadPage() асинхронен, а обработчику клика нечего делать с промисом.
+// Обёртка нужна ради void: reloadPage() асинхронен, а обработчику клика промис не нужен.
 function onApply(): void {
   void reloadPage()
 }
 
+// ==== Очистка кэша ====
+
+/** Первый клик взвёл кнопку и показал предупреждение. */
+const clearArmed = ref(false)
+/** Очистка идёт или уже завершилась и ждёт перезагрузки: повторный клик бессмыслен. */
+const clearBusy = ref(false)
+const clearLabel = ref('Очистить кэш')
+const clearTitle = ref('Удалить сохранённые данные и перезагрузить страницу')
+
+let clearTimer: number | undefined
+
+/** Снять взвод и вернуть кнопке исходный вид. */
+function disarmClear(): void {
+  if (clearTimer !== undefined) {
+    window.clearTimeout(clearTimer)
+    clearTimer = undefined
+  }
+  if (clearBusy.value) return
+  clearArmed.value = false
+  clearLabel.value = 'Очистить кэш'
+  clearTitle.value = 'Удалить сохранённые данные и перезагрузить страницу'
+}
+
+/**
+ * Сброс кэша в два шага: первый клик взводит кнопку, второй запускает очистку.
+ * Почему не confirm() и почему перезагрузка безусловна — docs/DECISIONS.md.
+ */
 function onClearCache(): void {
-  void clearCache().then(() => {
-    alert('Кэш сброшен!')
-    void reloadPage()
-  })
+  if (clearBusy.value) return
+
+  if (!clearArmed.value) {
+    clearArmed.value = true
+    clearLabel.value = 'Точно очистить?'
+    clearTitle.value = 'Нажмите ещё раз, чтобы подтвердить очистку'
+    clearTimer = window.setTimeout(disarmClear, CLEAR_ARM_MS)
+    return
+  }
+
+  if (clearTimer !== undefined) {
+    window.clearTimeout(clearTimer)
+    clearTimer = undefined
+  }
+
+  clearBusy.value = true
+  clearArmed.value = false
+  clearLabel.value = 'Очистка...'
+  clearTitle.value = 'Идёт очистка кэша'
+
+  void clearCache()
+    .catch((e: unknown) => {
+      Logger('ERROR', 'Сброс кэша: неожиданный сбой', e)
+    })
+    .then(() => {
+      clearLabel.value = 'Кэш сброшен'
+      clearTitle.value = 'Перезагрузка...'
+      void reloadPage()
+    })
 }
 
 // ==== Жизненный цикл ====
@@ -841,9 +590,14 @@ onMounted(() => {
   syncTitleSources()
 })
 
-// Словарь и свои ссылки могут меняться извне (захват выделения на странице),
-// поэтому перечитываем их при каждом открытии панели.
+onBeforeUnmount(() => {
+  if (clearTimer !== undefined) window.clearTimeout(clearTimer)
+})
+
+// Словарь и свои ссылки меняются извне, поэтому перечитываем их при каждом открытии.
 watch(isSettingsOpen, (open) => {
+  // Панель не должна открываться с кнопкой, готовой стереть кэш по одному клику.
+  disarmClear()
   if (!open) return
   refreshDict()
   reloadCustomLinks()

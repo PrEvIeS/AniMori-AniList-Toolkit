@@ -1,8 +1,5 @@
-// Пункт 3.2 плана: реализация IBridge поверх API менеджера юзерскриптов.
-//
-// Это единственное место в проекте, где вызовы GM_* останутся после пункта 3.5.
-// Никакой прикладной логики здесь быть не должно: ограничитель скорости Shikimori,
-// перебор зеркал, бэкоффы и повторы остаются выше, в src/api/. Мост — только транспорт.
+// Реализация IBridge поверх API менеджера юзерскриптов — единственное место с GM_*.
+// Прикладной логики здесь нет: ограничитель, зеркала и повторы живут в src/api/.
 
 import {
   BridgeHttpError,
@@ -11,15 +8,17 @@ import {
   type IBridge,
   type IClipboard,
   type IHttp,
+  type IProxyDiagnostics,
   type IShell,
   type IStorage,
+  type ProxyProbe,
+  type ProxyStatus,
 } from './IBridge'
 
 // ==== storage ====
 
-// GM_getValue синхронен, но контракт асинхронен (РИСК №1): оборачиваем в готовый промис.
-// Проверка идёт по arguments.length, а не по `defaultValue === undefined`: вызов с явно
-// переданным undefined в качестве дефолта должен отличаться от вызова без дефолта.
+// GM_getValue синхронен, контракт асинхронен (риск 1). Проверка по arguments.length:
+// вызов с явным undefined в дефолте отличается от вызова без дефолта.
 function storageGet<T>(key: string, defaultValue: T): Promise<T>
 function storageGet<T = unknown>(key: string): Promise<T | undefined>
 function storageGet<T>(key: string, defaultValue?: T): Promise<T | undefined> {
@@ -37,10 +36,8 @@ const monkeyStorage: IStorage = {
   },
 
   flush(): Promise<void> {
-    // Пункт 4.5. Здесь ждать нечего по сути, а не по недоработке: GM_setValue
-    // завершает запись до возврата управления, так что к моменту вызова flush()
-    // незавершённых записей не существует физически. Именно поэтому дефект
-    // «настройки применяются через раз» в браузерной сборке не воспроизводился.
+    // Ждать нечего по сути: GM_setValue завершает запись до возврата управления.
+    // Поэтому дефект 4.5 в браузерной сборке и не воспроизводился.
     return Promise.resolve()
   },
 }
@@ -49,10 +46,8 @@ const monkeyStorage: IStorage = {
 
 /**
  * Разбирает сырую строку responseHeaders в объект с ключами в нижнем регистре.
- *
- * GM_xmlhttpRequest отдаёт заголовки одной строкой вида "name: value\r\n...", а Tauri —
- * объектом Headers. Контракт требует общего вида, иначе чтение retry-after в
- * anilistQuery вело бы себя по-разному на разных платформах.
+ * GM_xmlhttpRequest отдаёт их одной строкой, Tauri — объектом Headers; без общего вида
+ * чтение retry-after различалось бы по платформам.
  */
 export function parseRawHeaders(raw: string): Record<string, string> {
   const out: Record<string, string> = {}
@@ -67,7 +62,7 @@ export function parseRawHeaders(raw: string): Record<string, string> {
     const value = line.slice(separator + 1).trim()
     if (!name) continue
 
-    // Повторяющиеся заголовки склеиваем через запятую — так же поступает Headers.
+    // Повторяющиеся заголовки склеиваем через запятую — как Headers.
     const existing = out[name]
     out[name] = existing === undefined ? value : `${existing}, ${value}`
   }
@@ -75,15 +70,12 @@ export function parseRawHeaders(raw: string): Record<string, string> {
   return out
 }
 
-/** Предупреждаем об игнорируемом анонимном режиме один раз за сессию, а не на каждый запрос. */
+/** Предупреждаем об игнорируемом анонимном режиме один раз за сессию. */
 let anonymousWarningShown = false
 
 /**
- * Поддерживает ли менеджер анонимные запросы.
- *
- * Поле anonymous есть в Tampermonkey и Violentmonkey, но не в Greasemonkey 4: там оно
- * просто игнорируется и куки всё равно уйдут. Молча делать вид, что режим сработал,
- * контракт запрещает.
+ * Поддерживает ли менеджер анонимные запросы. В Greasemonkey 4 поле anonymous
+ * игнорируется и куки всё равно уйдут; молчать об этом контракт запрещает.
  */
 function supportsAnonymous(): boolean {
   const handler = typeof GM_info === 'object' ? (GM_info?.scriptHandler ?? '') : ''
@@ -123,8 +115,8 @@ const monkeyHttp: IHttp = {
           details.anonymous = true
         } else if (!anonymousWarningShown) {
           anonymousWarningShown = true
-          // Логгер здесь недоступен: utils/logger читает настройки, а настройки на пункте 3.5
-          // сами начнут ходить через мост — получилась бы циклическая зависимость.
+          // Логгер здесь недоступен: он читает настройки, а те ходят через мост —
+          // получилась бы циклическая зависимость.
           console.warn(
             '[AniMori] Менеджер юзерскриптов не поддерживает анонимные запросы: ' +
               'credentials "omit" выполнен как "include", куки будут отправлены.',
@@ -141,8 +133,8 @@ const monkeyHttp: IHttp = {
 
 const monkeyClipboard: IClipboard = {
   async writeText(text: string): Promise<void> {
-    // GM_setClipboard синхронен и не требует фокуса документа, поэтому он первый:
-    // navigator.clipboard падает, когда вкладка неактивна или нет жеста пользователя.
+    // GM_setClipboard первый: он не требует фокуса, а navigator.clipboard падает
+    // на неактивной вкладке и без жеста пользователя.
     try {
       GM_setClipboard(text)
       return
@@ -158,29 +150,22 @@ const monkeyClipboard: IClipboard = {
 
 const monkeyShell: IShell = {
   reload(): Promise<void> {
-    // В браузере это ровно то, что было в подвале настроек до пункта 4.3.
-    // Промис возвращается разрешённым только ради единого контракта: код после
-    // этой строки всё равно умрёт вместе со страницей.
+    // Промис разрешён только ради единого контракта: код после этой строки
+    // умрёт вместе со страницей.
     location.reload()
     return Promise.resolve()
   },
 
   openExternal(url: string): Promise<void> {
-    // Пункт 4.5. В браузере никакого участия оболочки не требуется: новая вкладка —
-    // штатное поведение. GM_openInTab намеренно НЕ используется: он потребовал бы
-    // нового @grant в шапке юзерскрипта, а шапку мы не расширяем без нужды.
-    //
-    // noopener обязателен: иначе открытая страница получит ссылку на window.opener
-    // и сможет переписать адрес нашего окна.
+    // Новая вкладка — штатное поведение браузера. GM_openInTab НЕ берём: потребовал
+    // бы нового @grant в шапке. noopener обязателен: иначе страница получит window.opener.
     window.open(url, '_blank', 'noopener')
     return Promise.resolve()
   },
 
   back(): Promise<void> {
-    // Пункт 4.5. В браузере шаги по истории уже есть у тулбара, и блок навигации
-    // там не монтируется, поэтому вызвать это может разве что будущий код.
-    // Реализация всё равно честная: контракт не должен иметь заглушек, иначе
-    // одна из платформ начнёт вести себя иначе тихо и непредсказуемо.
+    // В браузере вызвать это некому: блок навигации там не монтируется. Реализация
+    // всё равно честная: заглушки в контракте разводят поведение платформ тихо.
     history.back()
     return Promise.resolve()
   },
@@ -188,6 +173,28 @@ const monkeyShell: IShell = {
   forward(): Promise<void> {
     history.forward()
     return Promise.resolve()
+  },
+}
+
+// ==== proxy diagnostics ====
+
+/**
+ * В браузере диагностировать нечего, и это не недоделка: прокси задаёт браузер
+ * или система, а у GM_xmlhttpRequest своего прокси нет вовсе. Ответ `off` — правда
+ * об этой платформе, а не вежливый отказ.
+ */
+const monkeyProxyDiagnostics: IProxyDiagnostics = {
+  status(): Promise<ProxyStatus> {
+    return Promise.resolve({ outcome: 'off', server: '', hasCredentials: false, auth: 'none' })
+  },
+
+  markPageReady(): Promise<void> {
+    // Сторожа страницы в браузере нет: вкладкой управляет пользователь.
+    return Promise.resolve()
+  },
+
+  probe(): Promise<ProxyProbe> {
+    return Promise.resolve({ outcome: 'off', server: '', reachable: false, latencyMs: 0 })
   },
 }
 
@@ -199,12 +206,10 @@ export const monkeyBridge: IBridge = {
   http: monkeyHttp,
   clipboard: monkeyClipboard,
   shell: monkeyShell,
+  proxyDiagnostics: monkeyProxyDiagnostics,
 }
 
-// Пункт 3.4: общее для обеих реализаций имя экспорта.
-//
-// src/bridge/index.ts импортирует platformBridge из псевдопути '@bridge-impl', который
-// resolve.alias разводит на этот файл или на TauriBridge в зависимости от mode сборки.
-// Одинаковое имя избавляет точку входа от любых ветвлений: вторая реализация просто
-// не попадает в граф модулей, а вместе с ней и пакеты @tauri-apps/*.
+// Общее для обеих реализаций имя: index.ts берёт platformBridge из '@bridge-impl',
+// который alias разводит по mode сборки. Вторая реализация в граф не попадает,
+// а вместе с ней и пакеты @tauri-apps/*.
 export { monkeyBridge as platformBridge }

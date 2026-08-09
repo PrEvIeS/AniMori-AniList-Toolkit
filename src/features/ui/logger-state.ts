@@ -1,9 +1,6 @@
-// Реактивное состояние LoggerModal (пункт 2.3).
-// Ядро логгера (utils/logger.ts) по-прежнему не знает о UI.
-//
-// Кольцевой буфер MAX_UI_LOGS закрывает РИСК №6: вместо до ~6000 узлов в DOM
-// компонент держит не более MAX_UI_LOGS реактивных объектов. На этапе 4 заменить
-// на потоковую запись через Tauri plugin-fs при необходимости.
+// Реактивное состояние LoggerModal: буфер записей, фильтр, поиск, группировка.
+// Ядро логгера (utils/logger.ts) о UI не знает.
+// Буфер ограничен MAX_UI_LOGS: в DOM записей накапливалось до шести тысяч.
 
 import { computed, ref, shallowRef } from 'vue'
 import { type LogEntry, scriptLogs } from '../../utils/logger'
@@ -42,11 +39,11 @@ export function clearLogEntries(): void {
   scriptLogs.length = 0
   try {
     sessionStorage.removeItem('animori_logs')
-  } catch { /* квота */ }
+  } catch {
+    /* квота */
+  }
   logEntries.value = []
 }
-
-// ---------- Модели отображения ----------
 
 export interface LogGroup {
   kind: 'group'
@@ -70,14 +67,15 @@ export const displayItems = computed<DisplayItem[]>(() => {
   const q = searchQuery.value.toLowerCase()
   const f = activeFilter.value
 
-  // 1. Фильтрация
   const filtered = logEntries.value.filter((entry) => {
     if (f !== 'ALL' && f !== entry.type) return false
     if (!q) return true
     let detStr = ''
     try {
       detStr = JSON.stringify(entry.details ?? {}).toLowerCase()
-    } catch { /* циклическая структура */ }
+    } catch {
+      /* циклическая структура */
+    }
     return (
       entry.message.toLowerCase().includes(q) ||
       entry.path.toLowerCase().includes(q) ||
@@ -85,12 +83,11 @@ export const displayItems = computed<DisplayItem[]>(() => {
     )
   })
 
-  // 2. При фильтре или поиске — без группировки
   if (f !== 'ALL' || q) {
     return filtered.map<DisplayItem>((entry) => ({ kind: 'single', entry }))
   }
 
-  // 3. Группировка по consecutive типу
+  // В группу склеиваются только соседи подряд: порядок записей важнее плотности.
   const result: DisplayItem[] = []
   for (const entry of filtered) {
     if (!GROUPABLE.has(String(entry.type))) {

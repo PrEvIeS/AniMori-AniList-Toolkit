@@ -1,18 +1,9 @@
-// Этап 1 п.1.10 (часть 3/3): виджет хронологии франшизы (строки 3128-3245, 3320-3338 монолита).
-//
-// Особенность: данные франшизы требуют двух сетевых запросов, а контракт MediaWidget.mount()
-// синхронный и вызывается на каждое изменение страницы. Поэтому готовый блок
-// кэшируется в модуле и при пересборке разметки React вставляется заново без сети.
-//
-// БАГ (итерация 10): кэшировался только УСПЕШНЫЙ исход. Если у тайтла франшизы нет
-// (один узел) или запрос упал, builtBox оставался null, замок loadingAniId снимался в finally,
-// и следующая же мутация DOM запускала запрос снова — десятки обращений к Shikimori
-// на одной странице. Кэша у fetchShiki нет, каждый вызов — реальная сеть.
-// Решение: settledAniId — отметка «сетевая работа по этому тайтлу уже сделана», каков бы
-// ни был исход. Соседний виджет тем решает то же самое скрытым блоком в DOM.
+// Виджет хронологии франшизы: тайтлы по годам со статусом из списка пользователя.
+// Данные требуют двух запросов, а mount() синхронный: готовый блок кэшируется в модуле.
+// Когда карточки Shikimori нет вовсе, виджет молчит: об этом уже сказали рейтинги.
 
 import { anilistQuery } from '../../api/anilist'
-import { fetchShiki } from '../../api/shikimori'
+import { fetchShiki, shikimoriTrouble } from '../../api/shikimori'
 import { amApplyAccentToDom } from '../../core/accent'
 import { settings } from '../../core/settings'
 import type { MediaType } from '../../core/types'
@@ -143,6 +134,32 @@ function placeBox(box: HTMLElement, ctx: MediaContext): void {
   }
 }
 
+/**
+ * Блок с одной строкой причины вместо хронологии.
+ * Класс тот же, что у настоящего блока: его снимает тот же cleanup и возвращает тот же placeBox.
+ */
+function buildTroubleBox(reason: string): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'animori-franchise am-accent-scope'
+
+  const heading = document.createElement('h2')
+  heading.textContent = 'Хронология Франшизы'
+  box.appendChild(heading)
+
+  const note = document.createElement('div')
+  note.className = 'am-net-note'
+  note.textContent =
+    `Shikimori ${reason}: хронологию сейчас не у кого запросить. ` +
+    `Она появится сама, когда источник снова ответит. ` +
+    `Подробности — в настройках, вкладка «Разработчик».`
+  note.style.cssText =
+    'padding: 8px 10px; border-radius: 6px; font-size: 0.85em; line-height: 1.35;' +
+    ' color: rgb(var(--color-text-light)); background: rgba(var(--color-red, 252,129,129), 0.10);'
+  box.appendChild(note)
+
+  return box
+}
+
 /** Строка списка: год, название, статус и тип тайтла. */
 function createNode(
   node: FranchiseNode,
@@ -173,7 +190,6 @@ function createNode(
     }
   } else {
     // Тайтла нет в каталоге AniList — ведём на Shikimori.
-    // В монолите этот адрес собирался со сломанным шаблоном и вёл в никуда.
     link.href = 'https://' + ctx.shikiDomain + (node.url ?? '')
     link.target = '_blank'
     link.rel = 'noopener noreferrer'
@@ -340,9 +356,19 @@ async function buildFranchise(ctx: MediaContext): Promise<void> {
     builtBox = box
     placeBox(box, ctx)
   } catch (e) {
-    // Сбой тоже считается отработанным исходом: иначе при недоступных зеркалах
-    // виджет уйдёт в бесконечный цикл повторов. Повторная попытка — после смены тайтла.
-    if (isStillOnPage(aniId)) settledAniId = aniId
+    // Сбой тоже считается отработанным: иначе при мёртвых зеркалах будет цикл повторов.
+    if (isStillOnPage(aniId)) {
+      settledAniId = aniId
+
+      // Заглушка — только при устойчивом молчании: одиночный сбой лечит следующий переход.
+      const reason = shikimoriTrouble()
+      if (reason && !document.querySelector(BOX_SELECTOR)) {
+        const box = buildTroubleBox(reason)
+        builtAniId = aniId
+        builtBox = box
+        placeBox(box, ctx)
+      }
+    }
     Logger('ERROR', '[Franchise] Не удалось построить хронологию франшизы', e)
   } finally {
     if (loadingAniId === aniId) loadingAniId = null
@@ -369,8 +395,7 @@ function mount(ctx: MediaContext): void {
     return
   }
 
-  // Сеть по этому тайтлу уже ходила и блока не вышло (нет франшизы либо сбой) —
-  // молча выходим, иначе каждая мутация DOM будет стоить запроса к Shikimori.
+  // Сеть по этому тайтлу уже ходила и блока не вышло: каждая мутация стоила бы запроса.
   if (settledAniId === ctx.aniId) return
 
   if (loadingAniId === ctx.aniId) return

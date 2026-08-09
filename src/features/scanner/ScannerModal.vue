@@ -1,12 +1,9 @@
 <!--
-  Этап 2 п.2.4: модалка сканера сравнения Shikimori ⇄ AniList.
+  Модалка сканера сравнения Shikimori ⇄ AniList.
 
-  ГРАБЛИ: класс .amk-overlay в style.scss объявлен с display:none — в монолите показ
-  выставлялся императивно (el.style.display = 'flex'). При v-if это нужно задавать явно,
-  поэтому на корне стоит inline style="display: flex". Не убирать до перевода amk-* в scoped.
-
-  Разметка и подписи — канон 1.9.1 (cmpRender*). Отступления только два, оба согласованы:
-  счётчик шагов «N/7» и кнопка мягкой отмены.
+  ГРАБЛИ: класс .amk-overlay в style.scss объявлен с display:none, показ раньше
+  выставлялся императивно. При v-if это нужно задавать явно, поэтому на корне
+  стоит inline style="display: flex". Не убирать до перевода amk-* в scoped.
 -->
 <script setup lang="ts">
 import ScannerDiffCategory from './ScannerDiffCategory.vue'
@@ -46,7 +43,7 @@ function delta(shiki: number, al: number): string {
   return d < 0 ? String(d) : ''
 }
 
-/** У строки «Всего» в 1.9.1 плюс не ставится. */
+/** У строки «Всего» плюс не ставится. */
 function totalDelta(shiki: number, al: number): string {
   const d = al - shiki
   return d !== 0 ? String(d) : ''
@@ -116,9 +113,10 @@ function onOverlayClick(e: MouseEvent): void {
           :disabled="isScanning"
           @click="startScan"
         >
-          Сканировать
-        </button
-        ><button v-if="isScanning" class="amk-btn amk-btn-ghost" @click="cancelScan">Отменить</button>
+          Сканировать</button
+        ><button v-if="isScanning" class="amk-btn amk-btn-ghost" @click="cancelScan">
+          Отменить
+        </button>
       </div>
 
       <div

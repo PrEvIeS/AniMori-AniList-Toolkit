@@ -1,10 +1,5 @@
-// Пункт 2.3: точка монтирования LoggerModal.
-//
-// Императивный UI (создание DOM, appendLogEntry, renderAllLogs) удалён полностью —
-// всё перешло в LoggerModal.vue + logger-state.ts.
-//
-// РИСК №6 закрыт: реактивный кольцевой буфер 500 записей вместо
-// ~6000 узлов в DOM. Скролл — v-for с виртуализацией на этапе 4 при необходимости.
+// Подключает UI логгера: сток записей, LoggerModal.vue и кнопка в панели.
+// Записи держит кольцевой буфер в logger-state.ts: в DOM их накапливалось до шести тысяч.
 
 import { settings } from '../../core/settings'
 import { registerLogSink } from '../../utils/logger'
@@ -21,19 +16,17 @@ export function openLoggerModal(): void {
 }
 
 /**
- * Подключает UI логгера: подписка на новые записи, монтирование модалки, кнопка в панели.
+ * Подключает UI логгера: подписка на записи, монтирование модалки, кнопка в панели.
  * Видимость модалки управляется через isLoggerOpen из logger-state.ts.
  */
 export function initLoggerUI(): void {
   if (!settings.enableLogger) return
 
-  // Новые записи всегда попадают в буфер, независимо от того,
-  // открыта ли модалка — при открытии syncLogEntries() синхронизирует картину.
+  // Записи копятся в буфер и при закрытой модалке: при открытии она синхронизируется сама.
   registerLogSink((entry) => {
     pushLogEntry(entry)
   })
 
-  // Монтируем один раз, видимость через v-if="isLoggerOpen" внутри компонента
   mountApp(LOGGER_APP_KEY, LoggerModal, { container: document.body, watchContainer: false })
 
   registerActionButton({

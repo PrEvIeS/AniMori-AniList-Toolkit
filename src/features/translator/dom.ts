@@ -1,10 +1,5 @@
-// Этап 1 п.1.9: применение перевода к DOM (строки 2516-2523, 2626-2674, 2937-2945 монолита).
-//
-// Здесь вся работа с живыми узлами страницы, но без сети и без очереди.
-//
-// РИСК №4 из AUDITION.md: наш собственный UI переводить нельзя, иначе на Этапе 2
-// Vue будет возвращать свой текст, переводчик — свой, и получится бесконечный цикл.
-// Поэтому любой узел внутри .am-notr игнорируется целиком.
+// Применение перевода к живым узлам страницы: без сети и без очереди.
+// Всё внутри .am-notr не трогаем: иначе Vue и переводчик зациклятся (РИСК №4).
 
 import { escapeHTML } from '../../utils/dom'
 import { Logger } from '../../utils/logger'
@@ -31,8 +26,7 @@ function isValueElement(el: Element): el is HTMLInputElement | HTMLTextAreaEleme
 
 /**
  * Рекурсивно переводит узел и всё, что внутри него.
- * Текст заменяется точечно (replace по обрезанной строке), чтобы не съесть
- * окружающие пробелы, на которых держится верстка AniList.
+ * Замена точечная: на окружающих пробелах держится вёрстка AniList.
  */
 export function translateNode(node: Node | null | undefined): void {
   if (!node) return
@@ -69,8 +63,7 @@ export function translateNode(node: Node | null | undefined): void {
 }
 
 /**
- * Пишет текст в первый непустой текстовый узел элемента.
- * Так внутренняя разметка (иконки, бейджи) остаётся целой, в отличие от textContent.
+ * Пишет текст в первый непустой текстовый узел, сохраняя внутреннюю разметку.
  * @returns false, если подходящего узла не нашлось.
  */
 export function safelySetText(el: Element, text: string): boolean {
@@ -84,9 +77,8 @@ export function safelySetText(el: Element, text: string): boolean {
 }
 
 /**
- * Перехватчик значений инпутов Element UI (класс el-input__inner).
- * Vue выставляет текст фильтров напрямую в .value, MutationObserver этого не видит,
- * поэтому единственный способ перевести их — обёртка сеттера.
+ * Перевод значений инпутов Element UI: Vue пишет текст фильтров прямо в .value.
+ * MutationObserver этого не видит, поэтому оборачиваем сеттер.
  */
 export function setupVueInputInterceptor(): void {
   const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
@@ -118,9 +110,8 @@ export function setupVueInputInterceptor(): void {
 }
 
 /**
- * Превращает BB-разметку описания Shikimori/anime365 в безопасный HTML.
- * Сначала экранируем всё, потом возвращаем только разрешённые теги:
- * описания приходят с чужого сайта и доверять им нельзя.
+ * BB-разметка описаний Shikimori/anime365 в HTML: сначала экранируем всё.
+ * Возвращаются только разрешённые теги: текст приходит с чужого сайта.
  */
 export function cleanShikiBB(text: string, url: string, sourceName = 'Shikimori'): string {
   let out = escapeHTML(text)

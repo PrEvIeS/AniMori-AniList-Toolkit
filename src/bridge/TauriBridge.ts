@@ -1,15 +1,20 @@
-// Пункт 3.3 плана: реализация IBridge для десктопной оболочки Tauri.
-//
-// Модуль НЕ должен попадать в бандл юзерскрипта: импорты @tauri-apps/* в браузере
-// неработоспособны. Отсечение обеспечено пунктом 3.4: resolve.alias в vite.config.ts
-// разводит '@bridge-impl' по mode сборки, и при mode !== 'tauri' этот файл вообще не
-// попадает в граф модулей — это надёжнее tree-shaking'а по ветвлению, потому
-// что new LazyStore(...) ниже — верхнеуровневый побочный эффект, который Rollup вправе сохранить.
+// IBridge для десктопной оболочки Tauri.
+// В бандл юзерскрипта не попадает: alias '@bridge-impl' в vite.config.ts разводит
+// реализации по mode. Ветвлением не обойтись — new LazyStore ниже даёт побочный эффект.
 
 import { invoke } from '@tauri-apps/api/core'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { LazyStore } from '@tauri-apps/plugin-store'
+
+import {
+  DEFAULT_PROXY,
+  PROXY_KEYS,
+  normalizeProxyKind,
+  proxyBypassList,
+  proxyUrl,
+  type ProxyConfig,
+} from '@/core/proxy'
 
 import {
   BridgeHttpError,
@@ -21,38 +26,18 @@ import {
   type IShell,
   type IStorage,
 } from './IBridge'
+import { tauriProxyDiagnostics } from './TauriProxyDiagnostics'
 
 // ==== storage ====
 
-// LazyStore выбран вместо load(): он не требует await при создании и читает файл при первом
-// обращении. Альтернатива потребовала бы верхнеуровневого await либо ручной инициализации
-// из main.ts, а это разные точки входа для двух платформ — ровно того, чего этап избегает.
-//
-// autoSave оставлен как сетка безопасности для чужих путей записи, но ПОЛАГАТЬСЯ на него
-// нельзя, и это главный вывод дефекта пункта 4.5: он пишет файл С ЗАДЕРЖКОЙ после
-// set(), то есть УЖЕ ПОСЛЕ того, как промис set() разрешён. Перезагрузка окна в это
-// окно времени убивает отложенную запись вместе с остальным контекстом — именно так
-// настройки сохранялись «через раз» без видимой корреляции: исход зависел от того,
-// успел ли таймер сработать до нажатия «Применить и перезагрузить».
+// LazyStore не требует await при создании. autoSave — только сетка безопасности:
+// он пишет файл уже после разрешения set(), это дефект 4.5.
 const store = new LazyStore('animori-settings.json', { autoSave: true })
 
-/**
- * Снимок всего файла настроек в памяти.
- *
- * Зачем. Каждый store.get() — отдельный переход в процесс оболочки и обратно. На старте
- * их набирается больше тридцати: двадцать четыре ключа в readSettings(), токен AniList,
- * свои ссылки, пользовательский словарь. В браузере эти же чтения бесплатны (GM_getValue
- * синхронный), поэтому разница между сборками ощущается именно как «в приложении
- * запускается заметно дольше и перевод появляется рывком».
- *
- * Решение: один entries() вместо тридцати get(). Дальше чтения обслуживаются из памяти,
- * а записи обновляют снимок вместе с файлом. Снимок — единственный владелец правды на
- * время сессии: файл вне приложения никто не меняет, а все записи проходят через set()
- * ниже.
- */
+/** Снимок файла настроек в памяти: один entries() вместо трёх десятков get() на старте. */
 let snapshot: Map<string, unknown> | null = null
 
-/** Незавершённая загрузка снимка. Нужна, чтобы параллельные чтения не дёргали entries() повторно. */
+/** Незавершённая загрузка снимка: параллельные чтения не дёргают entries() повторно. */
 let snapshotLoading: Promise<Map<string, unknown> | null> | null = null
 
 async function loadSnapshot(): Promise<Map<string, unknown> | null> {
@@ -65,7 +50,7 @@ async function loadSnapshot(): Promise<Map<string, unknown> | null> {
       snapshot = new Map(entries)
       return snapshot
     } catch (e) {
-      // Молчать нельзя, но и падать незачем: ниже есть путь через store.get() по одному ключу.
+      // Падать незачем: ниже есть путь через store.get() по одному ключу.
       console.error('[AniMori] Не удалось прочитать файл настроек целиком', e)
       return null
     } finally {
@@ -76,30 +61,13 @@ async function loadSnapshot(): Promise<Map<string, unknown> | null> {
   return snapshotLoading
 }
 
-/**
- * Незавершённые записи.
- *
- * Нужны потому, что почти ни один вызывающий set() его не ждёт: запись идёт из
- * синхронных setter’ов реактивных моделей и из обработчиков ввода. Следить за этим
- * в прикладном коде бессмысленно: кроме core/settings.ts в хранилище пишут токен
- * AniList, свои ссылки и пользовательский словарь, и каждое такое место пришлось бы
- * помнить отдельно. Учёт живёт здесь — в единственной точке, через которую проходят
- * все записи без исключения.
- */
+/** Незавершённые записи: вызывающие set() его не ждут, а flush() обязан их дождаться. */
 const pendingWrites = new Set<Promise<void>>()
 
-/**
- * Сколько раз flush() готов дождаться новой партии записей.
- *
- * Прежний цикл while не имел предела: пока идёт непрерывный поток set(), ожидание
- * не заканчивается никогда. Для подвала настроек, где переключатель пишет два ключа
- * подряд, хватает единиц проходов, а верхняя граница превращает возможное зависание
- * кнопки перезагрузки в худшем случае в лишние миллисекунды.
- */
+/** Предел проходов flush(): без него непрерывный поток set() держит ожидание вечно. */
 const FLUSH_MAX_ROUNDS = 5
 
-// Перегрузки повторяют MonkeyBridge: объектный литерал не умеет реализовывать перегруженный
-// метод, поэтому нужна именно function-декларация.
+// Перегрузки как в MonkeyBridge: объектный литерал перегруженный метод не реализует.
 async function storageGet<T>(key: string, defaultValue: T): Promise<T>
 async function storageGet<T = unknown>(key: string): Promise<T | undefined>
 async function storageGet<T>(key: string, defaultValue?: T): Promise<T | undefined> {
@@ -108,23 +76,18 @@ async function storageGet<T>(key: string, defaultValue?: T): Promise<T | undefin
   const cache = await loadSnapshot()
   const value = cache ? (cache.get(key) as T | undefined) : await store.get<T>(key)
 
-  // В отличие от GM_getValue, store.get возвращает undefined для отсутствующего ключа
-  // и дефолт не принимает — подставляем его сами.
+  // store.get дефолт не принимает — подставляем сами.
   if (value === undefined && hasDefault) return defaultValue as T
   return value
 }
 
-/** Собственно запись: значение в стор плюс немедленная выгрузка файла на диск. */
+/** Запись значения и немедленная выгрузка файла на диск. */
 async function writeValue(key: string, value: unknown): Promise<void> {
-  // Снимок правится сразу, до похода в оболочку: чтение сразу после set() обязано
-  // видеть новое значение, иначе панель настроек показала бы старое.
+  // Снимок правится сразу: чтение сразу после set() обязано видеть новое значение.
   if (snapshot) snapshot.set(key, value)
 
   await store.set(key, value)
-  // Явный save() вместо ожидания autoSave: контракт IStorage.set требует, чтобы
-  // к моменту разрешения промиса значение было долговечным, а не только поставленным
-  // в очередь. Цена — запись файла на каждую настройку; для файла из пары десятков
-  // ключей, меняющихся по клику человека, это ничто против потери настроек.
+  // Явный save(): контракт IStorage.set требует долговечности к моменту разрешения.
   await store.save()
 }
 
@@ -134,9 +97,7 @@ const tauriStorage: IStorage = {
   set(key: string, value: unknown): Promise<void> {
     const write = writeValue(key, value)
 
-    // В реестр кладётся ВЕТВЬ без отклонения: flush() ждёт только окончания очереди
-    // и не должен падать из-за чужой ошибки. Сама ошибка при этом не теряется:
-    // возвращаемый ниже промис — исходный, и вызывающий код видит её как раньше.
+    // В реестр идёт ветвь без отклонения: flush() не должен падать из-за чужой ошибки.
     const tracked = write.catch(() => undefined)
     pendingWrites.add(tracked)
     void tracked.then(() => {
@@ -147,9 +108,7 @@ const tauriStorage: IStorage = {
   },
 
   async flush(): Promise<void> {
-    // Несколько проходов, а не один Promise.all: пока ждём текущую партию, могли прийти
-    // новые записи — именно так ведёт себя подвал настроек, где переключатель типа
-    // «Скрывать рекламу» пишет два ключа подряд. Число проходов ограничено: см. FLUSH_MAX_ROUNDS.
+    // Несколько проходов: пока ждём партию, могли прийти новые записи.
     for (let round = 0; round < FLUSH_MAX_ROUNDS; round++) {
       if (pendingWrites.size === 0) return
       await Promise.all([...pendingWrites])
@@ -157,15 +116,92 @@ const tauriStorage: IStorage = {
   },
 }
 
+// ==== прокси ====
+
+/**
+ * Прокси НАШЕГО канала — запросов из процесса оболочки. Страницу в WebView2
+ * настраивает src-tauri/src/proxy.rs. Тип выведен из fetch: имя экспорта менялось.
+ */
+type TauriFetchOptions = NonNullable<Parameters<typeof tauriFetch>[1]>
+type TauriProxyOption = TauriFetchOptions['proxy']
+
+/** Читается один раз за сеанс: смена адреса вступает в силу только с перезапуском. */
+let proxyOption: TauriProxyOption
+let proxyReady = false
+
+async function loadProxyOption(): Promise<TauriProxyOption> {
+  if (proxyReady) return proxyOption
+
+  try {
+    const [enabled, kind, host, port, login, password, bypass] = await Promise.all([
+      storageGet(PROXY_KEYS.enabled, DEFAULT_PROXY.enabled),
+      storageGet(PROXY_KEYS.kind, DEFAULT_PROXY.kind),
+      storageGet(PROXY_KEYS.host, DEFAULT_PROXY.host),
+      storageGet(PROXY_KEYS.port, DEFAULT_PROXY.port),
+      storageGet(PROXY_KEYS.login, DEFAULT_PROXY.login),
+      storageGet(PROXY_KEYS.password, DEFAULT_PROXY.password),
+      storageGet(PROXY_KEYS.bypass, DEFAULT_PROXY.bypass),
+    ])
+
+    const config: ProxyConfig = {
+      enabled,
+      kind: normalizeProxyKind(kind),
+      host: String(host ?? ''),
+      port,
+      login: String(login ?? ''),
+      password: String(password ?? ''),
+      bypass: String(bypass ?? ''),
+    }
+
+    const url = proxyUrl(config)
+
+    if (config.enabled && !url) {
+      // Инвариант 4: иначе включённый тумблер врёт, а трафик идёт напрямую.
+      console.warn(
+        '[AniMori] Прокси включён, но адрес или порт заданы неверно — запросы идут напрямую',
+      )
+    }
+
+    if (url) {
+      const noProxy = proxyBypassList(config).join(',')
+      const trimmedLogin = config.login.trim()
+
+      proxyOption = {
+        all: {
+          url,
+          // Отдельно от адреса: пароль с ':' или '@' сломал бы склейку user:pass@host.
+          ...(trimmedLogin
+            ? { basicAuth: { username: trimmedLogin, password: config.password } }
+            : {}),
+          ...(noProxy ? { noProxy } : {}),
+        },
+      }
+    } else {
+      proxyOption = undefined
+    }
+  } catch (e) {
+    console.error('[AniMori] Не удалось прочитать настройки прокси, запросы идут напрямую', e)
+    proxyOption = undefined
+  } finally {
+    proxyReady = true
+  }
+
+  return proxyOption
+}
+
 // ==== http ====
+
+/** Без своего представления reqwest подписывается собой: 403 у AnimeThemes, 5.3.5. */
+const DEFAULT_USER_AGENT = `AniMori/${__ANIMORI_VERSION__} (+https://github.com/foulnike/AniMori-AniList-Toolkit)`
 
 const tauriHttp: IHttp = {
   async request(options: HttpRequestOptions): Promise<HttpResponse> {
     const { url, method = 'GET', headers, body, timeoutMs, credentials = 'include' } = options
 
-    // У fetch плагина есть connectTimeout, но он ограничивает только фазу установки соединения.
-    // GM_xmlhttpRequest считает таймаут на весь запрос целиком, и именно на это опирается
-    // перебор зеркал в fetchShiki (5000 мс). Поэтому таймаут делается через AbortController.
+    // До таймера: первое чтение идёт в оболочку и съело бы таймаут запроса.
+    const proxy = await loadProxyOption()
+
+    // connectTimeout покрывает только установку соединения, нужен таймаут на весь запрос.
     const controller = new AbortController()
     let timedOut = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -180,16 +216,18 @@ const tauriHttp: IHttp = {
     try {
       const res = await tauriFetch(url, {
         method,
-        headers,
+        // Свой заголовок под заголовками вызывающего: клиент вправе его перебить.
+        headers: { 'User-Agent': DEFAULT_USER_AGENT, ...headers },
         body,
         credentials,
         signal: controller.signal,
+        // Ключ только при настроенном прокси: пустой proxy путает разбор сбоев.
+        ...(proxy ? { proxy } : {}),
       })
 
       const text = await res.text()
 
-      // Headers уже нормализует имена к нижнему регистру и склеивает повторы через запятую —
-      // ровно тот же вид, который вручную собирает parseRawHeaders в MonkeyBridge.
+      // Headers сам приводит имена к нижнему регистру и склеивает повторы.
       const responseHeaders: Record<string, string> = {}
       res.headers.forEach((value, name) => {
         responseHeaders[name.toLowerCase()] = value
@@ -204,7 +242,7 @@ const tauriHttp: IHttp = {
         url: res.url || url,
       }
     } catch (e) {
-      // Код вне 2xx сюда не попадает: fetch отклоняется только на транспортных сбоях.
+      // Сюда приходят только транспортные сбои; мёртвый прокси от них неотличим.
       if (timedOut) throw new BridgeHttpError('timeout', url)
 
       const name = e instanceof Error ? e.name : ''
@@ -221,10 +259,7 @@ const tauriHttp: IHttp = {
 
 const tauriClipboard: IClipboard = {
   async writeText(text: string): Promise<void> {
-    // Фоллбэка на navigator.clipboard здесь нет осознанно: в WebView2 он требует безопасного
-    // контекста и жеста пользователя, а падение плагина означает невыданное разрешение
-    // clipboard-manager:allow-write-text — это ошибка конфигурации Этапа 4, её надо видеть,
-    // а не глушить тихим обходным путём.
+    // Без фоллбэка: отказ означает невыданное разрешение, это надо видеть.
     await writeText(text)
   },
 }
@@ -232,27 +267,8 @@ const tauriClipboard: IClipboard = {
 // ==== shell ====
 
 /**
- * Подсистема оболочки: свои команды из src-tauri/src/lib.rs плюс история WebView.
- *
- * Пункт 4.3 (перезагрузка): location.reload() в окне, открытом на внешнем URL, не даёт
- * ничего, а в JS-API Tauri метода перезагрузки нет совсем — он есть только у окна на
- * стороне Rust (WebviewWindow::reload).
- *
- * Пункт 4.5 (внешние ссылки): в WebView2 нет новых вкладок, и запрос на открытие
- * окна отбрасывается молча, поэтому адрес отдаётся системному браузеру через свою
- * команду поверх tauri-plugin-opener. Плагинная команда opener:allow-open-url НЕ выдана
- * намеренно: она позволила бы любому скрипту страницы открывать произвольные схемы,
- * а своя команда разрешает только http и https.
- *
- * Пункт 4.5 (шаги по истории): здесь, наоборот, команда не нужна. History API в
- * WebView2 работает как в браузере, и — что важнее — AniList это SPA: шаг назад должен
- * отдаваться его маршрутизатору через popstate, иначе вместо мгновенного возврата
- * получилась бы полная перезагрузка документа со сбросом всего нашего состояния.
- *
- * Про ACL: собственные команды тоже требуют разрешения, когда окно открыто на внешнем
- * URL — это выяснилось на живом запуске по отказу "animori_reload not allowed. Plugin
- * not found". Блок remote.urls открывает доступ к IPC, но не заменяет разрешений:
- * имена команд перечислены в src-tauri/build.rs и в capabilities/default.json.
+ * Оболочка: свои команды из lib.rs плюс история WebView. Перезагрузка и внешние
+ * ссылки — только командами. Команды требуют разрешений: build.rs и capabilities.
  */
 const tauriShell: IShell = {
   async reload(): Promise<void> {
@@ -260,14 +276,12 @@ const tauriShell: IShell = {
   },
 
   async openExternal(url: string): Promise<void> {
-    // Проверка схемы живёт на стороне Rust: здешний код выполняется в контексте
-    // чужого сайта и сам доверенным барьером быть не может.
+    // Проверка схемы на стороне Rust: этот код исполняется в контексте чужого сайта.
     await invoke('animori_open_external', { url })
   },
 
   back(): Promise<void> {
-    // Сознательно без invoke: шаг должен пройти через историю самого WebView,
-    // чтобы маршрутизатор AniList получил popstate и перерисовал страницу сам.
+    // Через историю WebView: маршрутизатор AniList ждёт popstate.
     history.back()
     return Promise.resolve()
   },
@@ -286,7 +300,9 @@ export const tauriBridge: IBridge = {
   http: tauriHttp,
   clipboard: tauriClipboard,
   shell: tauriShell,
+  // Реализация в TauriProxyDiagnostics.ts.
+  proxyDiagnostics: tauriProxyDiagnostics,
 }
 
-// Пункт 3.4: общее для обеих реализаций имя экспорта — см. хвост MonkeyBridge.ts.
+// Общее для обеих реализаций имя экспорта.
 export { tauriBridge as platformBridge }

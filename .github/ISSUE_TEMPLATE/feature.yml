@@ -1,0 +1,38 @@
+name: Идея
+description: Предложение по новой возможности или улучшению
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Опишите сначала задачу, а потом желаемое решение: часто у задачи есть путь короче.
+  - type: dropdown
+    id: build
+    attributes:
+      label: К какой сборке относится
+      description: Часть возможностей в браузере недостижима и есть только в приложении.
+      options:
+        - Обе сборки
+        - Пользовательский скрипт (Tampermonkey)
+        - Приложение для Windows
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Что неудобно сейчас
+      description: Как вы обходитесь без этой возможности и чем это мешает.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Каким видите поведение
+      description: Где это живёт в интерфейсе и что происходит по нажатию.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Что ещё важно
+      description: Ссылки, примеры из других проектов, наброски. Необязательно.

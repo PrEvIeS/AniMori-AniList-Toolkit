@@ -9,7 +9,8 @@
 #   2. его же .sig — подпись, без неё обновление не будет принято;
 #   3. latest.json — манифест обновлений;
 #   4. AniMori_Setup.exe — копия установщика под коротким именем для людей и README;
-#   5. animori.user.js — сборка юзерскрипта для GreasyFork.
+#   5. animori.user.js — сборка юзерскрипта для GreasyFork;
+#   6. AniMori_<версия>_x64-portable.zip — приложение без установки.
 #
 # Почему копия, а не переименование. latest.json ссылается на файл по имени,
 # которое ему дал Tauri. Переименуешь артефакт — манифест покажет на несуществующий
@@ -142,7 +143,33 @@ jobs:
           Copy-Item $setup.FullName artifacts/AniMori_Setup.exe
           Write-Host "Исходный артефакт: $($setup.Name)"
 
-      # Докладывает два файла в уже созданный релиз того же тега.
+      # Портабл-версия. Отдельной цели сборки под неё у Tauri нет: приложение —
+      # это один самодостаточный exe, интерфейс вшит в бинарник на этапе
+      # компиляции. Поэтому просто берём его из target/release и упаковываем.
+      #
+      # В автообновлении архив не участвует: подпись и latest.json Tauri считает
+      # только для установщика. Портабл обновляется заменой файла вручную.
+      #
+      # Настройки и токен всё равно лягут в профиль пользователя
+      # (AppData\Roaming\com.foulnike.animori) — переносимым является сам запуск
+      # без установки, а не хранилище.
+      - name: Портабл-архив
+        shell: pwsh
+        run: |
+          $exe = Get-Item src-tauri/target/release/AniMori.exe -ErrorAction SilentlyContinue
+          if (-not $exe) {
+            throw 'AniMori.exe не найден в src-tauri/target/release'
+          }
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $stage = "portable/AniMori_$version"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $exe.FullName (Join-Path $stage 'AniMori.exe')
+          Copy-Item README.md (Join-Path $stage 'README.md')
+          Copy-Item LICENSE (Join-Path $stage 'LICENSE')
+          Compress-Archive -Path "$stage/*" -DestinationPath "artifacts/AniMori_${version}_x64-portable.zip" -Force
+          Write-Host "Портабл собран из: $($exe.FullName)"
+
+      # Докладывает недостающие файлы в уже созданный релиз того же тега.
       - name: Доложить артефакты в релиз
         uses: softprops/action-gh-release@v2
         with:
@@ -150,3 +177,4 @@ jobs:
           files: |
             artifacts/animori.user.js
             artifacts/AniMori_Setup.exe
+            artifacts/AniMori_*_x64-portable.zip

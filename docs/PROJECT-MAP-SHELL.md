@@ -109,9 +109,9 @@
 | --------------- | --------------------------- | -------------------------------- |
 | `@bridge-impl`  | `MonkeyBridge.ts`           | `TauriBridge.ts`                 |
 | `@adblock-impl` | `impl.noop.ts`              | `impl.desktop.ts`                |
-| Формат         | сборка с шапкой юзерскрипта | IIFE, без динамических чанков |
-| CSS             | встраивается в скрипт     | отдельный файл, вшивается в Rust |
-| Очистка `dist`  | да                          | нет (рядом лежит юзерскрипт)    |
+| Формат          | сборка с шапкой юзерскрипта | IIFE, без динамических чанков    |
+| CSS             | встраивается в скрипт       | отдельный файл, вшивается в Rust |
+| Очистка `dist`  | да                          | нет (рядом лежит юзерскрипт)     |
 
 Минификация выключена намеренно: правила Greasy Fork требуют читаемого
 исходника. Динамический `import()` запрещён: в юзерскрипте ему неоткуда
@@ -193,16 +193,16 @@ raw.githubusercontent для словаря. Ключ Kodik вшит в код �
 
 ## 13. Где что искать
 
-| Задача                      | Файлы                                                                   |
+| Задача                      | Файлы                                                                    |
 | --------------------------- | ------------------------------------------------------------------------ |
-| Добавить настройку         | `core/settings.ts`, `features/ui/settings-state.ts`, `SettingsModal.vue` |
-| Добавить виджет тайтла     | `features/media/`, регистрация в `main.ts`                             |
+| Добавить настройку          | `core/settings.ts`, `features/ui/settings-state.ts`, `SettingsModal.vue` |
+| Добавить виджет тайтла      | `features/media/`, регистрация в `main.ts`                               |
 | Добавить кнопку             | `features/ui/actions.ts`, `action-panel-state.ts`                        |
 | Править перевод интерфейса  | `features/translator/rules.ts`, `dictionary.json`                        |
-| Править плеер              | `features/media/player.ts`                                               |
-| Новая возможность оболочки | `src-tauri/src/lib.rs`, `build.rs`, `capabilities/`                      |
+| Править плеер               | `features/media/player.ts`                                               |
+| Новая возможность оболочки  | `src-tauri/src/lib.rs`, `build.rs`, `capabilities/`                      |
 | Править списки рекламы      | `features/adblock/index.ts`, `src-tauri/src/adblock.rs`                  |
 | Править прокси              | `core/proxy.ts`, `src-tauri/src/proxy*.rs`, `SettingsProxyCard.vue`      |
 | Доступность источников      | `core/net-health.ts`, `features/ui/net-check.ts`                         |
-| Разбор сбоев у пользователя | журнал в интерфейсе, `utils/logger.ts`                                 |
-| Почему так сделано          | `docs/DECISIONS.md`, дальше `git show <хеш>`                           |
+| Разбор сбоев у пользователя | журнал в интерфейсе, `utils/logger.ts`                                   |
+| Почему так сделано          | `docs/DECISIONS.md`, дальше `git show <хеш>`                             |

@@ -1,0 +1,74 @@
+name: Что-то сломалось
+description: Ошибка в скрипте или в приложении для Windows
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что нашли время на отчёт. Чем точнее заполнены поля, тем быстрее найдётся причина.
+  - type: dropdown
+    id: build
+    attributes:
+      label: Сборка
+      description: Скрипт и приложение работают по-разному, и часть возможностей есть только в одной из них.
+      options:
+        - Пользовательский скрипт (Tampermonkey)
+        - Приложение для Windows
+        - Не знаю
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия AniMori
+      description: У скрипта видна в менеджере скриптов, у приложения — в свойствах установленной программы.
+      placeholder: 2.0.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Окружение
+      description: Для скрипта — браузер и менеджер скриптов, для приложения — версия Windows.
+      placeholder: Chrome 141 и Tampermonkey 5.3 либо Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: page
+    attributes:
+      label: Страница, на которой это видно
+      description: Адрес тайтла или раздела AniList. Если проблема везде — так и напишите.
+      placeholder: https://anilist.co/anime/207141/
+  - type: textarea
+    id: steps
+    attributes:
+      label: Что делали, чего ждали, что получилось
+      description: Пошагово, даже если шагов всего два. Скриншот можно просто перетащить сюда.
+      placeholder: |
+        1. Открыл страницу тайтла.
+        2. Нажал кнопку «Смотреть».
+        Ждал плеер, получил пустое окно.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Записи логгера
+      description: Настройки → Разработчик → Отладка, повторите действие и скопируйте строки с ошибками.
+      render: text
+  - type: input
+    id: network
+    attributes:
+      label: Прокси и блокировщик рекламы
+      description: Только для приложения. Включены ли они в настройках.
+      placeholder: прокси выключен, блокировщик включён
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Перед отправкой
+      options:
+        - label: Стоит последняя версия AniMori
+          required: true
+        - label: Поиск по существующим issue ничего похожего не дал
+          required: true
+        - label: Проверено с отключёнными другими расширениями (для скрипта)

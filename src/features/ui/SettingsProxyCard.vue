@@ -123,9 +123,10 @@
       >
     </div>
 
+    <!-- Вид ghost обязателен: базовый amk-btn без фона даёт белую кнопку. -->
     <div class="amk-row" style="border-top: none; padding-top: 0">
       <button
-        class="amk-btn amk-btn-block"
+        class="amk-btn amk-btn-ghost amk-btn-block"
         id="am-proxy-check"
         :disabled="checking"
         @click="check()"
@@ -210,7 +211,7 @@ const showBadConfig = computed(
 
 const showPasswordNote = computed(() => password.value.length > 0)
 
-/** Отталкиваемся от логина: без него SOCKS5 работает в окне безупречно. */
+/** Отталкиваемся от логина: без него SOCKS5 работает в окне безукоризненно. */
 const showSocksAuthNote = computed(() => kind.value === 'socks5' && login.value.length > 0)
 
 /** Говорит о запуске и авторизации, а не о том, что набрано в полях сейчас. */

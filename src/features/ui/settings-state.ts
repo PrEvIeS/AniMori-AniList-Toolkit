@@ -34,7 +34,11 @@ const HTTPS = 'https://'
 export const SUP_GITHUB = HTTPS + 'github.com/foulnike/AniMori-AniList-Toolkit'
 export const SUP_GREASY = HTTPS + 'greasyfork.org/scripts/572948'
 export const SUP_GREASY_FEEDBACK = SUP_GREASY + '/feedback'
-export const ISSUES_NEW = SUP_GITHUB + '/issues/new'
+
+// Пустые issue в репозитории выключены: ведём на выбор формы, а не на /issues/new.
+export const ISSUES_CHOOSE = SUP_GITHUB + '/issues/new/choose'
+export const ISSUES_DICT_BULK = SUP_GITHUB + '/issues/new?template=dictionary-bulk.yml'
+
 export const AL_DEV_SETTINGS = HTTPS + 'anilist.co/settings/developer'
 export const AL_PIN_REDIRECT = HTTPS + 'anilist.co/api/v2/oauth/pin'
 export const AL_AUTHORIZE = HTTPS + 'anilist.co/api/v2/oauth/authorize'
@@ -363,6 +367,10 @@ export function importDictFromFile(): void {
   input.click()
 }
 
+/**
+ * Открывает форму набора переводов с уже заполненным полем словаря.
+ * Метку dictionary ставит сама форма, передавать её в адресе не нужно.
+ */
 export function shareDict(): void {
   const userDict = getUserDict()
   const count = Object.keys(userDict).length
@@ -374,41 +382,16 @@ export function shareDict(): void {
   const json = JSON.stringify(userDict, null, 2)
   const plural = count === 1 ? 'запись' : count < 5 ? 'записи' : 'записей'
   const title = '[Словарь] ' + String(count) + ' ' + plural + ' от пользователя'
-  const fence = '```'
-  const body =
-    'Предлагаю добавить эти переводы в общий словарь AniMori:\n\n' +
-    fence +
-    'json\n' +
-    json +
-    '\n' +
-    fence +
-    '\n'
-
-  const url =
-    ISSUES_NEW +
-    '?title=' +
-    encodeURIComponent(title) +
-    '&labels=dictionary&body=' +
-    encodeURIComponent(body)
+  const base = ISSUES_DICT_BULK + '&title=' + encodeURIComponent(title)
+  const url = base + '&dict=' + encodeURIComponent(json)
 
   // Лимит URL GitHub (~8 КБ): большой словарь — JSON в буфер, форма открывается пустой.
   if (url.length > 7000) {
     copyDictToClipboard()
-    const hint =
-      'Словарь скопирован в буфер обмена — вставьте его сюда внутри блока ' +
-      fence +
-      'json ... ' +
-      fence
-    const short =
-      ISSUES_NEW +
-      '?title=' +
-      encodeURIComponent(title) +
-      '&labels=dictionary&body=' +
-      encodeURIComponent(hint)
     alert(
-      'Словарь большой и не помещается в ссылку — он скопирован в буфер обмена. Откроется форма issue, вставьте (Ctrl+V) содержимое в тело.',
+      'Словарь большой и не помещается в ссылку — он скопирован в буфер обмена. Откроется форма, вставьте (Ctrl+V) содержимое в поле «Словарь».',
     )
-    openExternal(short)
+    openExternal(base)
     return
   }
 

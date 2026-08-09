@@ -15,6 +15,9 @@
   Этап 3 п.3.7: у кнопки появилось три варианта содержимого вместо одного: строка
   прогресса (если операция идёт), иконка (если задана) или текстовая подпись.
   Порядок именно такой: пока идёт перенос, пользователю важнее видеть его ход, чем значок.
+
+  Шаг 6.2: кнопка плеера переезжает через Teleport под обложку тайтла, а без
+  посадочного места остаётся в панели: узел один и тот же, второй ветки не нужно.
 -->
 
 <script setup lang="ts">
@@ -22,12 +25,15 @@ import { Logger } from '../../utils/logger'
 import {
   actionButtons,
   isPlayerVisible,
+  PLAYER_BUTTON_HERO_LABEL,
   PLAYER_BUTTON_ID,
   PLAYER_BUTTON_LABEL,
   PLAYER_BUTTON_TITLE,
+  playerAnchor,
   playerHandler,
   type ActionButton,
 } from './action-panel-state'
+import './player-hero.scss'
 
 /**
  * Ошибка обработчика не должна ломать панель: до этого пункта каждый onClick был
@@ -60,16 +66,23 @@ function runPlayer(): void {
 
 <template>
   <div id="animori-actions" class="am-accent-scope">
-    <button
-      v-if="isPlayerVisible"
-      :id="PLAYER_BUTTON_ID"
-      type="button"
-      class="am-premium-btn"
-      :title="PLAYER_BUTTON_TITLE"
-      @click="runPlayer"
-    >
-      {{ PLAYER_BUTTON_LABEL }}
-    </button>
+    <!--
+      При выключенном телепорте адрес не используется, но Vue требует годного значения,
+      поэтому без посадочного места подставляется body.
+    -->
+    <Teleport :to="playerAnchor ?? 'body'" :disabled="!playerAnchor">
+      <button
+        v-if="isPlayerVisible"
+        :id="PLAYER_BUTTON_ID"
+        type="button"
+        class="am-premium-btn"
+        :class="{ 'am-player-hero': !!playerAnchor }"
+        :title="PLAYER_BUTTON_TITLE"
+        @click="runPlayer"
+      >
+        {{ playerAnchor ? PLAYER_BUTTON_HERO_LABEL : PLAYER_BUTTON_LABEL }}
+      </button>
+    </Teleport>
 
     <!--
       Интерполяция, а не v-html для подписи: монолит писал в разметку '&lt;/&gt;' и получал '</>',

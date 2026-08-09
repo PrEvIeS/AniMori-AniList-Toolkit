@@ -99,13 +99,13 @@ import { ref } from 'vue'
 
 import { Bridge } from '@/bridge'
 import { amCopy } from '../../utils/dom'
-import { ISSUES_NEW, SUP_GITHUB, SUP_GREASY, SUP_GREASY_FEEDBACK } from './settings-state'
+import { ISSUES_CHOOSE, SUP_GITHUB, SUP_GREASY, SUP_GREASY_FEEDBACK } from './settings-state'
 
 /** Платформа константна на всю сессию, поэтому не ref и не computed. */
 const isDesktop = Bridge.platform === 'tauri'
 
 // Отзыв на Greasy Fork имеет смысл только тому, кто ставил оттуда скрипт.
-const feedbackUrl = isDesktop ? ISSUES_NEW : SUP_GREASY_FEEDBACK
+const feedbackUrl = isDesktop ? ISSUES_CHOOSE : SUP_GREASY_FEEDBACK
 const feedbackLabel = isDesktop ? 'Отзыв или идея на GitHub' : 'Оценить на Greasy Fork'
 const feedbackHint = isDesktop
   ? 'Отчёт об ошибке или идея — самая полезная помощь приложению.'

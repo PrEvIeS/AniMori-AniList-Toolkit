@@ -135,17 +135,22 @@ jobs:
       - name: Копия установщика под коротким именем
         shell: pwsh
         run: |
-          $setup = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *-setup.exe |
+          $setup = Get-ChildItem -Path src-tauri/target -Recurse -Filter *-setup.exe |
+            Where-Object { $_.DirectoryName -match 'bundle\\nsis$' } |
             Select-Object -First 1
           if (-not $setup) {
             throw 'Установщик NSIS не найден — сборка что-то положила не туда'
           }
           Copy-Item $setup.FullName artifacts/AniMori_Setup.exe
-          Write-Host "Исходный артефакт: $($setup.Name)"
+          Write-Host "Исходный артефакт: $($setup.FullName)"
 
       # Портабл-версия. Отдельной цели сборки под неё у Tauri нет: приложение —
       # это один самодостаточный exe, интерфейс вшит в бинарник на этапе
-      # компиляции. Поэтому просто берём его из target/release и упаковываем.
+      # компиляции. Поэтому просто берём его из target и упаковываем.
+      #
+      # Поиск рекурсивный: без явной цели Cargo кладёт бинарник в target/release,
+      # а если сборщик передаст --target — в target/<тройка>/release. Отбираем
+      # только файл из самой папки release: в deps лежат промежуточные копии.
       #
       # В автообновлении архив не участвует: подпись и latest.json Tauri считает
       # только для установщика. Портабл обновляется заменой файла вручную.
@@ -156,9 +161,11 @@ jobs:
       - name: Портабл-архив
         shell: pwsh
         run: |
-          $exe = Get-Item src-tauri/target/release/AniMori.exe -ErrorAction SilentlyContinue
+          $exe = Get-ChildItem -Path src-tauri/target -Recurse -Filter AniMori.exe |
+            Where-Object { $_.DirectoryName -match 'release$' } |
+            Select-Object -First 1
           if (-not $exe) {
-            throw 'AniMori.exe не найден в src-tauri/target/release'
+            throw 'AniMori.exe не найден в src-tauri/target'
           }
           $version = '${{ github.ref_name }}'.TrimStart('v')
           $stage = "portable/AniMori_$version"

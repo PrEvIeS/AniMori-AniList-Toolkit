@@ -6,15 +6,7 @@ import { Bridge } from '@/bridge'
 
 export type TitleSource = 'shikimori' | 'anime365' | 'off' | 'none'
 export type AccentPreset =
-  | 'site'
-  | 'sakura'
-  | 'mono'
-  | 'catppuccin'
-  | 'nord'
-  | 'dracula'
-  | 'matcha'
-  | 'sunset'
-  | 'custom'
+  'site' | 'sakura' | 'mono' | 'catppuccin' | 'nord' | 'dracula' | 'matcha' | 'sunset' | 'custom'
 
 export interface AniMoriSettings {
   translateInterface: boolean

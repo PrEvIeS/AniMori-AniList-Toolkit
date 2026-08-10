@@ -20,7 +20,10 @@ const MIN_INTERVAL_MS = 30000
  */
 const PROBE_SKIP_DOMAINS = ['anime365.ru']
 
-/** Публичный токен Kodik. Тот же, что в features/media/player.ts (там не экспортирован). */
+/**
+ * Токен Kodik, выданный владельцу проекта по запросу.
+ * Тот же, что в features/media/player.ts (там не экспортирован).
+ */
 const KODIK_TOKEN = '16f20d024a6fa20700b389c44d9ab159'
 
 /** Обложка существующего тайтла — самый дешёвый способ проверить CDN картинок. */

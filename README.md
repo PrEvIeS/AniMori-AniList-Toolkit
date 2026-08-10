@@ -6,9 +6,10 @@
 
 **Русификатор и набор инструментов для [AniList](https://anilist.co) — перевод интерфейса, плеер, рейтинги, дерево франшиз, экспорт и сравнение списков с Shikimori.**
 
-[![Релиз](https://img.shields.io/github/v/release/foulnike/AniMori-AniList-Toolkit?style=flat-square&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
-[![Greasy Fork](https://img.shields.io/badge/Greasy%20Fork-%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D0%B0%20%D1%81%D0%BA%D1%80%D0%B8%D0%BF%D1%82%D0%B0-670000?style=flat-square)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
-[![Лицензия](https://img.shields.io/github/license/foulnike/AniMori-AniList-Toolkit?style=flat-square&label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F&color=green)](LICENSE)
+[![Релиз](https://img.shields.io/github/v/release/foulnike/AniMori-AniList-Toolkit?style=flat-square&logo=github&logoColor=white&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&labelColor=0B1622&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
+[![Greasy Fork](https://img.shields.io/badge/Greasy%20Fork-%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%B8%D1%82%D1%8C-02A9FF?style=flat-square&logo=javascript&logoColor=white&labelColor=0B1622)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
+[![Windows](https://img.shields.io/badge/Windows-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-02A9FF?style=flat-square&logo=tauri&logoColor=white&labelColor=0B1622)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
+[![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-02A9FF?style=flat-square&labelColor=0B1622)](LICENSE)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-CE422B?style=flat-square&logo=rust&logoColor=white)
@@ -34,6 +35,30 @@
 - **Настольное приложение для Windows** — отдельная программа с окном AniList: ни браузер, ни менеджер скриптов не нужны.
 
 AniMori — неофициальный проект и не связан с командой AniList.
+
+## Как выглядит
+
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/assets/screenshots/home.webp" width="900" alt="Каталог AniList с переведённым интерфейсом и русскими названиями">
+
+</div>
+
+<details>
+<summary><b>Страница аниме</b> — русское описание с указанием источника, рейтинги, музыкальные темы, дерево франшизы, внешние ссылки</summary>
+<br>
+<div align="center">
+<img src="https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/assets/screenshots/media.webp" width="900" alt="Страница аниме с блоками AniMori">
+</div>
+</details>
+
+<details>
+<summary><b>Плеер</b> — выбор озвучки с избранным и переключение серий без перезагрузки страницы</summary>
+<br>
+<div align="center">
+<img src="https://raw.githubusercontent.com/foulnike/AniMori-AniList-Toolkit/main/assets/screenshots/player.webp" width="900" alt="Встроенный плеер с панелями озвучек и эпизодов">
+</div>
+</details>
 
 ## Что выбрать
 

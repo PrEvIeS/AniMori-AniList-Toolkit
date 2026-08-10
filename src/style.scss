@@ -1958,24 +1958,3 @@ body.am-ru-search-active .am-ru-injected-container {
   gap: 8px;
   justify-content: flex-end;
 }
-
-/* ===== Улучшения экспортера Shikimori ===== */
-#shiki-export-overlay .amk-modal {
-  background: rgba(255, 255, 255, 0.85) !important;
-}
-#shiki-export-overlay .amk-title {
-  color: #000 !important;
-}
-#shiki-export-overlay .amk-switch .amk-track {
-  border: 1px solid rgba(0, 0, 0, 0.25);
-}
-#shiki-export-overlay .amk-switch .amk-thumb {
-  border: 1px solid rgba(0, 0, 0, 0.15);
-}
-#shiki-export-overlay .amk-input::placeholder {
-  color: rgba(0, 0, 0, 0.35) !important;
-}
-#shiki-export-overlay .amk-btn-primary {
-  border: 1px solid rgba(0, 0, 0, 0.3) !important;
-  color: #000 !important;
-}

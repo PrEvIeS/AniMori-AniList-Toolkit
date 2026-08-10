@@ -4,9 +4,9 @@
 
 - [x] 1.1 README: название, дисклеймер, зеркало Shikimori, раздел лицензии · 12e8147
 - [ ] 1.2 `@name` юзерскрипта и заголовок на Greasy Fork — AniMori — Toolkit for AniList
-- [ ] 1.3 Дефолты блокировщика в `src/core/settings.ts` — выключено
-- [ ] 1.4 `ENABLED` в `src-tauri/src/adblock.rs` — стартовое значение `false`
-- [ ] 1.5 Комментарий о токене Kodik в `net-check.ts` и `player.ts` — токен выдан владельцу проекта
+- [x] 1.3 Дефолты блокировщика в `src/core/settings.ts` — выключено · 5534e85
+- [x] 1.4 `ENABLED` в `src-tauri/src/adblock.rs` — стартовое значение `false` · 2d53e9c
+- [x] 1.5 Комментарий о токене Kodik в двух местах · a57ae07, 0f80264
 
 ## 2. Перенос из 2.0.1
 

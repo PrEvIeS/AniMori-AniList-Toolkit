@@ -2024,5 +2024,22 @@
   "Former Community Mod": "Бывший модератор сообщества",
   "Former Developer": "Бывший разработчик",
   "Former Lead Social Media Mod": "Бывший главный модератор соцсетей",
-  "Former Admin": "Бывший администратор"
+  "Former Admin": "Бывший администратор",
+  "It looks like you're logging in from a new device or location. To continue logging in you'll need to click the link in the email we've just sent you.": "Похоже, вы входите с нового устройства или из другого места. Чтобы продолжить, перейдите по ссылке из письма, которое мы только что отправили.",
+  "Additional Verification Required": "Требуется дополнительная проверка",
+  "Underline": "Подчёркнутый",
+  "Write review": "Написать рецензию",
+  "Review Summary": "Краткое описание",
+  "Review summary": "Краткое описание",
+  "Review must be at least 2600 characters long, excluding formatting. Do not pad your reviews to meet this requirement.": "Рецензия должна содержать не менее 2600 символов без учёта форматирования. Не растягивайте текст ради этого требования.",
+  "Summary must be less than 120 characters and greater than 20 characters": "Краткое описание должно быть длиной от 20 до 120 символов",
+  "Please make sure to read our review guidelines before publishing": "Перед публикацией ознакомьтесь с правилами написания рецензий",
+  "Technical Design": "Технический дизайн",
+  "Episode Director": "Режиссёр эпизода",
+  "Assistant Unit Director": "Помощник постановщика",
+  "Assistant Episode Director": "Помощник режиссёра эпизода",
+  "Former Social Media Mod": "Бывший модератор соцсетей",
+  "Former Lead Manga Data Mod": "Бывший главный модератор данных манги",
+  "Former Lead Community Mod": "Бывший главный модератор сообщества",
+  "Former Lead Anime Data Mod": "Бывший главный модератор данных аниме"
 }

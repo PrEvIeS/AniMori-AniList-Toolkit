@@ -20,6 +20,10 @@
   on_navigation в lib.rs пускает внутрь лишь anilist.co, а остальное уводит в браузер,
   так что поле ввода обещало бы возможность, которой нет.
 
+  Кнопка полного экрана стоит последней и отделена от стрелок: она управляет окном,
+  а не перемещением по сайту. Вид кнопки зависит от состояния окна: в полном экране
+  больше нет ни рамки, ни крестика, и подсказка о выходе остаётся единственной.
+
   Стили лежат в самом компоненте, а не в style.scss, осознанно: это единственный элемент
   интерфейса, которого в браузерной сборке нет совсем, и его оформление не должно
   гулять по общему файлу стилей. Селекторы префиксованы am-nav-, так что с разметкой
@@ -30,7 +34,13 @@
 import { ref } from 'vue'
 import { Bridge } from '@/bridge'
 import { Logger } from '../../utils/logger'
-import { copyCurrentUrl, currentUrl, urlCopied } from './nav-state'
+import {
+  copyCurrentUrl,
+  currentUrl,
+  isFullscreen,
+  toggleFullscreen,
+  urlCopied,
+} from './nav-state'
 import { reloadPage } from './reload'
 
 /** Блок раскрыт: либо мышь над ним, либо его закрепили кликом. */
@@ -80,6 +90,11 @@ function onUrlFocus(e: FocusEvent): void {
 /** Обёртка ради void: обработчику клика промис не нужен, ошибку пишет nav-state.ts. */
 function onCopy(): void {
   void copyCurrentUrl()
+}
+
+/** То же для полного экрана: состояние и журнал — забота nav-state.ts. */
+function onFullscreen(): void {
+  void toggleFullscreen()
 }
 </script>
 
@@ -210,6 +225,48 @@ function onCopy(): void {
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </svg>
       </button>
+
+      <button
+        type="button"
+        class="am-nav-btn"
+        :title="
+          isFullscreen ? 'Выйти из полноэкранного режима (F11 или Esc)' : 'Во весь экран (F11)'
+        "
+        @click="onFullscreen"
+      >
+        <svg
+          v-if="isFullscreen"
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="4 14 10 14 10 20" />
+          <polyline points="20 10 14 10 14 4" />
+          <line x1="14" y1="10" x2="21" y2="3" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+        <svg
+          v-else
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="15 3 21 3 21 9" />
+          <polyline points="9 21 3 21 3 15" />
+          <line x1="21" y1="3" x2="14" y2="10" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -326,7 +383,7 @@ function onCopy(): void {
 }
 
 .am-nav.am-nav-open .am-nav-items {
-  max-width: 440px;
+  max-width: 470px;
   opacity: 1;
   pointer-events: auto;
 }

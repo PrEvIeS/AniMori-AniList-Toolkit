@@ -267,8 +267,9 @@ const tauriClipboard: IClipboard = {
 // ==== shell ====
 
 /**
- * Оболочка: свои команды из lib.rs плюс история WebView. Перезагрузка и внешние
- * ссылки — только командами. Команды требуют разрешений: build.rs и capabilities.
+ * Оболочка: свои команды из lib.rs плюс история WebView. Перезагрузка, внешние
+ * ссылки и полный экран — только командами. Команды требуют разрешений:
+ * build.rs и capabilities.
  */
 const tauriShell: IShell = {
   async reload(): Promise<void> {
@@ -289,6 +290,11 @@ const tauriShell: IShell = {
   forward(): Promise<void> {
     history.forward()
     return Promise.resolve()
+  },
+
+  async toggleFullscreen(): Promise<boolean> {
+    // Ответ команды — состояние ПОСЛЕ переключения, его и отдаём как есть.
+    return await invoke<boolean>('animori_toggle_fullscreen')
   },
 }
 

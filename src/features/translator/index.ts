@@ -616,10 +616,11 @@ function applyTranslation(kind: QueueKind, id: number, data: TranslationPayload)
         continue
       }
 
-      // 3. Блок описания.
+      // 3. Блок описания. Отметку ставим, только если русский текст правда встал:
+      //    иначе обход страницы будет считать блок готовым и не вернётся к нему.
       if (el.classList.contains('description')) {
         applyDescription(el, data)
-        el.dataset.translated = String(id)
+        if (el.querySelector('.ru-desc')) el.dataset.translated = String(id)
         continue
       }
 
@@ -663,6 +664,34 @@ function applyDescription(el: HTMLElement, data: TranslationPayload): void {
 
   el.innerHTML = ''
   el.append(ru, details)
+}
+
+/**
+ * Ставит описание текущей страницы в очередь, если русского текста в нём нет.
+ *
+ * React пересобирает блок описания и возвращает туда оригинал, а маркер
+ * dataset.queued остаётся на том же живом узле — из-за него queueContent молча
+ * выходил, и перевод не возвращался до перезагрузки страницы. Поэтому пропажу
+ * ловим отдельно и ставим задачу принудительно; повторной работы это не даёт:
+ * ответ берётся из кэша, а сама вставка проверяет, что не дублируется.
+ */
+function ensurePageDescription(kind: QueueKind, id: number): void {
+  const desc = document.querySelector<HTMLElement>('.description')
+  if (!desc) return
+
+  const hasRu = desc.querySelector('.ru-desc') !== null
+  const wasTranslated = desc.dataset.translated === String(id)
+  if (hasRu && wasTranslated) return
+
+  // Перевод стоял и пропал — блок перерисован поверх нас, маркеры уже не годятся.
+  if (wasTranslated) {
+    delete desc.dataset.queued
+    delete desc.dataset.translated
+    void queueContent(id, kind, desc, false, true)
+    return
+  }
+
+  void queueContent(id, kind, desc)
 }
 
 /**
@@ -785,10 +814,7 @@ function debouncedFindContent(): void {
       void queueContent(page.id, page.kind, h1, true)
     }
 
-    const desc = document.querySelector<HTMLElement>('.description')
-    if (desc && !(desc.querySelector('.ru-desc') && desc.dataset.translated === String(page.id))) {
-      void queueContent(page.id, page.kind, desc)
-    }
+    ensurePageDescription(page.kind, page.id)
   }, 300)
 }
 

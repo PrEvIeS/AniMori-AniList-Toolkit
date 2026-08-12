@@ -345,7 +345,12 @@ function onFullscreen(): void {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
   color: inherit;
-  font: 12px/24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    12px/24px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
   text-overflow: ellipsis;
   cursor: text;
 }

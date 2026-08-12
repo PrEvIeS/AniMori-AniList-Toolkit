@@ -3,9 +3,11 @@
 // Отдельно от actions.ts: иначе в панель действий пришли бы ветвления по платформе.
 
 import { Bridge } from '@/bridge'
+import { registerRouteTask } from '@/core/lifecycle'
 import { mountApp, unmountApp } from '@/utils/vue-mounter'
 
 import NavPanel from './NavPanel.vue'
+import { syncCurrentUrl } from './nav-state'
 import { initReloadControls } from './reload'
 
 /** Ключ реестра vue-mounter. Рядом с 'action-panel' из actions.ts. */
@@ -13,6 +15,9 @@ export const NAV_PANEL_APP_KEY = 'nav-panel'
 
 /** Повторный вызов не должен вешать второй обработчик клавиатуры. */
 let hotkeysInstalled = false
+
+/** Снять задачу роута реестр не умеет, поэтому регистрация строго одноразовая. */
+let urlTaskInstalled = false
 
 /**
  * Вешает Alt+← и Alt+→ — те же сочетания, что в любом браузере.
@@ -44,9 +49,20 @@ function installHotkeys(): void {
         /* ошибку покажет кнопка блока */
       })
     },
-    // capture: сайт не должен иметь возможность лишить пользователя средств навигации.
+    // capture: сайт не должен иметь возможности лишить пользователя средств навигации.
     { capture: true },
   )
+}
+
+/**
+ * Подписывает строку адреса на SPA-навигацию. Свой таймер не нужен:
+ * реестр задач уже следит за History API, popstate и держит страховочный пулинг.
+ */
+function installUrlTask(): void {
+  if (urlTaskInstalled) return
+  urlTaskInstalled = true
+
+  registerRouteTask('nav:url', syncCurrentUrl)
 }
 
 /**
@@ -59,6 +75,7 @@ export function initNavPanel(): void {
   // Всё браузероподобное включается в одном месте, а не из панели действий.
   initReloadControls()
   installHotkeys()
+  installUrlTask()
 
   mountApp(NAV_PANEL_APP_KEY, NavPanel)
 }

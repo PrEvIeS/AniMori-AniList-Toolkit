@@ -1,4 +1,4 @@
-// Состояние блока навигации: адрес текущей страницы и его копирование.
+// Состояние блока навигации: адрес текущей страницы, его копирование и полный экран.
 // Отдельно от nav.ts по образцу action-panel-state.ts: импорт из компонента
 // в модуль, который сам его монтирует, дал бы круг в графе модулей.
 
@@ -16,6 +16,12 @@ export const currentUrl = ref(location.href)
 
 /** Копирование удалось: кнопка ненадолго меняет вид. */
 export const urlCopied = ref(false)
+
+/**
+ * Окно в полном экране. Значение приходит только ответом оболочки:
+ * собственная копия разошлась бы с правдой при системном развороте окна.
+ */
+export const isFullscreen = ref(false)
 
 let copiedTimer: number | undefined
 
@@ -43,4 +49,16 @@ export async function copyCurrentUrl(): Promise<void> {
     urlCopied.value = false
     copiedTimer = undefined
   }, COPIED_MS)
+}
+
+/**
+ * Переключает полный экран. Флаг берётся из ответа команды, а не переворотом
+ * своего значения: иначе после отказа кнопка показывала бы небывшее состояние.
+ */
+export async function toggleFullscreen(): Promise<void> {
+  try {
+    isFullscreen.value = await Bridge.shell.toggleFullscreen()
+  } catch (e) {
+    Logger('ERROR', 'Не удалось переключить полноэкранный режим', e)
+  }
 }

@@ -11,7 +11,7 @@ import { Logger } from '../../utils/logger'
 import { hidePlayerButton, showPlayerButton } from '../ui/action-panel-state'
 import type { MediaContext, MediaWidget } from './types'
 
-/** Публичный токен Kodik. */
+/** Токен Kodik, выданный владельцу проекта по запросу. */
 const KODIK_TOKEN = '16f20d024a6fa20700b389c44d9ab159'
 
 /** Имя и подпись источника в учёте доступности. Совпадают с пробой из net-check.ts. */

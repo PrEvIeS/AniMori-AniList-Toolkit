@@ -16,6 +16,14 @@
   закрепляет блок раскрытым: без этого при быстром движении мыши к стрелке блок
   успевал бы свернуться, и по стрелке пришлось бы охотиться.
 
+  Строка адреса только читается. Ввод чужого адреса окно всё равно не примет:
+  on_navigation в lib.rs пускает внутрь лишь anilist.co, а остальное уводит в браузер,
+  так что поле ввода обещало бы возможность, которой нет.
+
+  Кнопка полного экрана стоит последней и отделена от стрелок: она управляет окном,
+  а не перемещением по сайту. Вид кнопки зависит от состояния окна: в полном экране
+  больше нет ни рамки, ни крестика, и подсказка о выходе остаётся единственной.
+
   Стили лежат в самом компоненте, а не в style.scss, осознанно: это единственный элемент
   интерфейса, которого в браузерной сборке нет совсем, и его оформление не должно
   гулять по общему файлу стилей. Селекторы префиксованы am-nav-, так что с разметкой
@@ -26,6 +34,7 @@
 import { ref } from 'vue'
 import { Bridge } from '@/bridge'
 import { Logger } from '../../utils/logger'
+import { copyCurrentUrl, currentUrl, isFullscreen, toggleFullscreen, urlCopied } from './nav-state'
 import { reloadPage } from './reload'
 
 /** Блок раскрыт: либо мышь над ним, либо его закрепили кликом. */
@@ -64,6 +73,22 @@ function goForward(): void {
 /** Перезагрузка живёт в reload.ts с пункта 4.3 и уже пишет ошибки в журнал сама. */
 function onReload(): void {
   void reloadPage()
+}
+
+/** Клик по строке выделяет адрес целиком — как в адресной строке браузера. */
+function onUrlFocus(e: FocusEvent): void {
+  const el = e.target
+  if (el instanceof HTMLInputElement) el.select()
+}
+
+/** Обёртка ради void: обработчику клика промис не нужен, ошибку пишет nav-state.ts. */
+function onCopy(): void {
+  void copyCurrentUrl()
+}
+
+/** То же для полного экрана: состояние и журнал — забота nav-state.ts. */
+function onFullscreen(): void {
+  void toggleFullscreen()
 }
 </script>
 
@@ -147,6 +172,93 @@ function onReload(): void {
           <polyline points="21 3 21 9 15 9" />
         </svg>
       </button>
+
+      <input
+        class="am-nav-url"
+        type="text"
+        readonly
+        spellcheck="false"
+        aria-label="Адрес страницы"
+        :value="currentUrl"
+        :title="currentUrl"
+        @focus="onUrlFocus"
+      />
+
+      <button
+        type="button"
+        class="am-nav-btn"
+        :class="{ 'am-nav-done': urlCopied }"
+        :title="urlCopied ? 'Адрес скопирован' : 'Скопировать адрес'"
+        @click="onCopy"
+      >
+        <svg
+          v-if="urlCopied"
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        <svg
+          v-else
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <rect x="9" y="9" width="12" height="12" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="am-nav-btn"
+        :title="isFullscreen ? 'Выйти из полного экрана (F11)' : 'Во весь экран (F11)'"
+        @click="onFullscreen"
+      >
+        <svg
+          v-if="isFullscreen"
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="4 14 10 14 10 20" />
+          <polyline points="20 10 14 10 14 4" />
+          <line x1="14" y1="10" x2="21" y2="3" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+        <svg
+          v-else
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="15 3 21 3 21 9" />
+          <polyline points="9 21 3 21 3 15" />
+          <line x1="21" y1="3" x2="14" y2="10" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -195,6 +307,7 @@ function onReload(): void {
   background: transparent;
   color: inherit;
   cursor: pointer;
+  flex-shrink: 0;
   transition:
     background 0.14s ease,
     color 0.14s ease;
@@ -205,12 +318,47 @@ function onReload(): void {
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* Подтверждение копирования: цвет держится ровно столько же, сколько галочка. */
+.am-nav-btn.am-nav-done {
+  color: #7ddc9a;
+}
+
 .am-nav-handle svg {
   transition: transform 0.18s ease;
 }
 
 .am-nav.am-nav-pinned .am-nav-handle svg {
   transform: rotate(180deg);
+}
+
+/*
+  Адрес: поле только для чтения, а не текст, ради выделения и прокрутки длинных адресов.
+  Свойства шрифта и фона заданы явно — поле стоит в чужом документе со своими стилями.
+*/
+.am-nav-url {
+  width: 300px;
+  min-width: 0;
+  height: 24px;
+  margin: 0 2px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font:
+    12px/24px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.am-nav-url:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /*
@@ -232,7 +380,7 @@ function onReload(): void {
 }
 
 .am-nav.am-nav-open .am-nav-items {
-  max-width: 96px;
+  max-width: 470px;
   opacity: 1;
   pointer-events: auto;
 }

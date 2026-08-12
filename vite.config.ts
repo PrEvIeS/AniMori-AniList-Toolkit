@@ -98,7 +98,9 @@ export default defineConfig(({ mode }) => {
             monkey({
               entry: 'src/main.ts',
               userscript: {
-                name: 'AniMori: AniList Toolkit',
+                // Пункт 4 naming guidelines AniList: чужой проект с их именем в названии
+                // обязан нести пометку «UNOFFICIAL» либо оборот «for AniList».
+                name: 'AniMori — Toolkit for AniList',
                 namespace: 'http://tampermonkey.net/',
                 version,
                 description:
@@ -128,6 +130,9 @@ export default defineConfig(({ mode }) => {
                   'kodik-api.com',
                   'api.animethemes.moe',
                 ],
+                // Адреса выдаёт Greasy Fork и менять их вручную нельзя: по ним идёт
+                // автообновление уже установленных копий. При переименовании страницы
+                // ссылки сверяются с тем, что показывает сама площадка.
                 downloadURL:
                   'https://update.greasyfork.org/scripts/572948/AniMori%3A%20AniList%20Toolkit.user.js',
                 updateURL:

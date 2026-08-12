@@ -6,15 +6,7 @@ import { Bridge } from '@/bridge'
 
 export type TitleSource = 'shikimori' | 'anime365' | 'off' | 'none'
 export type AccentPreset =
-  | 'site'
-  | 'sakura'
-  | 'mono'
-  | 'catppuccin'
-  | 'nord'
-  | 'dracula'
-  | 'matcha'
-  | 'sunset'
-  | 'custom'
+  'site' | 'sakura' | 'mono' | 'catppuccin' | 'nord' | 'dracula' | 'matcha' | 'sunset' | 'custom'
 
 export interface AniMoriSettings {
   translateInterface: boolean
@@ -45,8 +37,10 @@ export interface AniMoriSettings {
    * Блокировать всплывающие окна плеера. В юзерскрипте потребителя нет и быть не может:
    * Kodik крутится в кросс-доменном фрейме, работает только on_new_window в Tauri.
    * Тот ловит НОВЫЕ окна: редиректы текущего фрейма и оверлеи им не отсекаются.
-   * Включён по умолчанию: один тумблер панели пишет и его, и hideAds, а при разных
-   * дефолтах он выглядел бы включённым, ничего не блокируя.
+   * Выключен по умолчанию вместе с hideAds: блокировка режет рекламу партнёров
+   * источников, и такое решение принимает человек, а не установщик. Дефолт общий
+   * с hideAds: один тумблер панели пишет оба ключа, и при разных значениях он
+   * выглядел бы включённым, ничего не блокируя.
    */
   blockPlayerPopups: boolean
   /**
@@ -96,8 +90,8 @@ const DEFAULT_SETTINGS: AniMoriSettings = {
   enableLogger: true,
   accentPreset: 'site',
   accentCustom: '',
-  blockPlayerPopups: true,
-  hideAds: true,
+  blockPlayerPopups: false,
+  hideAds: false,
   showSyncButton: true,
   showCompareButton: true,
   translateTitles: true,

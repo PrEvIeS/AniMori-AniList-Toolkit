@@ -176,6 +176,18 @@ fn animori_reload(window: WebviewWindow) -> Result<(), String> {
     window.reload().map_err(|e| e.to_string())
 }
 
+/// Переключает полноэкранный режим окна и возвращает новое состояние: без него
+/// его пришлось бы спрашивать вторым вызовом после каждого нажатия.
+///
+/// Своя команда, а не core:window:allow-set-fullscreen: разрешение из core выдаётся окну
+/// целиком, то есть любому скрипту на anilist.co; здесь право сведено к одному действию.
+#[tauri::command]
+fn animori_toggle_fullscreen(window: WebviewWindow) -> Result<bool, String> {
+    let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(next).map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
 /// Открывает адрес в браузере по умолчанию. В WebView2 target="_blank" и window.open()
 /// превращаются в запрос нового окна, и без обработчика он отбрасывается МОЛЧА:
 /// ни окна, ни ошибки, ни события на стороне JS.
@@ -230,6 +242,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             proxy_guard::animori_page_ready,
             animori_reload,
+            animori_toggle_fullscreen,
             animori_open_external,
             proxy::animori_proxy_status,
             proxy::animori_proxy_probe

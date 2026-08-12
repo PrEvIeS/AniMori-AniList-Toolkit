@@ -1,10 +1,5 @@
 <script setup lang="ts">
 // Окно переноса списков Shikimori → AniList.
-//
-// ЛОВУШКА: id корня — am-sync-overlay, менять его на старый shiki-export-overlay нельзя:
-// в style.scss ещё живёт блок с !important по старому id (белый фон, чёрный текст),
-// от которого окно на тёмной теме AniList становится нечитаемым. Сам мёртвый блок
-// вычищается из style.scss отдельно.
 
 import { isAnonymousShikiAccess } from '../../api/shikimori-user'
 import {

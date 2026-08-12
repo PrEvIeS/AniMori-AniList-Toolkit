@@ -233,7 +233,7 @@ function totalPending(): number {
  * Отбора «что видно на экране» здесь больше нет: расстояния считались один раз
  * на восемь секунд работы пачки и устаревали от первого же прокрута, разметка
  * сайта всё равно шире экрана, а порядок появления перевода всё равно решает сеть.
- * Срочное же идёт мимо пачки — см. urgentTarget.
+ * Срочное идёт мимо пачки — см. urgentTarget.
  *
  * Выбранные id снимаются с pending — вызывающему это делать не нужно.
  */
@@ -865,4 +865,118 @@ function debouncedFindContent(): void {
     const page = parseAniListHref(window.location.pathname)
     if (!page) return
 
-    // Открытая страница — е
+    // Открытая страница — то, на что человек смотрит прямо сейчас: она идёт вне очереди.
+    urgentTarget = { kind: page.kind, id: page.id }
+
+    const headerSelector =
+      page.kind === 'MED2'
+        ? '.header .content h1'
+        : '.header .names h1.name, .header h1.name, .header .content h1'
+
+    const h1 = document.querySelector<HTMLElement>(headerSelector)
+    if (h1 && h1.dataset.translated !== String(page.id)) {
+      void queueContent(page.id, page.kind, h1, true)
+    }
+
+    ensurePageDescription(page.kind, page.id)
+  }, 300)
+}
+
+// ==== Наблюдатель ====
+
+/** Ищет тултип, к которому относится изменённый узел. */
+function findTooltip(node: Node | null): HTMLElement | null {
+  const el = node instanceof HTMLElement ? node : (node?.parentElement ?? null)
+  if (!el) return null
+  if (el.classList.contains('tooltip')) return el
+  return el.closest<HTMLElement>('.tooltip')
+}
+
+/**
+ * Запускает переводчик: один раз на страницу.
+ * Вызывать только ПОСЛЕ loadSettings(), openDB() и загрузки словаря.
+ */
+export function initTranslator(): void {
+  if (isStarted) return
+  isStarted = true
+
+  let mutationQueue: MutationRecord[] = []
+  let rafId: number | null = null
+
+  const processMutations = (): void => {
+    rafId = null
+    const batch = mutationQueue
+    mutationQueue = []
+    const startTime = performance.now()
+
+    for (const mutation of batch) {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          translateNode(node)
+          if (!(node instanceof HTMLElement)) return
+
+          // Раскрываем обрезанные описания: иначе русский текст встанет в огрызок.
+          if (node.classList.contains('description-length-toggle')) node.click()
+          else node.querySelector<HTMLElement>('.description-length-toggle')?.click()
+
+          if (node.classList.contains('tooltip')) processTooltip(node)
+          else {
+            const tooltip = node.querySelector<HTMLElement>('.tooltip')
+            if (tooltip) processTooltip(tooltip)
+          }
+        })
+
+        // Тултип переиспользован под новую карточку — переводим его заново.
+        const reused = findTooltip(mutation.target)
+        if (reused) processTooltip(reused)
+      } else if (mutation.type === 'characterData') {
+        translateNode(mutation.target)
+        // Тултип часто обновляется точечной правкой текста.
+        const tooltip = findTooltip(mutation.target)
+        if (tooltip) processTooltip(tooltip)
+      } else if (mutation.type === 'attributes') {
+        const name = mutation.attributeName
+        if (name && TRANSLATABLE_ATTRS.includes(name)) translateNode(mutation.target)
+      }
+    }
+
+    const spent = Math.round(performance.now() - startTime)
+    if (spent > 50) Logger('WARN', `[Performance] Обновление интерфейса заняло ${spent}ms`)
+
+    debouncedFindContent()
+
+    // Виджеты медиа-страницы восстанавливаем с задержкой, чтобы не дёргать на каждый чих.
+    if (mutationHook) {
+      if (mutationHookTimer) clearTimeout(mutationHookTimer)
+      mutationHookTimer = setTimeout(() => mutationHook?.(), 150)
+    }
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    mutationQueue.push(...mutations)
+    if (rafId === null) rafId = requestAnimationFrame(processMutations)
+  })
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+    attributeFilter: [...TRANSLATABLE_ATTRS],
+  })
+
+  setupVueInputInterceptor()
+
+  // После редактирования словаря перевод применяется сразу, без перезагрузки страницы.
+  registerRetranslateCallback(() => {
+    try {
+      translateNode(document.body)
+    } catch (e) {
+      Logger('WARN', 'Ре-скан перевода не удался', e)
+    }
+  })
+
+  Logger('INFO', 'Переводчик интерфейса запущен')
+  translateNode(document.body)
+  debouncedFindContent()
+}

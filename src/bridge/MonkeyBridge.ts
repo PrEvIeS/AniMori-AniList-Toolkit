@@ -174,6 +174,12 @@ const monkeyShell: IShell = {
     history.forward()
     return Promise.resolve()
   },
+
+  toggleFullscreen(): Promise<boolean> {
+    // Во вкладке полным экраном распоряжается сам браузер по F11, и перебивать его
+    // нельзя. requestFullscreen тоже не подмена: он растягивает элемент чужой страницы.
+    return Promise.resolve(false)
+  },
 }
 
 // ==== proxy diagnostics ====

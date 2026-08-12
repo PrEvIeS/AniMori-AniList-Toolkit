@@ -60,9 +60,6 @@ const RETRY_DELAY_MS = 2000
 /** Сколько раз пробуем один ключ, прежде чем отпустить его до перезагрузки страницы. */
 const MAX_ATTEMPTS = 3
 
-/** Порог «уже неважно» для отбора пачки: влияет только на порядок, ничто не теряется. */
-const VIEWPORT_MARGIN_PX = 600
-
 /**
  * Свои виджеты: их содержимое уже на русском и собрано вручную.
  * Отдать ссылки внутри них переводчику — потерять бейджи года, типа и статуса.
@@ -131,7 +128,7 @@ type AniListPersonRow = AniListPersonRef & { id: number }
 /** Ключ вида "MED2_123" -> элементы страницы, которые надо обновить. */
 const queue = new Map<string, QueueEntry[]>()
 
-/** ID, по которым ещё не сделан запрос. */
+/** ID, по которым ещё не сделан запрос. Порядок вставки = порядок обхода разметки. */
 const pending: Record<QueueKind, Set<number>> = {
   MED2: new Set<number>(),
   CHR2: new Set<number>(),
@@ -140,6 +137,19 @@ const pending: Record<QueueKind, Set<number>> = {
 
 /** Счётчик неудачных попыток по ключу. Успех обнуляет запись. */
 const attempts = new Map<string, number>()
+
+/**
+ * Тайтл или персона, чья страница открыта прямо сейчас.
+ * Заголовок и описание — единственное, на что человек смотрит сразу после перехода,
+ * поэтому они идут впереди общей очереди и отдельным запросом на один id.
+ */
+let urgentTarget: { kind: QueueKind; id: number } | null = null
+
+/**
+ * Номер перехода. Пачка запоминает его на старте: если номер сменился,
+ * пользователь уже на другой странице и дорабатывать чужую работу некому.
+ */
+let routeGeneration = 0
 
 let isProcessing = false
 
@@ -170,8 +180,11 @@ export function getPendingQueueSizes(): Record<QueueKind, number> {
 /**
  * Сбрасывает счётчики неудач на смену роута: новая страница — новый шанс.
  * Внутри одной страницы счётчик держит цикл от кручения на упавшей сети.
+ * Здесь же меняется номер перехода: пачка старой страницы увидит это и уступит дорогу.
  */
 export function resetTranslatorRetries(): void {
+  routeGeneration++
+
   const dropped = dropDetachedEntries()
   if (dropped > 0) {
     Logger('QUEUE', `[Process] Смена страницы: снято с очереди оторванных элементов ${dropped}`)
@@ -215,58 +228,41 @@ function totalPending(): number {
 }
 
 /**
- * Расстояние от элемента до видимой области в пикселях; 0 — элемент на экране.
- * Ключ может держать несколько элементов, поэтому берём ближайший.
- */
-function entryDistance(key: string): number {
-  const viewport = window.innerHeight || document.documentElement.clientHeight
-  let best = Number.POSITIVE_INFINITY
-
-  for (const { el } of queue.get(key) ?? []) {
-    if (!el.isConnected) continue
-
-    const rect = el.getBoundingClientRect()
-    // Нулевая рамка — узел в документе, но не отрисован: показывать перевод некому.
-    if (rect.width === 0 && rect.height === 0) continue
-
-    let distance = 0
-    if (rect.bottom < 0) distance = -rect.bottom
-    else if (rect.top > viewport) distance = rect.top - viewport
-
-    if (distance < best) best = distance
-    if (best === 0) break
-  }
-
-  return best
-}
-
-/**
- * Набирает пачку, отдавая приоритет тому, что пользователь видит прямо сейчас.
+ * Набирает пачку в порядке постановки, то есть сверху страницы вниз.
+ *
+ * Отбора «что видно на экране» здесь больше нет: расстояния считались один раз
+ * на восемь секунд работы пачки и устаревали от первого же прокрута, разметка
+ * сайта всё равно шире экрана, а порядок появления перевода всё равно решает сеть.
+ * Срочное же идёт мимо пачки — см. urgentTarget.
+ *
  * Выбранные id снимаются с pending — вызывающему это делать не нужно.
  */
 function pickBatch(kind: QueueKind, size: number): number[] {
-  const ids = [...pending[kind]]
+  const total = pending[kind].size
+  const picked = [...pending[kind]].slice(0, size)
+  picked.forEach((id) => pending[kind].delete(id))
 
-  // Очередь короче пачки — считать расстояния незачем, берём всё.
-  if (ids.length <= size) {
-    ids.forEach((id) => pending[kind].delete(id))
-    return ids
+  if (total > size) {
+    Logger('QUEUE', `[Process] ${kind}: взято ${picked.length} из ${total}`)
   }
 
-  const ranked = ids
-    .map((id) => ({ id, distance: entryDistance(`${kind}_${id}`) }))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, size)
-
-  const onScreen = ranked.filter((item) => item.distance <= VIEWPORT_MARGIN_PX).length
-  Logger(
-    'QUEUE',
-    `[Process] ${kind}: взято ${ranked.length} из ${ids.length}, в зоне видимости ${onScreen}`,
-  )
-
-  const picked = ranked.map((item) => item.id)
-  picked.forEach((id) => pending[kind].delete(id))
   return picked
+}
+
+/**
+ * Забирает срочную задачу, если она ещё ждёт запроса.
+ * Отметка снимается в любом случае: второй раз тот же id срочным не считается.
+ */
+function takeUrgent(): { kind: QueueKind; id: number } | null {
+  if (!urgentTarget) return null
+
+  const { kind, id } = urgentTarget
+  urgentTarget = null
+
+  if (!pending[kind].delete(id)) return null
+
+  Logger('QUEUE', `[Process] Срочно: ${kind}_${id} — открытая страница впереди очереди`)
+  return { kind, id }
 }
 
 // ==== Очередь ====
@@ -300,6 +296,33 @@ function releaseQueued(key: string): void {
 function returnToQueue(kind: QueueKind, id: number): void {
   releaseQueued(`${kind}_${id}`)
   pending[kind].add(id)
+}
+
+/**
+ * Уступает дорогу новой странице: невзятый остаток пачки возвращается в очередь.
+ * Узлы, которых уже нет в документе, выбрасываются: писать перевод было бы некуда.
+ */
+function yieldRestToNewRoute(kind: QueueKind, ids: number[]): void {
+  let kept = 0
+
+  for (const id of ids) {
+    const key = `${kind}_${id}`
+    const entries = queue.get(key) ?? []
+
+    if (!entries.some((entry) => entry.el.isConnected)) {
+      queue.delete(key)
+      attempts.delete(key)
+      continue
+    }
+
+    returnToQueue(kind, id)
+    kept++
+  }
+
+  Logger(
+    'QUEUE',
+    `[Process] ${kind}: смена страницы, пачка прервана, возвращено ${kept} из ${ids.length}`,
+  )
 }
 
 /**
@@ -392,6 +415,14 @@ async function processTransQueue(): Promise<void> {
         return
       }
 
+      // Срочная дорожка: страница перед глазами важнее любого списка.
+      const urgent = takeUrgent()
+      if (urgent) {
+        if (urgent.kind === 'MED2') await processMediaBatch([urgent.id])
+        else await processPersonBatch(urgent.kind, [urgent.id])
+        continue
+      }
+
       // Персоны раньше тайтлов: они есть только на текущей странице, а пачка вчетверо меньше.
       if (pending.CHR2.size > 0) await processPersonBatch('CHR2')
       else if (pending.STF3.size > 0) await processPersonBatch('STF3')
@@ -409,9 +440,13 @@ async function processTransQueue(): Promise<void> {
   }
 }
 
-/** Пачка тайтлов: один запрос в AniList на до 40 штук, дальше — поштучно в Shikimori. */
-async function processMediaBatch(): Promise<void> {
-  const ids = pickBatch('MED2', MEDIA_BATCH)
+/**
+ * Пачка тайтлов: один запрос в AniList на до 40 штук, дальше — поштучно в Shikimori.
+ * forcedIds — срочная дорожка: id уже снят с pending вызывающим.
+ */
+async function processMediaBatch(forcedIds?: number[]): Promise<void> {
+  const ids = forcedIds ?? pickBatch('MED2', MEDIA_BATCH)
+  const generation = routeGeneration
 
   let rows: AniListMediaRow[] = []
   try {
@@ -429,7 +464,19 @@ async function processMediaBatch(): Promise<void> {
     if (!returned.has(id)) requeue('MED2', id)
   }
 
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    if (!row) continue
+
+    // Пользователь ушёл на другую страницу: остаток пачки уступает ей дорогу.
+    if (generation !== routeGeneration) {
+      yieldRestToNewRoute(
+        'MED2',
+        rows.slice(i).map((rest) => rest.id),
+      )
+      return
+    }
+
     try {
       await dbSet('malCache', { id: row.id, data: row as AniListMedia })
 
@@ -454,10 +501,15 @@ async function processMediaBatch(): Promise<void> {
   }
 }
 
-/** Пачка персонажей или авторов: сначала поиск по ролям, потом по имени. */
-async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
+/**
+ * Пачка персонажей или авторов: сначала поиск по ролям, потом по имени.
+ * forcedIds — срочная дорожка: id уже снят с pending вызывающим.
+ */
+async function processPersonBatch(kind: 'CHR2' | 'STF3', forcedIds?: number[]): Promise<void> {
   const cfg = PERSON_CONFIG[kind]
-  const ids = pickBatch(kind, PERSON_BATCH)
+  const ids = forcedIds ?? pickBatch(kind, PERSON_BATCH)
+  const generation = routeGeneration
+
   let rows: AniListPersonRow[] = []
   try {
     const res = await anilistQuery<{ Page?: Record<string, AniListPersonRow[] | undefined> }>(
@@ -479,6 +531,15 @@ async function processPersonBatch(kind: 'CHR2' | 'STF3'): Promise<void> {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     if (!row) continue
+
+    // Пользователь ушёл на другую страницу: остаток пачки уступает ей дорогу.
+    if (generation !== routeGeneration) {
+      yieldRestToNewRoute(
+        kind,
+        rows.slice(i).map((rest) => rest.id),
+      )
+      return
+    }
 
     try {
       let person: {
@@ -804,115 +865,4 @@ function debouncedFindContent(): void {
     const page = parseAniListHref(window.location.pathname)
     if (!page) return
 
-    const headerSelector =
-      page.kind === 'MED2'
-        ? '.header .content h1'
-        : '.header .names h1.name, .header h1.name, .header .content h1'
-
-    const h1 = document.querySelector<HTMLElement>(headerSelector)
-    if (h1 && h1.dataset.translated !== String(page.id)) {
-      void queueContent(page.id, page.kind, h1, true)
-    }
-
-    ensurePageDescription(page.kind, page.id)
-  }, 300)
-}
-
-// ==== Наблюдатель ====
-
-/** Ищет тултип, к которому относится изменённый узел. */
-function findTooltip(node: Node | null): HTMLElement | null {
-  const el = node instanceof HTMLElement ? node : (node?.parentElement ?? null)
-  if (!el) return null
-  if (el.classList.contains('tooltip')) return el
-  return el.closest<HTMLElement>('.tooltip')
-}
-
-/**
- * Запускает переводчик: один раз на страницу.
- * Вызывать только ПОСЛЕ loadSettings(), openDB() и загрузки словаря.
- */
-export function initTranslator(): void {
-  if (isStarted) return
-  isStarted = true
-
-  let mutationQueue: MutationRecord[] = []
-  let rafId: number | null = null
-
-  const processMutations = (): void => {
-    rafId = null
-    const batch = mutationQueue
-    mutationQueue = []
-    const startTime = performance.now()
-
-    for (const mutation of batch) {
-      if (mutation.type === 'childList') {
-        mutation.addedNodes.forEach((node) => {
-          translateNode(node)
-          if (!(node instanceof HTMLElement)) return
-
-          // Раскрываем обрезанные описания: иначе русский текст встанет в огрызок.
-          if (node.classList.contains('description-length-toggle')) node.click()
-          else node.querySelector<HTMLElement>('.description-length-toggle')?.click()
-
-          if (node.classList.contains('tooltip')) processTooltip(node)
-          else {
-            const tooltip = node.querySelector<HTMLElement>('.tooltip')
-            if (tooltip) processTooltip(tooltip)
-          }
-        })
-
-        // Тултип переиспользован под новую карточку — переводим его заново.
-        const reused = findTooltip(mutation.target)
-        if (reused) processTooltip(reused)
-      } else if (mutation.type === 'characterData') {
-        translateNode(mutation.target)
-        // Тултип часто обновляется точечной правкой текста.
-        const tooltip = findTooltip(mutation.target)
-        if (tooltip) processTooltip(tooltip)
-      } else if (mutation.type === 'attributes') {
-        const name = mutation.attributeName
-        if (name && TRANSLATABLE_ATTRS.includes(name)) translateNode(mutation.target)
-      }
-    }
-
-    const spent = Math.round(performance.now() - startTime)
-    if (spent > 50) Logger('WARN', `[Performance] Обновление интерфейса заняло ${spent}ms`)
-
-    debouncedFindContent()
-
-    // Виджеты медиа-страницы восстанавливаем с задержкой, чтобы не дёргать на каждый чих.
-    if (mutationHook) {
-      if (mutationHookTimer) clearTimeout(mutationHookTimer)
-      mutationHookTimer = setTimeout(() => mutationHook?.(), 150)
-    }
-  }
-
-  const observer = new MutationObserver((mutations) => {
-    mutationQueue.push(...mutations)
-    if (rafId === null) rafId = requestAnimationFrame(processMutations)
-  })
-
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    characterData: true,
-    attributeFilter: [...TRANSLATABLE_ATTRS],
-  })
-
-  setupVueInputInterceptor()
-
-  // После редактирования словаря перевод применяется сразу, без перезагрузки страницы.
-  registerRetranslateCallback(() => {
-    try {
-      translateNode(document.body)
-    } catch (e) {
-      Logger('WARN', 'Ре-скан перевода не удался', e)
-    }
-  })
-
-  Logger('INFO', 'Переводчик интерфейса запущен')
-  translateNode(document.body)
-  debouncedFindContent()
-}
+    // Открытая страница — е

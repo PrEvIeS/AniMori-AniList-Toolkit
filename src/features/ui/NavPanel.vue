@@ -34,13 +34,7 @@
 import { ref } from 'vue'
 import { Bridge } from '@/bridge'
 import { Logger } from '../../utils/logger'
-import {
-  copyCurrentUrl,
-  currentUrl,
-  isFullscreen,
-  toggleFullscreen,
-  urlCopied,
-} from './nav-state'
+import { copyCurrentUrl, currentUrl, isFullscreen, toggleFullscreen, urlCopied } from './nav-state'
 import { reloadPage } from './reload'
 
 /** Блок раскрыт: либо мышь над ним, либо его закрепили кликом. */
@@ -229,9 +223,7 @@ function onFullscreen(): void {
       <button
         type="button"
         class="am-nav-btn"
-        :title="
-          isFullscreen ? 'Выйти из полноэкранного режима (F11 или Esc)' : 'Во весь экран (F11)'
-        "
+        :title="isFullscreen ? 'Выйти из полного экрана (F11)' : 'Во весь экран (F11)'"
         @click="onFullscreen"
       >
         <svg

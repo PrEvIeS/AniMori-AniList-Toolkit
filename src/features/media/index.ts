@@ -25,6 +25,12 @@ const MEDIA_QUERY = `query ($id: Int) {
   }
 }`
 
+/** Сколько раз пробуем один тайтл, прежде чем ждать перехода или перезагрузки. */
+const MAX_LOAD_ATTEMPTS = 3
+
+/** Паузы перед повторами: сеть могла моргнуть, но долбить сервер подряд нельзя. */
+const RETRY_DELAYS_MS = [2000, 5000, 10000]
+
 /** Зарегистрированные виджеты в порядке добавления. */
 const widgets: MediaWidget[] = []
 
@@ -42,6 +48,11 @@ let isLoading = false
  * Раньше такой переход просто терялся, и страница оставалась полупустой до перезагрузки.
  */
 let pendingRoute = false
+
+/** Тайтл, на котором споткнулись, и число уже назначенных повторов. */
+let failedMediaId: number | null = null
+let failedAttempts = 0
+let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 let isStarted = false
 
@@ -74,6 +85,54 @@ function cleanupWidgets(): void {
       document.querySelectorAll(selector).forEach((el) => el.remove())
     }
   }
+}
+
+/** Забывает неудачу: тайтл загрузился или пользователь ушёл на другой. */
+function clearLoadFailure(): void {
+  if (retryTimer) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+  failedMediaId = null
+  failedAttempts = 0
+}
+
+/**
+ * Сервер не ответил: снимаем отметку об открытом тайтле, иначе следующие проходы
+ * решат, что работа сделана, и виджеты не появятся до перезагрузки страницы.
+ * Повтор идёт по таймеру: страница дёргается часто, а сеть щадить надо.
+ */
+function scheduleLoadRetry(aniId: number): void {
+  if (failedMediaId !== aniId) {
+    failedMediaId = aniId
+    failedAttempts = 0
+  }
+
+  currentMediaId = null
+
+  if (failedAttempts >= MAX_LOAD_ATTEMPTS) {
+    Logger(
+      'WARN',
+      `[Widget] ID: ${aniId}: попыток ${failedAttempts}, ждём перехода или перезагрузки`,
+    )
+    return
+  }
+
+  const delay = RETRY_DELAYS_MS[failedAttempts] ?? 10000
+  failedAttempts++
+
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+
+    // За время паузы пользователь мог уйти: чужую страницу грузить незачем.
+    const route = parseMediaPath()
+    if (!route || route.aniId !== aniId) return
+
+    void loadMediaPage()
+  }, delay)
+
+  Logger('WARN', `[Widget] ID: ${aniId}: данные не получены, повтор через ${delay}ms`)
 }
 
 /**
@@ -121,6 +180,7 @@ async function loadMediaPage(): Promise<void> {
 
   // Кнопка плеера гасится отдельно: она живёт в панели Vue, а не в разметке виджета.
   if (!route) {
+    clearLoadFailure()
     if (currentMediaId !== null) {
       cleanupWidgets()
       hidePlayerButton()
@@ -131,6 +191,14 @@ async function loadMediaPage(): Promise<void> {
   }
 
   const { aniId, endpoint } = route
+
+  // Ушли с проблемного тайтла — прошлые неудачи больше не считаются.
+  if (failedMediaId !== null && failedMediaId !== aniId) clearLoadFailure()
+
+  // Ждём паузы после сбоя: без этого каждая перерисовка страницы била бы по серверу.
+  if (failedMediaId === aniId && (retryTimer !== null || failedAttempts >= MAX_LOAD_ATTEMPTS)) {
+    return
+  }
 
   // Тот же тайтл: данные уже есть, надо лишь восстановить разметку.
   if (currentMediaId === aniId) {
@@ -155,7 +223,14 @@ async function loadMediaPage(): Promise<void> {
     const malData = await loadAniListData(aniId)
     if (currentMediaId !== aniId) return
 
-    if (!malData || !malData.idMal) {
+    // Пустой ответ — это сбой связи, а не приговор тайтлу: пробуем ещё раз.
+    if (!malData) {
+      scheduleLoadRetry(aniId)
+      return
+    }
+
+    // А вот отсутствие MAL ID — свойство самого тайтла, повторять запрос бессмысленно.
+    if (!malData.idMal) {
       Logger('INFO', '[Widget] MAL ID отсутствует, виджеты отключены')
       return
     }
@@ -167,6 +242,7 @@ async function loadMediaPage(): Promise<void> {
     if (currentMediaId !== aniId) return
 
     let shikiDomain = SHIKI_DOMAINS[0] ?? 'shikimori.io'
+    let shikiFailed = false
 
     if (!shikiData) {
       const res = await fetchShiki<MediaShikiData>(`/api/${endpoint}/${malData.idMal}`)
@@ -176,6 +252,8 @@ async function loadMediaPage(): Promise<void> {
       shikiDomain = res.domain ?? shikiDomain
       if (shikiData) {
         await dbSet('shikiCache', { key: cacheKey, data: shikiData, ts: Date.now() })
+      } else {
+        shikiFailed = true
       }
     } else if (shikiData.domain) {
       shikiDomain = shikiData.domain
@@ -191,8 +269,13 @@ async function loadMediaPage(): Promise<void> {
     }
 
     ensureMediaWidgets()
+
+    // Часть виджетов живёт на данных Shikimori: ставим то, что есть, и пробуем добрать.
+    if (shikiFailed) scheduleLoadRetry(aniId)
+    else clearLoadFailure()
   } catch (e) {
     Logger('ERROR', `[Widget] Не удалось подготовить страницу медиа ID: ${aniId}`, e)
+    scheduleLoadRetry(aniId)
   } finally {
     isLoading = false
 

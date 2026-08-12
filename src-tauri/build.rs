@@ -8,11 +8,12 @@
 // "<имя> not allowed. Plugin not found" — именно так молчала кнопка перезагрузки.
 //
 // AppManifest::commands порождает разрешения с именами в kebab-case:
-//   animori_reload        -> allow-animori-reload
-//   animori_open_external -> allow-animori-open-external
-//   animori_proxy_status  -> allow-animori-proxy-status
-//   animori_proxy_probe   -> allow-animori-proxy-probe
-//   animori_page_ready    -> allow-animori-page-ready
+//   animori_reload            -> allow-animori-reload
+//   animori_toggle_fullscreen -> allow-animori-toggle-fullscreen
+//   animori_open_external     -> allow-animori-open-external
+//   animori_proxy_status      -> allow-animori-proxy-status
+//   animori_proxy_probe       -> allow-animori-proxy-probe
+//   animori_page_ready        -> allow-animori-page-ready
 // Именно эти имена перечисляются в capabilities/default.json.
 //
 // Правило на будущее: новая команда — три места.
@@ -23,6 +24,9 @@
 
 const COMMANDS: &[&str] = &[
     "animori_reload",
+    // Полноэкранный режим окна. Параметров нет: только переключение туда-обратно,
+    // чтобы чужой скрипт не мог запереть окно в полном экране повторными вызовами.
+    "animori_toggle_fullscreen",
     "animori_open_external",
     // Пункт 5.3.6: диагностика прокси для карточки настроек. Обе только читают:
     // status отдаёт снимок состояния, probe открывает TCP-соединение на адрес из

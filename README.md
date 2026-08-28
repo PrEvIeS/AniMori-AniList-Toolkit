@@ -9,6 +9,7 @@
 [![Релиз](https://img.shields.io/github/v/release/foulnike/AniMori-AniList-Toolkit?style=flat-square&logo=github&logoColor=white&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&labelColor=0B1622&color=02A9FF)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
 [![Greasy Fork](https://img.shields.io/badge/Greasy%20Fork-%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%B8%D1%82%D1%8C-02A9FF?style=flat-square&logo=javascript&logoColor=white&labelColor=0B1622)](https://greasyfork.org/ru/scripts/572948-animori-anilist-toolkit)
 [![Windows](https://img.shields.io/badge/Windows-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-02A9FF?style=flat-square&logo=tauri&logoColor=white&labelColor=0B1622)](https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-02A9FF?style=flat-square&logo=apple&logoColor=white&labelColor=0B1622)](https://github.com/PrEvIeS/AniMori-AniList-Toolkit/releases/latest)
 [![Лицензия](https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-02A9FF?style=flat-square&labelColor=0B1622)](LICENSE)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
@@ -19,6 +20,7 @@
 ![Sass](https://img.shields.io/badge/Sass-CC6699?style=flat-square&logo=sass&logoColor=white)
 
 ![Windows](https://img.shields.io/badge/Windows%2010%2F11-0078D4?style=flat-square&logo=windows&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS%2010.15%2B-000000?style=flat-square&logo=apple&logoColor=white)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-00485B?style=flat-square&logo=tampermonkey&logoColor=white)
 
 [Возможности](#возможности) · [Установка](#установка) · [Авторизация](#авторизация-для-экспорта-и-редактирования-списков) · [Сборка](#сборка-из-исходников)
@@ -32,7 +34,7 @@
 Начиная с версии **2.0.0** проект существует в двух видах, которые собираются из одной кодовой базы и делят всю логику целиком:
 
 - **Пользовательский скрипт** для Tampermonkey — в вашем браузере.
-- **Настольное приложение для Windows** — отдельная программа с окном AniList: ни браузер, ни менеджер скриптов не нужны.
+- **Настольное приложение для Windows и macOS** — отдельная программа с окном AniList: ни браузер, ни менеджер скриптов не нужны.
 
 AniMori — неофициальный проект и не связан с командой AniList.
 
@@ -79,9 +81,10 @@ AniMori — неофициальный проект и не связан с ко
 ### Только в приложении
 
 - **Запросы мимо страницы** — обращения к API идут через процесс программы, а не из вкладки: ограничения CORS их не касаются, и доступны источники, до которых браузер не дотягивался.
-- **Блокировщик рекламы** — отключён по умолчанию и включается вручную. Один переключатель закрывает две задачи: баннеры самого AniList прячутся стилями, а рекламные запросы внутри кадра плеера отсекаются на уровне движка окна. Заблокированные домены видны в логгере.
+- **Блокировщик рекламы** — отключён по умолчанию и включается вручную. Один переключатель закрывает две задачи: баннеры самого AniList прячутся стилями, а рекламные запросы внутри кадра плеера отсекаются на уровне движка окна. Список заблокированных доменов виден в логгере на Windows; на macOS правила исполняет сам движок и о срабатываниях не сообщает — блокировка работает, счётчика нет.
 - **Без всплывающих окон плеера** — клики по видео не открывают рекламные вкладки.
 - **Автообновление** — при запуске программа сверяется с последним релизом и предлагает обновиться; загрузка, установка и перезапуск происходят сами. Пакет проверяется по цифровой подписи.
+- **Прокси для окна** — свой HTTP или SOCKS5-канал с логином, паролем и списком исключений. Задаётся в настройках и применяется при следующем запуске. На macOS требует версии 14 и новее.
 - **Нативная навигация** — стрелки «назад/вперёд» и сочетания `Alt+←` / `Alt+→`, перезагрузка страницы, внешние ссылки уходят в браузер по умолчанию.
 
 ### Прочее
@@ -105,7 +108,16 @@ AniMori — неофициальный проект и не связан с ко
 1. Скачайте установщик из раздела **[Releases](https://github.com/foulnike/AniMori-AniList-Toolkit/releases)** — это `AniMori_Setup.exe` либо тот же файл с полным именем вида `AniMori_2.0.1_x64-setup.exe`.
 2. Запустите установщик и откройте AniMori из меню «Пуск».
 
-Приложению нужен компонент **WebView2**: в Windows 11 и актуальной Windows 10 он уже установлен, иначе установщик предложит его загрузить. Дальше программа следит за обновлениями сама: при запуске она сверяется с последним релизом и предлагает установить новую версию, если та вышла.
+Приложению нужен компонент **WebView2**: в Windows 11 и актуальной Windows 10 он уже установлен, иначе установщик предложит его загрузить.
+
+### Приложение для macOS
+
+1. Скачайте `AniMori_<версия>_universal.dmg` из раздела **[Releases](https://github.com/PrEvIeS/AniMori-AniList-Toolkit/releases)** — один файл и для Apple Silicon, и для Intel.
+2. Откройте образ и перетащите **AniMori** в «Программы».
+
+Нужна **macOS 10.15** или новее; прокси для окна работает начиная с **macOS 14**. Приложение не подписано учётной записью Apple Developer, поэтому при первом запуске macOS его задержит: откройте «Системные настройки» → «Конфиденциальность и безопасность» и нажмите «Всё равно открыть».
+
+Дальше обе версии следят за обновлениями сами: при запуске программа сверяется с последним релизом и предлагает установить новую, если та вышла.
 
 В браузерной версии блокировщика рекламы нет намеренно: в браузере с этим лучше справится любое профильное расширение.
 
@@ -154,13 +166,18 @@ AniMori — неофициальный проект и не связан с ко
 npm install
 npm run build         # пользовательский скрипт → dist/animori.user.js
 npm run build:tauri   # веб-часть приложения
-npm run tauri:build   # установщик → src-tauri/target/release/bundle/nsis/
+npm run tauri:build   # Windows: установщик → src-tauri/target/release/bundle/nsis/
+                      # macOS:   .app и .dmg  → src-tauri/target/release/bundle/
 npm run typecheck     # проверка типов
 ```
 
-Сборка установщика подписывает обновление, поэтому `npm run tauri:build` ждёт переменные окружения `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Свою пару ключей можно создать командой `npm run tauri signer generate`.
+Собирается на той системе, под которую идёт сборка: кросс-компиляции здесь нет. Настройки бандла для macOS лежат в `src-tauri/tauri.macos.conf.json`, Tauri подмешивает их сам.
+
+Артефакты обновления подписываются, поэтому релизная сборка ждёт переменные окружения `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Свою пару ключей можно создать командой `npm run tauri signer generate`. Локальная сборка ключа не требует: `createUpdaterArtifacts` для macOS выключен и включается только в CI.
 
 Исходный код общий: `src/` — логика и интерфейс на TypeScript и Vue 3, `src-tauri/` — оболочка на Rust. Какая версия собирается, определяет режим сборки.
+
+Платформенные части оболочки различаются механизмом, но не поведением: блокировщик рекламы работает через `WebResourceRequested` у WebView2 и через `WKContentRuleList` у WKWebView, прокси — через аргумент движка и через `nw_proxy_config`. Список рекламных адресов при этом общий.
 
 ## Лицензия
 

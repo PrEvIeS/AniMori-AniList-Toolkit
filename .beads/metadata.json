@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "AniMori_AniList_Toolkit",
+  "project_id": "db05df71-79c9-482e-ad2b-50c33e467fe0"
+}

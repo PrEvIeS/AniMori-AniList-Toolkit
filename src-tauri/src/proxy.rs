@@ -49,6 +49,14 @@ pub enum ProxyOutcome {
 
 /// Как окно живёт с авторизацией у прокси. Accepted косвенный: кода ошибки
 /// в событии нет, и принятие видно лишь по отсутствию повторного запроса.
+///
+/// Кроме None варианты конструирует только proxy_auth.rs, а он собирается под
+/// Windows: там за авторизацию отвечает событие BasicAuthenticationRequested.
+/// На macOS пара логин-пароль вшита в nw_proxy_config и события «прокси спросил»
+/// не существует, поэтому варианты остаются неиспользованными — это состояние
+/// платформы, а не мёртвый код, и выкидывать их из типа нельзя: он общий и уходит
+/// в панель настроек как есть.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProxyAuth {
@@ -102,23 +110,34 @@ pub struct WindowAuth {
 pub struct ProxyCredentials(Mutex<Option<WindowAuth>>);
 
 /// Разобранная настройка в том виде, в каком её принимает движок окна.
-struct ProxyArgs {
+#[derive(Clone)]
+pub struct ProxyArgs {
     /// Адрес без схемы и порт отдельно: только так их принимает проверка связи.
-    host: String,
-    port: u16,
+    pub host: String,
+    pub port: u16,
     /// Для --proxy-server, например http://10.0.0.1:8080 или socks5://127.0.0.1:1080.
-    server: String,
+    pub server: String,
     /// Для --proxy-bypass-list. Пусто, если исключений нет.
-    bypass: String,
+    pub bypass: String,
     /// Учётные данные движку не передать аргументом: они уходят в ProxyCredentials.
-    login: String,
-    password: String,
+    pub login: String,
+    pub password: String,
     /// Влияет на предупреждение в журнале и на подпись в панели.
-    has_credentials: bool,
+    pub has_credentials: bool,
 }
 
 /// Три состояния файла настроек: Option не отличал «выключен» от «включён,
 /// но задан негодно», а панели надо сказать про них разное.
+/// Разобранные настройки, дожидающиеся сборки конфигурации вебвью.
+///
+/// Нужно только macOS: там decide() и применение разнесены во времени —
+/// первое идёт в setup(), второе при создании окна, парой строк ниже.
+#[cfg(target_os = "macos")]
+pub fn pending() -> &'static Mutex<Option<ProxyArgs>> {
+    static PENDING: std::sync::OnceLock<Mutex<Option<ProxyArgs>>> = std::sync::OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(None))
+}
+
 enum Config {
     Off,
     Invalid,
@@ -371,7 +390,25 @@ fn decide(app: &AppHandle) -> ProxyStatus {
         }
     }
 
-    #[cfg(not(windows))]
+    // macOS: адрес уходит движку не строкой, а объектом nw_proxy_config внутри
+    // конфигурации вебвью. Саму конфигурацию собирает proxy_macos, а здесь
+    // разобранные настройки только складываются для него — decide() выполняется
+    // до создания окна, ровно там, где они и нужны.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = &value;
+        remember_credentials(app, &args);
+        pending().lock().unwrap_or_else(|e| e.into_inner()).replace((*args).clone());
+
+        ProxyStatus {
+            outcome: ProxyOutcome::Applied,
+            server: args.server,
+            has_credentials: args.has_credentials,
+            auth: ProxyAuth::None,
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = &value;
         let _ = remember_credentials;
@@ -404,7 +441,11 @@ fn auth_state(has_credentials: bool) -> ProxyAuth {
         }
     }
 
-    // За пределами Windows прокси в окно не попадает, значит и спрашивать некому.
+    // На macOS пара логин-пароль вшита в сам nw_proxy_config, и события
+    // «прокси спросил учётные данные» там не существует: соединение либо
+    // проходит, либо не проходит. Поэтому спрашивать действительно некому,
+    // но по другой причине, чем на прочих платформах, где прокси в окно
+    // не попадает вовсе.
     #[cfg(not(windows))]
     {
         ProxyAuth::None

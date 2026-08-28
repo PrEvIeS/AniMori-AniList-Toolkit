@@ -7,9 +7,18 @@ use tauri_plugin_window_state::StateFlags;
 
 use tauri::{AppHandle, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-// Сетевой блокировщик. Только Windows: он построен на событиях WebView2.
+// Сетевой блокировщик. Движки разные, список правил общий.
 #[cfg(windows)]
 mod adblock;
+
+// То же самое для macOS, но на контент-блокировщике WebKit: у WKWebView
+// перехвата запросов нет, см. шапку модуля.
+#[cfg(target_os = "macos")]
+mod adblock_macos;
+
+// Общий для обеих платформ список рекламных адресов.
+#[cfg(any(windows, target_os = "macos"))]
+mod adblock_rules;
 
 // Авторизация окна у прокси. Тоже только Windows: целиком событие WebView2.
 #[cfg(windows)]
@@ -23,8 +32,30 @@ mod updater;
 mod proxy;
 mod proxy_guard;
 
+// Прокси окна на macOS: nw_proxy_config вместо переменной окружения WebView2.
+#[cfg(target_os = "macos")]
+mod proxy_macos;
+
 // Не корень домена: на anilist.co/ лендинг для гостей, авторизованного уносит на /home.
 const ANILIST_URL: &str = "https://anilist.co/home";
+
+/// User-Agent окна на macOS.
+///
+/// WKWebView без явного значения представляется строкой без токена браузера:
+/// "...AppleWebKit/605.1.15 (KHTML, like Gecko)" и всё — ни Version, ни Safari.
+/// Cloudflare засчитывает такой запрос за автоматизацию, и капча на anilist.co
+/// уходит в бесконечный цикл: пройти её в окне невозможно.
+///
+/// На Windows ветки нет и не нужно: WebView2 подставляет полный UA Chrome/Edge сам,
+/// поэтому там капча работала всегда — отсюда и то, что дефект виден только на macOS.
+///
+/// Строка собрана ровно так, как её составляет настоящий Safari, включая
+/// "Intel Mac OS X 10_15_7": Apple заморозила эту часть и печатает её же
+/// на Apple Silicon и на новых версиях системы. Version/ придётся поднимать
+/// вслед за Safari — расхождение на пару версий безобидно, отсутствие токена нет.
+#[cfg(target_os = "macos")]
+const MACOS_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15";
 
 // Имена файлов зафиксированы в vite.config.ts без хешей ради этих двух макросов.
 // include_str! читает файлы при компиляции, поэтому `npm run build:tauri` обязан
@@ -164,6 +195,11 @@ const NET_PROBE_SCRIPT: &str = r#"(function () {
 
 /// Домен, который живёт внутри окна. Сравнение по хосту целиком или по суффиксу
 /// с точкой, а не через contains: иначе подошло бы anilist.co.evil.example.
+///
+/// Только не-macOS: там единственный вызывающий — ветка on_navigation, а на macOS
+/// она отключена (см. комментарий у обработчика). Проверку хоста для главного
+/// фрейма выполняет IS_ANILIST в src/main.ts.
+#[cfg(not(target_os = "macos"))]
 fn is_internal_host(host: &str) -> bool {
     host == "anilist.co" || host.ends_with(".anilist.co")
 }
@@ -267,7 +303,7 @@ pub fn run() {
             // Порядок скриптов важен: стили раньше бандла, иначе первые Vue-приложения
             // мелькнут без оформления. inner_size и center — геометрия только первого запуска:
             // сохранённое состояние перекроет их, а min_inner_size страхует от непригодного размера.
-            let main_window = WebviewWindowBuilder::new(
+            let builder = WebviewWindowBuilder::new(
                 app.handle(),
                 "main",
                 WebviewUrl::External(ANILIST_URL.parse()?),
@@ -294,6 +330,30 @@ pub fn run() {
                     return true;
                 }
 
+                // macOS: отменять здесь ничего нельзя.
+                //
+                // wry вызывает этот обработчик из decidePolicyForNavigationAction и
+                // передаёт наружу ТОЛЬКО адрес: поле targetFrame.isMainFrame у
+                // WKNavigationAction есть, но wry его не смотрит (см. wry 0.55.1,
+                // src/wkwebview/navigation.rs). Значит обработчик срабатывает на
+                // КАЖДЫЙ фрейм, и запрет чужого хоста убивает вложенные кадры:
+                // кадр Turnstile остаётся на about:blank с origin родителя, капча
+                // уходит в «Unable to post message to challenges.cloudflare.com»,
+                // а кадр плеера (kodikplayer.com) не грузится вовсе.
+                //
+                // На Windows этого нет: NavigationStarting у WebView2 срабатывает
+                // только для верхнего уровня, вложенные идут отдельным событием.
+                //
+                // Сторож верхнего уровня не потерян: клики по внешним ссылкам ловит
+                // features/ui/links.ts, а уход всего окна на чужой сайт разворачивает
+                // сам бандл в main.ts — он выполняется в главном фрейме любой страницы.
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = &handle;
+                    return true;
+                }
+
+                #[cfg(not(target_os = "macos"))]
                 match url.host_str() {
                     Some(host) if is_internal_host(host) => true,
                     Some(_) => {
@@ -306,8 +366,25 @@ pub fn run() {
                     }
                     None => true,
                 }
-            })
-            .build()?;
+            });
+
+            // Подмена UA — строго до build(): движок читает его при создании вебвью.
+            // Затенение, а не mut: под Windows ветка исчезает целиком вместе с cfg.
+            #[cfg(target_os = "macos")]
+            let builder = builder.user_agent(MACOS_USER_AGENT);
+
+            // Прокси окна — тоже строго до build(): хранилище данных движок читает
+            // при инициализации вебвью, поздняя правка на открытое окно не подействует.
+            #[cfg(target_os = "macos")]
+            let builder = {
+                let pending = proxy::pending().lock().unwrap_or_else(|e| e.into_inner()).take();
+                match pending.as_ref().and_then(proxy_macos::webview_configuration) {
+                    Some(configuration) => builder.with_webview_configuration(configuration),
+                    None => builder,
+                }
+            };
+
+            let main_window = builder.build()?;
 
             // Авторизация у прокси — раньше блокировщика: запрос учётных данных приходит
             // на первом же соединении, а подписка действует только вперёд.
@@ -319,8 +396,11 @@ pub fn run() {
             #[cfg(windows)]
             adblock::install(&main_window);
 
-            // На не-Windows окно больше нигде не нужно — глушим предупреждение.
-            #[cfg(not(windows))]
+            #[cfg(target_os = "macos")]
+            adblock_macos::install(&main_window);
+
+            // На прочих платформах окно больше нигде не нужно — глушим предупреждение.
+            #[cfg(not(any(windows, target_os = "macos")))]
             let _ = &main_window;
 
             proxy_guard::spawn(app.handle());

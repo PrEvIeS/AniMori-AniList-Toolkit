@@ -72,3 +72,29 @@ windows = { version = "0.61", features = [
   "Win32_System_Com",
   "Win32_System_WinRT",
 ] }
+
+# Пункт «паритет macOS»: сетевой блокировщик на WKContentRuleList.
+#
+# У WKWebView нет аналога WebResourceRequested — перехватить https-запрос движок
+# не даёт. Единственный штатный способ отбить запрос это контент-блокировщик,
+# и живёт он в WebKit, поэтому нужны обёртки objc2.
+#
+# Версии совпадают с теми, что уже тянет wry 0.55.1 (см. Cargo.lock: objc2 0.6.4,
+# objc2-web-kit 0.3.2, block2 0.6.2). Взять другую мажорную нельзя по той же
+# причине, что и с webview2-com на Windows: в сборке оказались бы два
+# несовместимых набора одних и тех же типов, и контроллер из PlatformWebview
+# перестал бы подходить к нашему коду.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-web-kit = { version = "0.3", features = [
+  "WKContentRuleList",
+  "WKContentRuleListStore",
+  "WKUserContentController",
+  "WKScriptMessage",
+  "WKScriptMessageHandler",
+  "WKWebViewConfiguration",
+  "WKWebsiteDataStore",
+  "block2",
+] }

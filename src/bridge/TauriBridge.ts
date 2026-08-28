@@ -40,13 +40,35 @@ let snapshot: Map<string, unknown> | null = null
 /** Незавершённая загрузка снимка: параллельные чтения не дёргают entries() повторно. */
 let snapshotLoading: Promise<Map<string, unknown> | null> | null = null
 
+/**
+ * Один повтор вызова в оболочку. Подробности — у единственного места вызова ниже.
+ * Пауза не нужна: замена канала происходит синхронно внутри отказавшего вызова.
+ */
+async function withRetry<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch {
+    return run()
+  }
+}
+
 async function loadSnapshot(): Promise<Map<string, unknown> | null> {
   if (snapshot) return snapshot
   if (snapshotLoading) return snapshotLoading
 
   snapshotLoading = (async () => {
     try {
-      const entries = await store.entries()
+      // Вторая попытка не про капризы сети, а про один конкретный случай.
+      //
+      // Окно открыто на https, а канал IPC у Tauri на macOS живёт на схеме ipc://.
+      // Движок считает её небезопасным содержимым и первый же вызов режет:
+      // «requested insecure content from ipc://localhost». Увидев отказ, Tauri
+      // переключается на postMessage — но вызов, на котором он это понял, уже потерян.
+      // А первым вызовом в приложении идёт как раз чтение настроек.
+      //
+      // Без повтора запуск на macOS каждый раз уходил на путь «по одному ключу»:
+      // три десятка обращений вместо одного и красный след в консоли на ровном месте.
+      const entries = await withRetry(() => store.entries())
       snapshot = new Map(entries)
       return snapshot
     } catch (e) {

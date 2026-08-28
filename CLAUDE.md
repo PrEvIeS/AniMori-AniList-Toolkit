@@ -1,77 +1,100 @@
-# Project Instructions for AI Agents
+# CLAUDE.md
 
-This file provides instructions and context for AI coding agents working on this project.
+Инструкции для Claude Code в этом репозитории.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
-## Beads Issue Tracker
+## Проект в двух словах
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+**AniMori — Toolkit for AniList.** Русификатор и набор инструментов для `anilist.co`. Из **одной** кодовой базы (`src/`) собираются **два** продукта: юзерскрипт для Tampermonkey и десктопное приложение для Windows на Tauri 2 (`src-tauri/`). Стек: TypeScript 5.6, Vue 3.5 (только Composition API), Vite 5, Sass, Rust.
 
-### Quick Reference
+**Язык проекта — русский.** Комментарии, UI, документация, сообщения коммитов. Пиши так же.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+## Документация по каталогам
+
+В репозитории есть иерархия `AGENTS.md` — по одному на каждый значимый каталог, связанные тегом `<!-- Parent: ... -->`. Начни с корневого [`AGENTS.md`](AGENTS.md), затем читай тот, что лежит в каталоге, который правишь. Там разобраны назначение файлов, инварианты и грабли.
+
+```
+AGENTS.md                        ← обзор, сборка, форк
+├── src/AGENTS.md                ← общая кодовая база
+│   ├── src/bridge/AGENTS.md     ← абстракция платформы
+│   ├── src/core/AGENTS.md       ← настройки, БД, словарь, сеть
+│   ├── src/api/AGENTS.md        ← клиенты внешних API
+│   ├── src/utils/AGENTS.md      ← логгер, монтировщик Vue, матчер имён
+│   └── src/features/AGENTS.md   ← + 7 подкаталогов фич
+├── src-tauri/AGENTS.md          ← десктопная оболочка
+│   ├── src-tauri/src/AGENTS.md
+│   └── src-tauri/capabilities/AGENTS.md
+└── .github/AGENTS.md            ← релиз, сторожа, шаблоны задач
 ```
 
-### Rules
+## CodeGraph — использовать в первую очередь
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+В проекте поднят MCP-сервер CodeGraph: разобранный tree-sitter'ом граф всех символов, рёбер и файлов. Индекс уже построен (`.codegraph/`), демон следит за правками с задержкой ~500 мс.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+**`codegraph_explore` — Read-эквивалент. Вызывай его ДО того, как открывать файлы.** Один вызов возвращает исходники нужных символов с номерами строк, сгруппированные по файлам, плюс путь вызовов между ними и радиус поражения. Показанный им код считается уже прочитанным — не переоткрывай эти файлы через Read.
 
-## Agent Context Profiles
+| Вопрос | Как спрашивать |
+|---|---|
+| «Как устроен переводчик?» | `codegraph_explore("initTranslator translateNode translateAdvanced")` |
+| «Где определён X?» | `codegraph_explore("X")` — быстрее и точнее grep |
+| «Что сломается, если поменять Y?» | `codegraph_explore("Y")` — радиус в том же ответе |
+| «Как X доходит до Y?» | `codegraph_explore("X Y")` — путь целиком, включая колбэки |
 
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
+Правила:
 
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
+- **Не делай grep + Read цикл** для поиска символа по имени: CodeGraph и есть готовый индекс, повтор его работы стоит дороже при худшем результате.
+- **Не делегируй разведку сабагенту** ради «как работает X» — ответ достигается 1-3 вызовами `codegraph_explore` прямо здесь.
+- **Доверяй результатам** — они из полного разбора AST, перепроверять их грепом не нужно.
+- **Не запрашивай файл сразу после его правки** в том же ходу: наблюдатель отстаёт примерно на полсекунды.
+- Grep остаётся уместен для **литерального текста**: строк в UI, сообщений логгера, значений в `dictionary.json`, содержимого YAML и TOML.
 
-## Session Completion
+`.codegraph/` игнорируется целиком собственным `.gitignore` внутри него; коммитится только сам этот файл.
 
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
-
-
-## Build & Test
-
-_Add your build and test commands here_
+## Команды
 
 ```bash
-# Example:
-# npm install
-# npm test
+npm run typecheck        # vue-tsc --noEmit — ОБЯЗАТЕЛЬНЫЙ минимум перед любым коммитом
+cd src-tauri && cargo test --lib   # правила блокировщика macOS
+npm run build            # typecheck + юзерскрипт → dist/animori.user.js
+npm run build:tauri      # typecheck + бандл для десктопа → dist/animori.tauri.{js,css}
+npm run tauri:dev        # десктоп с пересборкой фронта (только Windows)
+npm run tauri:build      # установщик NSIS (только Windows)
+npm run format           # prettier
 ```
 
-## Architecture Overview
+**Автотестов почти нет:** один тест на правила блокировщика macOS (`cargo test --lib`), остальное — тайпчек. Всё остальное проверяется руками на живом `anilist.co`. Не заявляй, что изменение работает, пока не прогнал `npm run typecheck` и не описал, какой ручной сценарий его подтверждает (или честно не сказал, что прогнать не мог).
 
-_Add a brief overview of your project architecture_
+## Ключевые инварианты
 
-## Conventions & Patterns
+Нарушение любого из них ломает проект тихо, без ошибки компиляции:
 
-_Add your project-specific conventions here_
+1. **Платформа — только через мост.** Код вне `src/bridge/` импортирует `@/bridge` и ничего больше. Прямых `GM_*`, `fetch()` к внешним API и `invoke()` за пределами `src/bridge/` быть не должно.
+2. **Разведение сборкой, а не `if`.** Псевдопути `@bridge-impl` и `@adblock-impl` разводит `resolve.alias` по `mode`. Ветвление в рантайме не годится: Rollup вправе сохранить побочные эффекты недостижимой ветки.
+3. **Vue монтируется только через `mountApp()`** из `src/utils/vue-mounter.ts`. Прямой `createApp().mount()` даёт рекурсию мутаций с переводчиком и zombie-компоненты после перерисовки React'а AniList.
+4. **Своя разметка помечается `am-notr`.** Без этого переводчик переводит собственный UI AniMori и зацикливается.
+5. **`settings.x` читается в момент использования**, а не копируется при импорте: импорты выполняются до `loadSettings()`. Запись — только через `saveSetting()`.
+6. **Направление зависимостей:** `utils` → `core` → `api` → `features` → `main.ts`. Обратный импорт — цикл. Поэтому рядом с точками монтирования живут отдельные `*-state.ts`.
+7. **Новый внешний хост — три места:** клиент в `src/api/`, `@connect` в `vite.config.ts`, `http:default` в `src-tauri/capabilities/default.json`. Пропуск даёт молчаливый отказ в одной из сборок.
+8. **Новая команда Tauri — три места:** `#[tauri::command]`, `AppManifest::commands` в `build.rs`, `allow-<kebab-case>` в capabilities.
+9. **Версия поднимается только в `package.json`.** Второй источник номера заводить нельзя.
+10. **Окно десктопа открыто на чужом сайте.** Любое разрешение, выданное окну `main`, получает любой скрипт `anilist.co`. Это критерий при добавлении разрешений.
+11. **Платформенная пара обязана оставаться парой.** Список рекламных адресов один на обеих (`adblock_rules.rs`); имя канала тумблера продублировано в `net-block.ts` и `adblock_macos.rs`; ключи прокси — в `core/proxy.ts`, `proxy.rs` и `proxy_guard.rs`. Правишь одно — проверь остальные.
+12. **На macOS User-Agent и прокси ставятся строго до `build()`** окна: движок читает их при создании вебвью. После создания правки не действуют — отсюда требование перезапуска при смене прокси.
+13. **`on_navigation` на macOS срабатывает на каждый фрейм, а не только на верхний.** Отменять там навигацию по хосту нельзя — умрут вложенные кадры (капча, плеер). Сторож верхнего уровня живёт в `src/main.ts`.
+
+## Работа с кодом
+
+- **Читай шапки файлов.** Почти каждый модуль открывается 3-15 строками «почему сделано именно так». Это не украшение, а сжатый разбор дефектов. Читай перед правкой, обновляй, если меняешь причину, не удаляй.
+- **`docs/DECISIONS.md` в репозитории нет.** Десятки комментариев ссылаются на него («РИСК №1», «дефект A2», «пункт 4.3»). Ссылки исторические — не ищи файл и не переписывай комментарии из-за битой ссылки.
+- **Стили в `src/style.scss` не scoped.** Имена классов `am-*`, `amk-*`, `animori-*`, идентификаторы `set_*` — контракт между SFC и SCSS. Переименование в одном месте тихо ломает вид.
+- **Порядок шагов в `bootstrap()` (`src/main.ts`) выведен опытом.** Не переставляй без причины и опиши причину комментарием.
+
+## Форк
+
+`origin` — `git@github.com:PrEvIeS/AniMori-AniList-Toolkit.git`, апстрим — `foulnike/AniMori-AniList-Toolkit`.
+
+Что из-за этого работает иначе (проверь, прежде чем чинить «баг»): автообновление настроено на форк (эндпоинт и `pubkey` — свои), но `release.yml` требует секретов `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; `DICT_URL`, ссылки в панели настроек и `downloadURL`/`updateURL` шапки юзерскрипта — литералы и ведут в апстрим; `watch-dataset.yml` следит за апстримным датасетом; `probe-titles.yml` требует ветку `app-3.0-dev`. Подробности — в разделе «Форк» корневого `AGENTS.md`.
+
+## Git
+
+- Ветка по умолчанию — `main`. Коммить и пушить только по явной просьбе; на `main` сначала заводи ветку.
+- Сообщения коммитов — на русском, в стиле существующей истории (`git log --oneline`): короткая суть без префиксов-типов, либо `release:` / `chore:` для служебных.

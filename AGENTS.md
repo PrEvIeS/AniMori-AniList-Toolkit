@@ -34,9 +34,28 @@
 | Directory | Purpose |
 |-----------|---------|
 | `src/` | Общая кодовая база обеих сборок: TypeScript + Vue 3 + SCSS (см. `src/AGENTS.md`) |
-| `src-tauri/` | Десктопная оболочка на Rust/Tauri 2 (см. `src-tauri/AGENTS.md`) |
+| `src-tauri/` | Десктопная оболочка на Rust/Tauri 2, Windows и macOS (см. `src-tauri/AGENTS.md`) |
 | `.github/` | CI, релиз, сторожевые прогоны, шаблоны задач (см. `.github/AGENTS.md`) |
 | `assets/screenshots/` | Скриншоты для README (`home.webp`, `media.webp`, `player.webp`). Только бинарники, своего `AGENTS.md` нет |
+
+## Форк
+
+Этот рабочий экземпляр — **форк**:
+
+| | |
+|---|---|
+| `origin` | `git@github.com:PrEvIeS/AniMori-AniList-Toolkit.git` |
+| Апстрим | `foulnike/AniMori-AniList-Toolkit` |
+
+Что из-за этого работает не так, как в апстриме, — проверь прежде, чем чинить «баг»:
+
+- **Автообновление настроено на форк:** эндпоинт `latest.json` и `pubkey` в `src-tauri/tauri.conf.json` — ваши, релизный прогон собирает Windows и macOS. Осталось положить приватный ключ в секреты репозитория: `TAURI_SIGNING_PRIVATE_KEY` (содержимое `~/.tauri/animori.key`) и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Без них `release.yml` упадёт на шаге подписи. Приватный ключ в репозиторий не попадает никогда.
+- **Ссылки внутри продукта — литералы и ведут в апстрим:** `dictionary.json` грузится с `raw.githubusercontent.com/foulnike/...` (`DICT_URL` в `src/core/constants.ts`), кнопки GitHub, GreasyFork и «отправить в общую базу» — из `src/features/ui/settings-state.ts`, шапка юзерскрипта с `downloadURL`/`updateURL` GreasyFork — из `vite.config.ts`. Меняй их осознанно и все сразу.
+- **`watch-dataset.yml`** продолжит следить за апстримным `foulnike/animori-data`, но заводить задачи будет в форке.
+- **`probe-titles.yml`** требует ветку `app-3.0-dev` — в форке её может не быть.
+- Токен Kodik в `src/features/media/player.ts` выдан владельцу апстрима.
+
+Апстрим как второй remote не подключён; при необходимости: `git remote add upstream git@github.com:foulnike/AniMori-AniList-Toolkit.git`.
 
 ## For AI Agents
 
@@ -47,7 +66,7 @@
 - **`docs/DECISIONS.md` в репозитории отсутствует.** Десятки комментариев ссылаются на него («РИСК №1», «дефект A2», «пункт 4.3»). Ссылки исторические — не пытайся его открыть и не переписывай комментарии из-за битой ссылки.
 - **Комментарии-шапки файлов ценны.** Почти каждый модуль начинается с 3-15 строк «почему сделано именно так». Читай их перед правкой и обновляй, если меняешь причину. Не удаляй.
 - **Ничего не добавляй «на всякий случай» в шапку юзерскрипта.** Лишние `@match`/`@grant`/`@connect` ломают ревю GreasyFork.
-- В `.gitignore` есть строка с испорченными байтами (`s r c - t a u r i / p e r m i s s i o n s /`) — известный артефакт, а не опечатка, которую нужно «починить» вслепую.
+- **Правки `.gitignore` делай только UTF-8 без BOM.** В нём уже был фрагмент в UTF-16LE (`src-tauri/permissions/`, дописанный из PowerShell): NUL-байты делали файл бинарным, правило не работало ни в git, ни в индексаторе CodeGraph. Исправлено 2026-08-28; не повторяй дозапись через `echo >>` из PowerShell.
 
 ### Testing Requirements
 

@@ -21,9 +21,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/foulnike/AniMori-AniList-Toolkit/releases/latest/download/latest.json"
+        "https://github.com/PrEvIeS/AniMori-AniList-Toolkit/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM3RjNFQ0Y2Mzk1RDQzREYKUldUZlExMDU5dXp6eDJ1cmZ6Z001MTRYVzBPOFZ1T2sxRlczaVBJcmNBZzd6eURmRzhSTm0xQ2cK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI4MjQ2OTZFMkI4Njg1QTEKUldTaGhZWXJibWtrS0pJbWdoSzN3c1ZVNUI0dkZBLzFQdGt3Z0JGRFRUb2MrMHBoYUxwTG9HRlUK",
       "windows": {
         "installMode": "passive"
       }

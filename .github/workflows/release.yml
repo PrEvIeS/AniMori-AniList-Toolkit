@@ -34,9 +34,9 @@ permissions:
   contents: write
 
 jobs:
+  # Windows идёт первой и создаёт сам релиз: она же собирает юзерскрипт
+  # для GreasyFork, который к платформе отношения не имеет.
   release:
-    # Только Windows: цель сборки одна — nsis, а сетевой блокировщик опирается
-    # на COM-интерфейсы WebView2, которых больше нигде нет.
     runs-on: windows-latest
 
     steps:
@@ -185,3 +185,75 @@ jobs:
             artifacts/animori.user.js
             artifacts/AniMori_Setup.exe
             artifacts/AniMori_*_x64-portable.zip
+
+  # ── macOS ────────────────────────────────────────────────────────────────
+  #
+  # Отдельной джобой, а не матрицей: шаги почти не пересекаются. У Windows свой
+  # разбор CHANGELOG на pwsh, копия установщика под коротким именем и портабл-архив;
+  # здесь ничего этого нет, а есть универсальный бинарник, которого нет там.
+  #
+  # needs обязателен. Релиз по тегу создаёт джоба Windows, и эта только доносит
+  # в него свои файлы. Без ожидания обе джобы полезли бы создавать один релиз
+  # одновременно, и вторая упала бы на конфликте.
+  release-macos:
+    needs: release
+    runs-on: macos-latest
+
+    steps:
+      - name: Исходный код
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Обе цели нужны для universal-apple-darwin: Tauri собирает бинарник
+      # под каждую и склеивает их в один через lipo.
+      - name: Окружение Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Кэш Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: macos-universal
+
+      - name: Зависимости npm
+        run: npm ci
+
+      # Юзерскрипт здесь не собирается: его уже выложила джоба Windows, а
+      # emptyOutDir: !isTauri в vite.config.ts означает, что тауриная сборка
+      # dist/ не чистит. Собирать второй раз незачем.
+      #
+      # --config докладывается поверх tauri.macos.conf.json, который держит
+      # createUpdaterArtifacts выключенным: без ключа локальная сборка с ним
+      # падает, а ключ есть только в CI.
+      #
+      # Именно inline-JSON, а не путь к файлу: --config разрешает путь
+      # относительно текущего каталога, а он у действия не совпадает с src-tauri,
+      # и сборка честно падала на "failed to read configuration file".
+      #
+      # universal-apple-darwin — один .dmg и на Intel, и на Apple Silicon.
+      # Две раздельные сборки заставили бы человека выбирать процессор руками.
+      - name: Сборка приложения и догрузка в релиз
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: AniMori ${{ github.ref_name }}
+          releaseDraft: false
+          prerelease: false
+          # Манифест обновлений один на обе платформы: действие дочитывает уже
+          # выложенный latest.json и дописывает в него свою цель, а не заменяет
+          # файл целиком. Поэтому джоба и идёт строго после Windows.
+          includeUpdaterJson: true
+          args: >-
+            --target universal-apple-darwin
+            --config {"bundle":{"createUpdaterArtifacts":true}}
